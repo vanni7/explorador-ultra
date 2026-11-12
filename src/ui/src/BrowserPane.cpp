@@ -1,0 +1,315 @@
+// Explorador Ultra — SPDX-License-Identifier: GPL-3.0-or-later
+#include "eu/ui/BrowserPane.h"
+
+#include "eu/fs/DirectoryWatcher.h"
+
+#include <QDesktopServices>
+#include <QDir>
+#include <QHeaderView>
+#include <QItemSelectionModel>
+#include <QLabel>
+#include <QPushButton>
+#include <QStackedLayout>
+#include <QTreeView>
+#include <QUrl>
+#include <QVBoxLayout>
+
+namespace eu::ui {
+
+QString parentPathOf(const QString &path)
+{
+    const QString clean = QDir::cleanPath(path);
+    if (clean.isEmpty() || QDir(clean).isRoot()) {
+        return {};
+    }
+    const qsizetype slash = clean.lastIndexOf(QLatin1Char('/'));
+    if (slash < 0) {
+        return {};
+    }
+    if (slash == 0) {
+        return QStringLiteral("/");
+    }
+    QString parent = clean.left(slash);
+    // "C:/Users" -> "C:/" (y no "C:", que en Windows significa otra cosa).
+    if (parent.size() == 2 && parent.at(1) == QLatin1Char(':')) {
+        parent += QLatin1Char('/');
+    }
+    return parent;
+}
+
+BrowserPane::BrowserPane(tasks::Scheduler &scheduler, fs::DirectoryWatcher &watcher, QWidget *parent)
+    : QWidget(parent), m_model(new DirectoryModel(scheduler, this)), m_watcher(watcher)
+{
+    m_view = new QTreeView(this);
+    m_view->setModel(m_model);
+    m_view->setRootIsDecorated(false);
+    m_view->setUniformRowHeights(true);   // imprescindible para que 100 000 filas vayan fluidas
+    m_view->setItemsExpandable(false);
+    m_view->setAllColumnsShowFocus(true);
+    m_view->setSelectionMode(QAbstractItemView::ExtendedSelection);
+    m_view->setSelectionBehavior(QAbstractItemView::SelectRows);
+    m_view->setEditTriggers(QAbstractItemView::NoEditTriggers);
+    m_view->setSortingEnabled(true);
+    m_view->sortByColumn(int(Column::Name), Qt::AscendingOrder);
+    m_view->setAlternatingRowColors(true);
+    m_view->setAccessibleName(tr("Contenido de la carpeta"));
+    m_view->header()->setStretchLastSection(false);
+    m_view->header()->setSectionResizeMode(int(Column::Name), QHeaderView::Stretch);
+    m_view->header()->resizeSection(int(Column::Size), 100);
+    m_view->header()->resizeSection(int(Column::Type), 190);
+    m_view->header()->resizeSection(int(Column::Modified), 150);
+
+    // Página de mensajes: carpeta vacía, error de lectura…
+    m_messagePage = new QWidget(this);
+    m_messageLabel = new QLabel(m_messagePage);
+    m_messageLabel->setAlignment(Qt::AlignCenter);
+    m_messageLabel->setWordWrap(true);
+    m_messageLabel->setTextInteractionFlags(Qt::TextSelectableByMouse);
+    m_retryButton = new QPushButton(tr("Reintentar"), m_messagePage);
+    auto *messageLayout = new QVBoxLayout(m_messagePage);
+    messageLayout->addStretch();
+    messageLayout->addWidget(m_messageLabel);
+    messageLayout->addWidget(m_retryButton, 0, Qt::AlignHCenter);
+    messageLayout->addStretch();
+
+    m_stack = new QStackedLayout(this);
+    m_stack->setContentsMargins(0, 0, 0, 0);
+    m_stack->addWidget(m_view);
+    m_stack->addWidget(m_messagePage);
+
+    connect(m_view, &QTreeView::activated, this, &BrowserPane::onActivated);
+    connect(m_view->selectionModel(), &QItemSelectionModel::selectionChanged, this, &BrowserPane::statusChanged);
+    connect(m_model, &DirectoryModel::stateChanged, this, &BrowserPane::onModelStateChanged);
+    connect(m_model, &DirectoryModel::contentReplaced, this, &BrowserPane::restoreSelection);
+    connect(m_model, &QAbstractItemModel::modelAboutToBeReset, this, &BrowserPane::rememberSelection);
+    connect(m_model, &QAbstractItemModel::rowsInserted, this, &BrowserPane::statusChanged);
+    connect(m_retryButton, &QPushButton::clicked, this, &BrowserPane::refresh);
+    connect(&m_watcher, &fs::DirectoryWatcher::directoryChanged, this, [this](const QString &directory) {
+        if (directory == m_watchedPath) {
+            m_model->refresh();
+        }
+    });
+}
+
+BrowserPane::~BrowserPane()
+{
+    if (!m_watchedPath.isEmpty()) {
+        m_watcher.unwatch(m_watchedPath);
+    }
+}
+
+void BrowserPane::navigateTo(const QString &path)
+{
+    const QString clean = QDir::cleanPath(path);
+    if (clean.isEmpty() || clean == currentPath()) {
+        return;
+    }
+    if (!currentPath().isEmpty()) {
+        m_backHistory.append(currentPath());
+    }
+    m_forwardHistory.clear();
+    changePath(clean, {});
+}
+
+void BrowserPane::goBack()
+{
+    if (!canGoBack()) {
+        return;
+    }
+    const QString leaving = currentPath();
+    m_forwardHistory.append(leaving);
+    // Al volver se deja seleccionada la carpeta de la que se viene, si es hija.
+    const QString target = m_backHistory.takeLast();
+    changePath(target, parentPathOf(leaving) == target ? QDir(leaving).dirName() : QString());
+}
+
+void BrowserPane::goForward()
+{
+    if (!canGoForward()) {
+        return;
+    }
+    m_backHistory.append(currentPath());
+    changePath(m_forwardHistory.takeLast(), {});
+}
+
+void BrowserPane::goUp()
+{
+    const QString parent = parentPathOf(currentPath());
+    if (parent.isEmpty()) {
+        return;
+    }
+    const QString leaving = currentPath();
+    m_backHistory.append(leaving);
+    m_forwardHistory.clear();
+    changePath(parent, QDir(leaving).dirName());
+}
+
+void BrowserPane::changePath(const QString &path, const QString &nameToSelect)
+{
+    if (!m_watchedPath.isEmpty()) {
+        m_watcher.unwatch(m_watchedPath);
+        m_watchedPath.clear();
+    }
+    m_model->setPath(path);
+    // setPath vacía el modelo; lo que haya que seleccionar se fija después.
+    m_selectedNames = nameToSelect.isEmpty() ? QStringList() : QStringList{nameToSelect};
+    m_currentName = nameToSelect;
+
+    emit pathChanged(path);
+    emit historyChanged();
+    emit statusChanged();
+}
+
+void BrowserPane::refresh()
+{
+    m_model->refresh();
+}
+
+void BrowserPane::setShowHidden(bool show)
+{
+    m_model->setShowHidden(show);
+}
+
+void BrowserPane::onModelStateChanged(DirectoryModel::State state)
+{
+    switch (state) {
+    case DirectoryModel::State::Failed:
+        m_messageLabel->setText(tr("No se puede mostrar esta carpeta.\n%1\n\n%2")
+                                    .arg(m_model->lastError().message, QDir::toNativeSeparators(m_model->path())));
+        m_retryButton->setVisible(true);
+        m_stack->setCurrentWidget(m_messagePage);
+        break;
+    case DirectoryModel::State::Ready:
+        // Solo se vigila una carpeta que se pudo leer.
+        if (m_watchedPath != m_model->path()) {
+            if (!m_watchedPath.isEmpty()) {
+                m_watcher.unwatch(m_watchedPath);
+            }
+            m_watchedPath = m_watcher.watch(m_model->path()) ? m_model->path() : QString();
+        }
+        m_stack->setCurrentWidget(m_view);
+        break;
+    case DirectoryModel::State::Loading:
+    case DirectoryModel::State::Empty:
+        m_stack->setCurrentWidget(m_view);
+        break;
+    }
+    emit statusChanged();
+}
+
+void BrowserPane::rememberSelection()
+{
+    // Durante una carga nueva el modelo está vacío: no hay nada que recordar
+    // y no se debe pisar lo que changePath dejó pendiente de seleccionar.
+    if (m_model->rowCount() == 0) {
+        return;
+    }
+    m_selectedNames.clear();
+    const QModelIndexList rows = m_view->selectionModel()->selectedRows();
+    for (const QModelIndex &index : rows) {
+        m_selectedNames.append(m_model->entryAt(index.row()).name);
+    }
+    const QModelIndex current = m_view->currentIndex();
+    m_currentName = current.isValid() ? m_model->entryAt(current.row()).name : QString();
+}
+
+void BrowserPane::restoreSelection()
+{
+    QItemSelectionModel *selection = m_view->selectionModel();
+    for (const QString &name : std::as_const(m_selectedNames)) {
+        const int row = m_model->rowOfName(name);
+        if (row >= 0) {
+            selection->select(m_model->index(row, 0), QItemSelectionModel::Select | QItemSelectionModel::Rows);
+        }
+    }
+    const int currentRow = m_currentName.isEmpty() ? -1 : m_model->rowOfName(m_currentName);
+    if (currentRow >= 0) {
+        selection->setCurrentIndex(m_model->index(currentRow, 0), QItemSelectionModel::NoUpdate);
+        m_view->scrollTo(m_model->index(currentRow, 0));
+    }
+    emit statusChanged();
+}
+
+QStringList BrowserPane::selectedPaths() const
+{
+    QStringList paths;
+    const QModelIndexList rows = m_view->selectionModel()->selectedRows();
+    for (const QModelIndex &index : rows) {
+        paths.append(m_model->filePath(index.row()));
+    }
+    return paths;
+}
+
+void BrowserPane::onActivated(const QModelIndex &index)
+{
+    if (!index.isValid()) {
+        return;
+    }
+    const fs::Entry &entry = m_model->entryAt(index.row());
+    const QString path = m_model->filePath(index.row());
+    if (entry.isDirectory) {
+        navigateTo(path);
+    } else if (!QDesktopServices::openUrl(QUrl::fromLocalFile(path))) {
+        emit openFailed(path);
+    }
+}
+
+void BrowserPane::openSelection()
+{
+    const QModelIndexList rows = m_view->selectionModel()->selectedRows();
+    // Con varias carpetas seleccionadas solo se entra en la primera; los
+    // archivos se abren todos.
+    bool navigated = false;
+    for (const QModelIndex &index : rows) {
+        if (m_model->entryAt(index.row()).isDirectory) {
+            if (!navigated) {
+                navigated = true;
+                onActivated(index);
+                return;
+            }
+        }
+    }
+    for (const QModelIndex &index : rows) {
+        onActivated(index);
+    }
+}
+
+QString BrowserPane::statusText() const
+{
+    QString text;
+    switch (m_model->state()) {
+    case DirectoryModel::State::Loading:
+        text = (m_model->rowCount() > 0) ? tr("Cargando… %n elemento(s)", nullptr, m_model->rowCount())
+                                         : tr("Cargando…");
+        break;
+    case DirectoryModel::State::Failed:
+        return tr("No se pudo leer la carpeta");
+    default:
+        text = tr("%n elemento(s)", nullptr, m_model->rowCount());
+        break;
+    }
+    if (m_model->hiddenCount() > 0) {
+        text += tr(" (%n oculto(s))", nullptr, m_model->hiddenCount());
+    }
+
+    const QModelIndexList rows = m_view->selectionModel()->selectedRows();
+    if (!rows.isEmpty()) {
+        qint64 bytes = 0;
+        bool onlyFiles = true;
+        for (const QModelIndex &index : rows) {
+            const fs::Entry &entry = m_model->entryAt(index.row());
+            if (entry.isDirectory) {
+                onlyFiles = false;
+            } else {
+                bytes += entry.size;
+            }
+        }
+        text += tr(" · %n seleccionado(s)", nullptr, int(rows.size()));
+        if (onlyFiles) {
+            text += QStringLiteral(" (%1)").arg(core::formatSize(bytes, m_model->sizeUnits()));
+        }
+    }
+    return text;
+}
+
+} // namespace eu::ui
