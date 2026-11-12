@@ -43,7 +43,7 @@ Sesión del 2026-11-12, rama `fase-1/core`. (A las ~09:50 hubo un corte de luz r
 | `app` | Ventana mínima con `--smoke-test` | Parcial | No es todavía el explorador |
 | `bench` | `eu-bench` (mktree, listing, sort, copy) | Parcial | `copy` solo en Linux/macOS |
 
-## Fase 1 — Explorador funcional (en curso; pausada el 2026-11-11)
+## Fase 1 — Explorador funcional (en curso)
 Rama `fase-1/core`. "CI completa" = Ubuntu 22.04/24.04, ASan, Windows, macOS Intel y ARM.
 
 | Función | Estado | Verificado en | Qué falta |
@@ -60,19 +60,17 @@ Rama `fase-1/core`. "CI completa" = Ubuntu 22.04/24.04, ASan, Windows, macOS Int
 | `journal`: historial persistente (write-ahead) | Parcial | Ubuntu y VM de Windows (pruebas locales) | **CI pendiente**; retención automática al arrancar |
 | `ops`: operaciones elementales (copia atómica, renombrar sin sobrescribir, borrado sin seguir enlaces) | Parcial | Ubuntu (13 pruebas, ASan, TSan) | **CI pendiente** (Windows y macOS sin probar) |
 | `trash`: papelera propia por volumen | Parcial | Ubuntu: raíz de volumen (tmpfs) y carpeta personal (disco del sistema) | **CI pendiente**; vista unificada de la papelera en la interfaz; retención y tamaño máximo |
-| Motor de operaciones (`ops::Engine`): crear, renombrar, copiar, mover (también entre unidades), papelera, eliminar, deshacer | Parcial | Ubuntu (16 pruebas, ASan, TSan), con movimiento real entre tmpfs y ext4 | **CI pendiente**; **no está conectado a la interfaz**; sobrescribir y demás políticas de colisión (Fase 4) |
-| Recuperación tras cierre inesperado | Parcial | Ubuntu: proceso matado a mitad de mover y de copiar; revertir y descartar | "Reanudar" no existe; falta el diálogo al arrancar |
-| Operaciones en la interfaz (menú contextual, atajos, portapapeles, arrastrar y soltar, progreso, diálogos) | **Pendiente** | — | Es el siguiente paso |
-| Tamaño de carpetas | Pendiente | — | — |
-| Atajos principales | Parcial | — | Los de navegación y pestañas existen; faltan los de operaciones |
-| Manejo de errores visible | Parcial | Pruebas | Carpeta ilegible muestra mensaje y "Reintentar"; faltan los errores de operaciones |
+| Motor de operaciones (`ops::Engine`): crear, renombrar, copiar, mover (también entre unidades), papelera, restaurar, eliminar, deshacer | Parcial | CI completa; Ubuntu (17 pruebas, ASan, TSan), con movimiento real entre tmpfs y ext4 | Sobrescribir y demás políticas de colisión (Fase 4); deshacer una restauración |
+| Recuperación tras cierre inesperado | Parcial | Ubuntu: proceso matado a mitad de mover y de copiar; diálogo al arrancar con revertir, descartar o decidir más tarde | "Reanudar" no existe (botón deshabilitado); ver el diálogo a mano |
+| Operaciones en la interfaz (menú Edición y contextual, atajos, renombrado en línea, portapapeles, arrastrar y soltar, progreso con Cancelar, avisos de error) | Parcial | Ubuntu: pruebas automáticas (release, ASan) | **Nadie lo ha usado aún con teclado y ratón**; arrastrar de verdad en Wayland/X11/Windows y con otras aplicaciones; marcar visualmente lo cortado; «Abrir con…» y «Propiedades» no existen |
+| Papelera: ventana unificada (restaurar, eliminar, vaciar) | Parcial | Ubuntu: pruebas automáticas | Verla a mano; retención y tamaño máximo; unidades desconectadas como «no disponibles» |
+| Tamaño de carpetas (opción del menú Ver) | Parcial | Ubuntu: pruebas automáticas | Ordenar por ese tamaño; medir en disco mecánico; verlo a mano en una carpeta grande |
+| Atajos principales | Parcial | Pruebas de las acciones (no de las teclas) | F2, Supr, Mayús+Supr, Ctrl+C/X/V, Ctrl+Z, Ctrl+A, Ctrl+Mayús+N: comprobar cada tecla a mano; los de macOS no se han probado en un Mac |
+| Manejo de errores visible | Parcial | Pruebas | Carpeta ilegible: mensaje y "Reintentar". Operaciones: aviso que no bloquea, con el detalle de cada error |
 | Búsqueda | Pendiente (Fase 2) | — | El campo aparece deshabilitado con el rótulo "próximamente" |
 
-### Dónde quedó (2026-11-11)
-- Último commit de la rama: el motor de operaciones con sus pruebas. Todo compila y las 15 pruebas pasan en local (release y ASan; 13 con TSan).
-- La última ejecución de la CI que terminó es anterior a `journal`, `ops`, `trash` y el motor: esos módulos **no han pasado aún por Windows ni macOS en la CI**. Lo primero al retomar es mirar `gh run list --limit 3`.
-- La rama `fase-1/core` no está fusionada a `main`.
-- La VM `EU-Win11-Build` queda apagada.
+### Dónde quedó
+Ver la tabla «Punto de reanudación» al principio de este archivo: se actualiza tras cada paso.
 
 ## Fases 2 a 6
 Todas **Pendientes**. Plan y criterios en `docs/PHASE_PLAN.md`.
