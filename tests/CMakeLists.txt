@@ -42,3 +42,6 @@ eu_target_defaults(eu-crash-helper)
 
 eu_add_test(test_ops_engine ops/test_engine.cpp)
 add_dependencies(test_ops_engine eu-crash-helper)
+if(TARGET test_ui_main_window)
+    add_dependencies(test_ui_main_window eu-crash-helper)
+endif()

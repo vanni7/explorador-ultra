@@ -55,6 +55,19 @@ public:
     /// que no pueden contestar a un cuadro de diálogo.
     void setDeleteConfirmation(std::function<bool(const QStringList &)> confirmation);
 
+    /// Qué hacer con las operaciones que quedaron a medias (SPEC §9).
+    enum class RecoveryChoice {
+        Revert,   ///< Deshacer lo que alcanzaron a hacer.
+        Discard,  ///< Dejar lo hecho y limpiar los archivos a medio escribir.
+        Later,    ///< No tocar nada; se volverá a preguntar en el próximo arranque.
+    };
+    /// Sustituye el diálogo de recuperación (para las pruebas).
+    void setRecoveryChoice(std::function<RecoveryChoice(const QList<journal::Operation> &)> choice);
+    /// Revisa el historial en segundo plano y, si hay operaciones a medias,
+    /// pregunta qué hacer. Solo debe llamarlo la instancia que es dueña del
+    /// historial: otra instancia en marcha tendría operaciones "en curso" legítimas.
+    void checkInterruptedOperations();
+
 public slots:
     // Acciones sobre la pestaña activa (las mismas del menú y los atajos).
     void newFolder();
@@ -95,6 +108,8 @@ private:
     /// Copia o mueve `paths` a `destination` (pegar y soltar acaban aquí).
     void transfer(const QStringList &paths, const QString &destination, bool move);
     bool askPermanentDelete(const QStringList &paths, const QString &reason);
+    void onInterruptedOperationsFound(const QList<journal::Operation> &operations);
+    RecoveryChoice askRecovery(const QList<journal::Operation> &operations);
     void onActionStarted(quint64 id, ActionKind kind);
     void onActionProgressed(quint64 id, const ops::Progress &progress);
     void onActionFinished(const ActionResult &result);
@@ -114,6 +129,7 @@ private:
 
     FileActions *m_actions = nullptr;
     std::function<bool(const QStringList &)> m_deleteConfirmation;
+    std::function<RecoveryChoice(const QList<journal::Operation> &)> m_recoveryChoice;
     QHash<quint64, ActionKind> m_runningKinds;
     QHash<quint64, int> m_requestedCounts;   ///< Cuántos elementos se pidieron en cada acción.
     quint64 m_renameAfterCreateId = 0;       ///< Acción "nuevo…" cuyo resultado se deja listo para nombrar.

@@ -63,6 +63,13 @@
         </translation>
     </message>
     <message numerus="yes">
+        <source>La última vez la aplicación se cerró sin terminar %n operación(es).</source>
+        <translation>
+            <numerusform>La última vez la aplicación se cerró sin terminar %n operación.</numerusform>
+            <numerusform>La última vez la aplicación se cerró sin terminar %n operaciones.</numerusform>
+        </translation>
+    </message>
+    <message numerus="yes">
         <source> (%n operación(es) en curso)</source>
         <translation>
             <numerusform> (%n operación en curso)</numerusform>

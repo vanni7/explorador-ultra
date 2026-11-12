@@ -12,11 +12,13 @@
 #include <QCheckBox>
 #include <QClipboard>
 #include <QCloseEvent>
+#include <QDateTime>
 #include <QDir>
 #include <QHBoxLayout>
 #include <QItemSelectionModel>
 #include <QLabel>
 #include <QLineEdit>
+#include <QLocale>
 #include <QMenu>
 #include <QMenuBar>
 #include <QMessageBox>
@@ -80,6 +82,7 @@ MainWindow::MainWindow(tasks::Scheduler &scheduler, std::shared_ptr<journal::Jou
     connect(m_actions, &FileActions::progressed, this, &MainWindow::onActionProgressed);
     connect(m_actions, &FileActions::finished, this, &MainWindow::onActionFinished);
     connect(m_actions, &FileActions::runningCountChanged, this, &MainWindow::onRunningCountChanged);
+    connect(m_actions, &FileActions::interruptedOperationsFound, this, &MainWindow::onInterruptedOperationsFound);
     connect(QGuiApplication::clipboard(), &QClipboard::dataChanged, this, &MainWindow::updateEditActions);
 
     connect(m_tabs, &QTabWidget::currentChanged, this, &MainWindow::onCurrentTabChanged);
@@ -537,6 +540,83 @@ bool MainWindow::askPermanentDelete(const QStringList &paths, const QString &rea
     return box.clickedButton() == deleteButton;
 }
 
+void MainWindow::setRecoveryChoice(std::function<RecoveryChoice(const QList<journal::Operation> &)> choice)
+{
+    m_recoveryChoice = std::move(choice);
+}
+
+void MainWindow::checkInterruptedOperations()
+{
+    m_actions->checkJournalAtStartup();
+}
+
+void MainWindow::onInterruptedOperationsFound(const QList<journal::Operation> &operations)
+{
+    switch (askRecovery(operations)) {
+    case RecoveryChoice::Revert:
+        for (const journal::Operation &operation : operations) {
+            m_actions->revertInterrupted(operation);
+        }
+        break;
+    case RecoveryChoice::Discard:
+        for (const journal::Operation &operation : operations) {
+            m_actions->discardInterrupted(operation);
+        }
+        break;
+    case RecoveryChoice::Later:
+        report(tr("Las operaciones interrumpidas quedan pendientes; se volverá a preguntar al abrir."), false);
+        break;
+    }
+}
+
+MainWindow::RecoveryChoice MainWindow::askRecovery(const QList<journal::Operation> &operations)
+{
+    if (m_recoveryChoice) {
+        return m_recoveryChoice(operations);
+    }
+    QMessageBox box(this);
+    box.setIcon(QMessageBox::Warning);
+    box.setWindowTitle(tr("Operaciones interrumpidas"));
+    box.setText(tr("La última vez la aplicación se cerró sin terminar %n operación(es).", nullptr,
+                   int(operations.size())));
+
+    QStringList lines;
+    const qsizetype shown = qMin<qsizetype>(operations.size(), 8);
+    for (qsizetype i = 0; i < shown; ++i) {
+        const journal::Operation &operation = operations[i];
+        lines.append(QStringLiteral("• %1 (%2)")
+                         .arg(operation.description,
+                              QLocale().toString(QDateTime::fromMSecsSinceEpoch(operation.startedMs),
+                                                 QLocale::ShortFormat)));
+    }
+    if (operations.size() > shown) {
+        lines.append(tr("…y %n más", nullptr, int(operations.size() - shown)));
+    }
+    lines.append(QString());
+    lines.append(tr("No se perdió ningún archivo: los originales solo se quitan cuando su copia está completa.\n\n"
+                    "• Revertir: deshace lo que se alcanzó a hacer y deja todo como estaba antes.\n"
+                    "• Descartar: conserva lo ya hecho y borra solo los archivos a medio escribir.\n"
+                    "• Reanudar donde se quedó aún no está disponible (próximamente)."));
+    box.setInformativeText(lines.join(QLatin1Char('\n')));
+
+    QPushButton *revertButton = box.addButton(tr("Revertir"), QMessageBox::AcceptRole);
+    QPushButton *discardButton = box.addButton(tr("Descartar"), QMessageBox::DestructiveRole);
+    // Se muestra deshabilitado y rotulado: no aparenta funcionar (SPEC §25.1).
+    QPushButton *resumeButton = box.addButton(tr("Reanudar (próximamente)"), QMessageBox::ActionRole);
+    resumeButton->setEnabled(false);
+    QPushButton *laterButton = box.addButton(tr("Decidir más tarde"), QMessageBox::RejectRole);
+    box.setDefaultButton(revertButton);
+    box.setEscapeButton(laterButton);
+    box.exec();
+    if (box.clickedButton() == revertButton) {
+        return RecoveryChoice::Revert;
+    }
+    if (box.clickedButton() == discardButton) {
+        return RecoveryChoice::Discard;
+    }
+    return RecoveryChoice::Later;
+}
+
 void MainWindow::onActionStarted(quint64 id, ActionKind kind)
 {
     m_runningKinds.insert(id, kind);
@@ -564,6 +644,7 @@ void MainWindow::onActionProgressed(quint64 id, const ops::Progress &progress)
     case ActionKind::Move:   verb = tr("Moviendo"); break;
     case ActionKind::Delete: verb = tr("Eliminando"); break;
     case ActionKind::Undo:   verb = tr("Deshaciendo"); break;
+    case ActionKind::Revert: verb = tr("Revirtiendo"); break;
     default:                 verb = tr("Trabajando"); break;
     }
     QString text = progress.itemsTotal > 0
@@ -663,6 +744,14 @@ void MainWindow::onActionFinished(const ActionResult &result)
                 message = tr("Se deshizo: %1").arg(result.undoneDescription);
             }
             break;
+        case ActionKind::Revert:
+            if (outcome.ok()) {
+                message = tr("Se revirtió la operación interrumpida: %1").arg(result.undoneDescription);
+            }
+            break;
+        case ActionKind::Discard:
+            message = tr("Se descartó la operación interrumpida: %1").arg(result.undoneDescription);
+            break;
         case ActionKind::CreateFolder:
         case ActionKind::CreateFile:
         case ActionKind::Rename:
@@ -685,7 +774,7 @@ void MainWindow::onActionFinished(const ActionResult &result)
     if (!message.trimmed().isEmpty()) {
         details.prepend(message.trimmed());
     }
-    if (result.kind == ActionKind::Undo) {
+    if (result.kind == ActionKind::Undo || result.kind == ActionKind::Revert) {
         details.prepend(tr("Al deshacer «%1»:").arg(result.undoneDescription));
     }
     const core::Error &first = outcome.errors.first();

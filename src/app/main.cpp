@@ -15,6 +15,7 @@
 #include <QIcon>
 #include <QLibraryInfo>
 #include <QLocale>
+#include <QLockFile>
 #include <QSettings>
 #include <QStandardPaths>
 #include <QTimer>
@@ -92,6 +93,14 @@ int main(int argc, char *argv[])
             qWarning("No se pudo abrir el historial en %s: %s", qPrintable(journalPath),
                      qPrintable(opened.error().message));
         }
+        // Solo una instancia a la vez es "dueña" del historial: es la que
+        // revisa si quedaron operaciones a medias. Una segunda ventana abierta
+        // a la vez no debe confundir con interrumpidas las que la primera
+        // tiene en marcha. El cerrojo se libera solo si el proceso muere.
+        QLockFile journalOwner(journalPath + QStringLiteral(".cerrojo"));
+        journalOwner.setStaleLockTime(0);
+        const bool ownsJournal = journal != nullptr && journalOwner.tryLock(0);
+
         eu::ui::MainWindow window(scheduler, journal);
 
         const QStringList arguments = parser.positionalArguments();
@@ -103,6 +112,9 @@ int main(int argc, char *argv[])
             window.restoreSession();
         }
         window.show();
+        if (ownsJournal && !smokeTest && !parser.isSet(screenshotOption)) {
+            window.checkInterruptedOperations();
+        }
 
         if (smokeTest) {
             QTimer::singleShot(800, &application, &QApplication::quit);

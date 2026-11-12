@@ -25,6 +25,8 @@ enum class ActionKind {
     Trash,
     Delete,   ///< Eliminación permanente.
     Undo,
+    Revert,    ///< Revertir una operación que quedó a medias por un cierre inesperado.
+    Discard,   ///< Darla por perdida: limpiar los restos y dejar lo ya hecho.
 };
 
 /// Lo que pasó con una acción, ya de vuelta en el hilo de interfaz.
@@ -35,7 +37,7 @@ struct ActionResult
     /// Carpeta donde quedó el resultado (para seleccionarlo si está a la vista).
     QString directory;
     ops::Outcome outcome;
-    /// Solo en Deshacer: descripción de la operación que se deshizo.
+    /// En Deshacer, Revertir y Descartar: descripción de la operación afectada.
     QString undoneDescription;
     /// Solo en Deshacer: no había ninguna operación que se pudiera deshacer.
     bool nothingToUndo = false;
@@ -76,6 +78,14 @@ public:
     /// Deshace la operación más reciente que se pueda deshacer.
     quint64 undoLast();
 
+    /// Tareas de arranque sobre el historial, en segundo plano: borra lo más
+    /// antiguo (SPEC §9: se conservan 30 días o 10 000 operaciones) y busca
+    /// operaciones que quedaron a medias. Si hay alguna, avisa con
+    /// interruptedOperationsFound().
+    void checkJournalAtStartup();
+    quint64 revertInterrupted(const journal::Operation &operation);
+    quint64 discardInterrupted(const journal::Operation &operation);
+
 public slots:
     /// Pide a todas las acciones en curso que se detengan. Terminan de forma
     /// ordenada y avisan con finished() (con `cancelled` en su resultado).
@@ -87,6 +97,8 @@ signals:
     void finished(const eu::ui::ActionResult &result);
     /// Cambió runningCount().
     void runningCountChanged(int count);
+    /// Hay operaciones que no terminaron porque la aplicación se cerró de golpe.
+    void interruptedOperationsFound(const QList<eu::journal::Operation> &operations);
 
 private:
     struct Context

@@ -13,6 +13,7 @@
 #include <QGuiApplication>
 #include <QLineEdit>
 #include <QMimeData>
+#include <QProcess>
 #include <QItemSelectionModel>
 #include <QSettings>
 #include <QSignalSpy>
@@ -474,6 +475,54 @@ private slots:
         QMimeData text;
         text.setText(QStringLiteral("hola"));
         QVERIFY(!dropAt(&text, emptyArea, Qt::ControlModifier));
+    }
+
+    void interruptedOperationIsOfferedAndReverted()
+    {
+        QTemporaryDir data;
+        QTemporaryDir directory;
+        QVERIFY(QDir(directory.path()).mkdir(QStringLiteral("fotos")));
+        QVERIFY(QDir(directory.path()).mkdir(QStringLiteral("destino")));
+        for (int i = 0; i < 6; ++i) {
+            writeFile(directory.filePath(QStringLiteral("fotos/foto%1.raw").arg(i)), 1'000'000);
+        }
+        const QString destination = directory.filePath(QStringLiteral("destino"));
+        const QString journalPath = data.filePath(QStringLiteral("historial.db"));
+
+        // Un proceso aparte empieza a copiar y muere a mitad, como en un corte de luz.
+        QProcess process;
+        process.start(QCoreApplication::applicationDirPath() + QStringLiteral("/eu-crash-helper"),
+                      {journalPath, directory.filePath(QStringLiteral("fotos")), destination,
+                       QStringLiteral("2500000"), QStringLiteral("copiar")});
+        QVERIFY(process.waitForFinished(60000));
+        QCOMPARE(process.exitCode(), 42);
+        QVERIFY(!QDir(destination).isEmpty());
+
+        // Primera apertura: el usuario prefiere decidir más tarde. No se toca nada.
+        {
+            MainWindow window(m_scheduler, openJournal(data));
+            int asked = 0;
+            window.setRecoveryChoice([&asked](const QList<journal::Operation> &operations) {
+                asked = int(operations.size());
+                return MainWindow::RecoveryChoice::Later;
+            });
+            window.checkInterruptedOperations();
+            QTRY_COMPARE_WITH_TIMEOUT(asked, 1, 10000);
+            QVERIFY(!QDir(destination).isEmpty());
+        }
+
+        // Segunda apertura: se vuelve a preguntar y se elige revertir.
+        MainWindow window(m_scheduler, openJournal(data));
+        QSignalSpy reports(&window, &MainWindow::actionReported);
+        window.setRecoveryChoice([](const QList<journal::Operation> &) { return MainWindow::RecoveryChoice::Revert; });
+        window.checkInterruptedOperations();
+        QTRY_VERIFY_WITH_TIMEOUT(reports.count() >= 1, 20000);
+        QVERIFY(waitIdle(window));
+        QCOMPARE(reports.last().at(1).toBool(), false);
+        // El destino queda limpio y el origen, intacto.
+        QVERIFY2(QDir(destination).isEmpty(), qPrintable(QDir(destination).entryList().join(QLatin1Char(','))));
+        QCOMPARE(QDir(directory.filePath(QStringLiteral("fotos"))).entryList(QDir::Files).size(), 6);
+        QVERIFY(openJournal(data)->incompleteOperations().value().isEmpty());
     }
 
     void withoutJournalTheWindowOnlyBrowses()

@@ -209,4 +209,46 @@ quint64 FileActions::undoLast()
     });
 }
 
+void FileActions::checkJournalAtStartup()
+{
+    if (!m_journal) {
+        return;
+    }
+    const QPointer<FileActions> self(this);
+    const std::shared_ptr<journal::Journal> journal = m_journal;
+    m_scheduler.submit(tasks::Category::General, tasks::Priority::Background,
+                       [self, journal](const tasks::CancelToken &) {
+        journal->prune(10000, 30);
+        const auto incomplete = journal->incompleteOperations();
+        if (!incomplete.ok() || incomplete.value().isEmpty()) {
+            return;
+        }
+        const QList<journal::Operation> operations = incomplete.value();
+        QMetaObject::invokeMethod(qApp, [self, operations] {
+            if (self) {
+                emit self->interruptedOperationsFound(operations);
+            }
+        }, Qt::QueuedConnection);
+    });
+}
+
+quint64 FileActions::revertInterrupted(const journal::Operation &operation)
+{
+    return start(ActionKind::Revert, {}, tasks::Category::Transfer,
+                 [operation](const Context &context, ActionResult &result) {
+        result.undoneDescription = operation.description;
+        result.outcome = ops::Engine(context.journal).revertInterrupted(operation.id);
+    });
+}
+
+quint64 FileActions::discardInterrupted(const journal::Operation &operation)
+{
+    return start(ActionKind::Discard, {}, tasks::Category::Transfer,
+                 [operation](const Context &context, ActionResult &result) {
+        result.undoneDescription = operation.description;
+        ops::Engine(context.journal).discardInterrupted(operation.id);
+        result.outcome.operationId = operation.id;
+    });
+}
+
 } // namespace eu::ui
