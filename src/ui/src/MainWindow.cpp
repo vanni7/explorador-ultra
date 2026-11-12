@@ -119,7 +119,15 @@ void MainWindow::createActions()
 
     m_refreshAction = new QAction(themedIcon(QStringLiteral("view-refresh"), QStyle::SP_BrowserReload), tr("Actualizar"), this);
     m_refreshAction->setShortcuts({QKeySequence::Refresh, QKeySequence(Qt::CTRL | Qt::Key_R)});
-    connect(m_refreshAction, &QAction::triggered, this, [this] { if (auto *pane = currentPane()) pane->refresh(); });
+    connect(m_refreshAction, &QAction::triggered, this, [this] {
+        if (auto *pane = currentPane()) {
+            pane->refresh();
+            // Actualizar a mano también vuelve a sumar las carpetas.
+            if (pane->model()->folderSizesEnabled()) {
+                pane->model()->recalculateFolderSizes();
+            }
+        }
+    });
 
     m_newTabAction = new QAction(themedIcon(QStringLiteral("tab-new"), QStyle::SP_FileDialogNewFolder), tr("Nueva pestaña"), this);
     m_newTabAction->setShortcut(QKeySequence::AddTab);   // Ctrl+T / ⌘T
@@ -168,6 +176,15 @@ void MainWindow::createActions()
         updateStatus();
     });
 
+    m_folderSizesAction = new QAction(tr("Calcular el tamaño de las carpetas"), this);
+    m_folderSizesAction->setCheckable(true);
+    m_folderSizesAction->setToolTip(tr("Suma en segundo plano lo que ocupa cada carpeta; se detiene al cambiar de carpeta"));
+    connect(m_folderSizesAction, &QAction::toggled, this, [this](bool enabled) {
+        for (int i = 0; i < m_tabs->count(); ++i) {
+            static_cast<BrowserPane *>(m_tabs->widget(i))->setFolderSizesEnabled(enabled);
+        }
+    });
+
     m_editPathAction = new QAction(tr("Escribir una ruta"), this);
     m_editPathAction->setShortcuts({QKeySequence(Qt::CTRL | Qt::Key_L), QKeySequence(Qt::ALT | Qt::Key_D)});
 
@@ -187,6 +204,7 @@ void MainWindow::createActions()
     viewMenu->addSeparator();
     viewMenu->addAction(m_showHiddenAction);
     viewMenu->addAction(m_binaryUnitsAction);
+    viewMenu->addAction(m_folderSizesAction);
 
     QMenu *goMenu = menuBar()->addMenu(tr("&Ir"));
     goMenu->addAction(m_backAction);
@@ -881,6 +899,7 @@ BrowserPane *MainWindow::openTab(const QString &path)
 {
     auto *pane = new BrowserPane(m_scheduler, m_watcher, m_tabs);
     pane->setShowHidden(m_showHiddenAction->isChecked());
+    pane->setFolderSizesEnabled(m_folderSizesAction->isChecked());
     pane->model()->setSizeUnits(m_binaryUnitsAction->isChecked() ? core::SizeUnits::Binary
                                                                 : core::SizeUnits::Decimal);
 
@@ -1028,6 +1047,7 @@ void MainWindow::restoreSession()
     m_splitter->restoreState(settings.value(QStringLiteral("window/splitter")).toByteArray());
     m_showHiddenAction->setChecked(settings.value(QStringLiteral("view/showHidden"), false).toBool());
     m_binaryUnitsAction->setChecked(settings.value(QStringLiteral("view/binaryUnits"), false).toBool());
+    m_folderSizesAction->setChecked(settings.value(QStringLiteral("view/folderSizes"), false).toBool());
 
     const QStringList paths = settings.value(QStringLiteral("session/tabs")).toStringList();
     for (const QString &path : paths) {
@@ -1051,6 +1071,7 @@ void MainWindow::saveSession()
     settings.setValue(QStringLiteral("window/splitter"), m_splitter->saveState());
     settings.setValue(QStringLiteral("view/showHidden"), m_showHiddenAction->isChecked());
     settings.setValue(QStringLiteral("view/binaryUnits"), m_binaryUnitsAction->isChecked());
+    settings.setValue(QStringLiteral("view/folderSizes"), m_folderSizesAction->isChecked());
 
     QStringList paths;
     for (int i = 0; i < m_tabs->count(); ++i) {

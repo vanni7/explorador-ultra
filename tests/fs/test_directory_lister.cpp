@@ -1,5 +1,6 @@
 // Explorador Ultra — SPDX-License-Identifier: GPL-3.0-or-later
 #include "eu/fs/DirectoryLister.h"
+#include "eu/fs/TreeSize.h"
 
 #include <QDateTime>
 #include <QDir>
@@ -227,6 +228,41 @@ private slots:
         QVERIFY(!status.ok());
         QCOMPARE(status.error().code, core::ErrorCode::Cancelled);
         QVERIFY(delivered < 2000);
+    }
+
+    void treeSizeAddsEverythingWithoutFollowingLinks()
+    {
+        QTemporaryDir directory;
+        const QDir root(directory.path());
+        QVERIFY(root.mkpath(QStringLiteral("a/b/c")));
+        QVERIFY(root.mkpath(QStringLiteral("vacia")));
+        const auto write = [&](const QString &relative, qsizetype bytes) {
+            QFile file(root.filePath(relative));
+            QVERIFY(file.open(QIODevice::WriteOnly));
+            file.write(QByteArray(bytes, 'x'));
+        };
+        write(QStringLiteral("uno.bin"), 1000);
+        write(QStringLiteral("a/dos.bin"), 2000);
+        write(QStringLiteral("a/b/c/tres.bin"), 3000);
+        // Un enlace a la propia carpeta: si se siguiera, la suma no acabaría nunca.
+        const bool linked = QFile::link(directory.path(), root.filePath(QStringLiteral("a/ciclo")));
+
+        int progressCalls = 0;
+        const tasks::CancelToken cancel;
+        const TreeSize size = measureTree(directory.path(), cancel, [&](const TreeSize &) { ++progressCalls; });
+        QCOMPARE(size.bytes, qint64(6000));
+        QCOMPARE(size.folders, qint64(4));
+        QCOMPARE(size.files, qint64(linked ? 4 : 3));
+        QVERIFY(!size.incomplete);
+        QVERIFY(!size.cancelled);
+        QCOMPARE(progressCalls, 5);   // una vez por carpeta leída
+
+        // Una carpeta que no existe no es un tamaño cero fiable: se marca incompleta.
+        QVERIFY(measureTree(root.filePath(QStringLiteral("no-existe")), cancel).incomplete);
+
+        tasks::CancelSource source;
+        source.cancel();
+        QVERIFY(measureTree(directory.path(), source.token()).cancelled);
     }
 };
 

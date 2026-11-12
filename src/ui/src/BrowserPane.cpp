@@ -305,6 +305,7 @@ BrowserPane::BrowserPane(tasks::Scheduler &scheduler, fs::DirectoryWatcher &watc
     connect(m_model, &DirectoryModel::stateChanged, this, &BrowserPane::onModelStateChanged);
     connect(m_model, &DirectoryModel::contentReplaced, this, &BrowserPane::restoreSelection);
     connect(m_model, &DirectoryModel::renameRequested, this, &BrowserPane::renameRequested);
+    connect(m_model, &DirectoryModel::folderSizesChanged, this, &BrowserPane::statusChanged);
     connect(m_model, &QAbstractItemModel::modelAboutToBeReset, this, &BrowserPane::rememberSelection);
     connect(m_model, &QAbstractItemModel::rowsInserted, this, &BrowserPane::statusChanged);
     connect(m_retryButton, &QPushButton::clicked, this, &BrowserPane::refresh);
@@ -488,6 +489,11 @@ void BrowserPane::setShowHidden(bool show)
     m_model->setShowHidden(show);
 }
 
+void BrowserPane::setFolderSizesEnabled(bool enabled)
+{
+    m_model->setFolderSizesEnabled(enabled);
+}
+
 void BrowserPane::onModelStateChanged(DirectoryModel::State state)
 {
     switch (state) {
@@ -616,6 +622,9 @@ QString BrowserPane::statusText() const
     }
     if (m_model->hiddenCount() > 0) {
         text += tr(" (%n oculto(s))", nullptr, m_model->hiddenCount());
+    }
+    if (m_model->isMeasuringFolders()) {
+        text += tr(" · calculando el tamaño de las carpetas…");
     }
 
     const QModelIndexList rows = m_view->selectionModel()->selectedRows();

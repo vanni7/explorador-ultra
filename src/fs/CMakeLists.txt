@@ -2,6 +2,7 @@
 add_library(eu_fs STATIC
     src/DirectoryLister.cpp
     src/DirectoryWatcher.cpp
+    src/TreeSize.cpp
     src/Volumes.cpp
     include/eu/fs/DirectoryWatcher.h
     include/eu/fs/Volumes.h)

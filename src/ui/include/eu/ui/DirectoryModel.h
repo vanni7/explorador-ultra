@@ -4,6 +4,7 @@
 #include "eu/core/Error.h"
 #include "eu/core/SizeFormat.h"
 #include "eu/fs/Entry.h"
+#include "eu/fs/TreeSize.h"
 #include "eu/tasks/Scheduler.h"
 #include "eu/ui/EntrySort.h"
 
@@ -59,6 +60,24 @@ public:
     void setSizeUnits(core::SizeUnits units);
     core::SizeUnits sizeUnits() const { return m_sizeUnits; }
 
+    /// Calcular el tamaño de las carpetas (SPEC §5.4). Se hace en segundo
+    /// plano, carpeta por carpeta; el tamaño aparece creciendo y se detiene al
+    /// cambiar de carpeta o al desactivarlo.
+    void setFolderSizesEnabled(bool enabled);
+    bool folderSizesEnabled() const { return m_folderSizesEnabled; }
+    /// Olvida los tamaños calculados y los vuelve a calcular.
+    void recalculateFolderSizes();
+    /// true mientras quede alguna carpeta por medir.
+    bool isMeasuringFolders() const { return m_sizeTask.isValid() && !m_sizeTask.isFinished(); }
+    /// Tamaño conocido de la carpeta de una fila; `known` indica si ya se
+    /// empezó a calcular y `finished` si el dato es definitivo.
+    struct FolderSize
+    {
+        fs::TreeSize size;
+        bool finished = false;
+    };
+    const FolderSize *folderSizeAt(int row) const;
+
     /// Tiempo a partir del cual una carga lenta empieza a mostrarse por partes.
     void setRevealDelayMs(int milliseconds) { m_revealTimer.setInterval(milliseconds); }
 
@@ -96,6 +115,8 @@ signals:
     void contentReplaced();
     /// El usuario escribió un nombre nuevo para un elemento.
     void renameRequested(const QString &path, const QString &newName);
+    /// Empezó o terminó el cálculo de tamaños de carpetas.
+    void folderSizesChanged();
 
 private:
     struct TypeInfo
@@ -112,6 +133,9 @@ private:
     void revealPending();
     void replaceEntries(std::vector<fs::Entry> &&entries);
     void setState(State state);
+    void startMeasuringFolders();
+    void stopMeasuringFolders();
+    void onFolderSize(quint64 generation, const QString &name, const fs::TreeSize &size, bool finished);
     const TypeInfo &typeInfoFor(const fs::Entry &entry) const;
     static std::vector<fs::Entry> withoutHidden(std::vector<fs::Entry> entries, bool showHidden, int *hiddenCount);
 
@@ -138,6 +162,12 @@ private:
     QTimer m_revealTimer;
 
     mutable QHash<QString, TypeInfo> m_typeCache;   ///< Por extensión; evita repetir consultas.
+
+    bool m_folderSizesEnabled = false;
+    QHash<QString, FolderSize> m_folderSizes;   ///< Por nombre de carpeta, de la carpeta actual.
+    tasks::TaskHandle m_sizeTask;
+    quint64 m_sizeGeneration = 0;
+    bool m_sizeRestartPending = false;   ///< Aparecieron carpetas nuevas mientras se medía.
 };
 
 } // namespace eu::ui

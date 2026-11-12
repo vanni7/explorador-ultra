@@ -66,6 +66,7 @@ public slots:
     void goUp();
     void refresh();
     void setShowHidden(bool show);
+    void setFolderSizesEnabled(bool enabled);
     /// Abre lo seleccionado: entra en la carpeta o lanza el archivo con su programa.
     void openSelection();
     /// Empieza a renombrar el elemento actual escribiendo sobre su nombre.

@@ -155,6 +155,7 @@ private:
     QAction *m_duplicateTabAction = nullptr;
     QAction *m_showHiddenAction = nullptr;
     QAction *m_binaryUnitsAction = nullptr;
+    QAction *m_folderSizesAction = nullptr;
     QAction *m_editPathAction = nullptr;
 
     QAction *m_openAction = nullptr;

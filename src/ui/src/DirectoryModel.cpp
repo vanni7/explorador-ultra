@@ -40,6 +40,7 @@ DirectoryModel::~DirectoryModel()
 void DirectoryModel::cancelRunningTask()
 {
     retireCurrentTask();
+    stopMeasuringFolders();
     for (const tasks::TaskHandle &task : m_retiredTasks) {
         task.waitFor(std::chrono::seconds(30));
     }
@@ -64,6 +65,9 @@ void DirectoryModel::retireCurrentTask()
 void DirectoryModel::setPath(const QString &path)
 {
     m_path = QDir::cleanPath(path);
+    // Los tamaños calculados eran de la carpeta anterior.
+    stopMeasuringFolders();
+    m_folderSizes.clear();
     startLoading(false);
 }
 
@@ -179,6 +183,140 @@ void DirectoryModel::onFinished(quint64 generation, std::vector<fs::Entry> sorte
     m_hiddenCount = hidden;
     replaceEntries(std::move(visible));
     setState(State::Ready);
+    startMeasuringFolders();
+}
+
+void DirectoryModel::setFolderSizesEnabled(bool enabled)
+{
+    if (m_folderSizesEnabled == enabled) {
+        return;
+    }
+    m_folderSizesEnabled = enabled;
+    if (enabled) {
+        startMeasuringFolders();
+    } else {
+        stopMeasuringFolders();
+        m_folderSizes.clear();
+        if (!m_entries.empty()) {
+            emit dataChanged(index(0, int(Column::Size)), index(rowCount() - 1, int(Column::Size)));
+        }
+    }
+}
+
+void DirectoryModel::recalculateFolderSizes()
+{
+    stopMeasuringFolders();
+    m_folderSizes.clear();
+    if (!m_entries.empty()) {
+        emit dataChanged(index(0, int(Column::Size)), index(rowCount() - 1, int(Column::Size)));
+    }
+    startMeasuringFolders();
+}
+
+const DirectoryModel::FolderSize *DirectoryModel::folderSizeAt(int row) const
+{
+    const auto it = m_folderSizes.constFind(m_entries[size_t(row)].name);
+    return it == m_folderSizes.constEnd() ? nullptr : &it.value();
+}
+
+void DirectoryModel::stopMeasuringFolders()
+{
+    ++m_sizeGeneration;   // lo que llegue de la tarea anterior se descarta
+    m_sizeRestartPending = false;
+    if (m_sizeTask.isValid()) {
+        m_sizeTask.cancel();
+        if (!m_sizeTask.isFinished()) {
+            m_retiredTasks.push_back(m_sizeTask);   // el destructor la espera
+        }
+        m_sizeTask = tasks::TaskHandle();
+        emit folderSizesChanged();
+    }
+}
+
+void DirectoryModel::startMeasuringFolders()
+{
+    if (!m_folderSizesEnabled || m_state != State::Ready) {
+        return;
+    }
+    if (isMeasuringFolders()) {
+        // La carpeta se refrescó mientras se medía (pasa a menudo en Descargas).
+        // No se empieza de cero, o una carpeta grande no terminaría nunca: se
+        // deja acabar y luego se miden las que falten.
+        m_sizeRestartPending = true;
+        return;
+    }
+    stopMeasuringFolders();
+    // Solo se miden las carpetas que aún no tienen un tamaño definitivo: al
+    // refrescarse la vista no se repite el trabajo ya hecho.
+    QStringList names;
+    for (const fs::Entry &entry : m_entries) {
+        if (entry.isDirectory && !entry.isSymlink) {
+            const auto known = m_folderSizes.constFind(entry.name);
+            if (known == m_folderSizes.constEnd() || !known->finished) {
+                names.append(entry.name);
+            }
+        }
+    }
+    if (names.isEmpty()) {
+        return;
+    }
+    const quint64 generation = m_sizeGeneration;
+    const QString path = m_path;
+    // Una sola tarea las mide de una en una: varias a la vez harían ir y
+    // venir el cabezal de un disco mecánico y todo iría más lento.
+    m_sizeTask = m_scheduler.submit(tasks::Category::Metadata, tasks::Priority::Background,
+                                    [this, generation, path, names](const tasks::CancelToken &cancel) {
+        using Clock = std::chrono::steady_clock;
+        for (const QString &name : names) {
+            if (cancel.isCancelled()) {
+                return;
+            }
+            Clock::time_point lastSent = Clock::now();
+            const fs::TreeSize size = fs::measureTree(QDir(path).filePath(name), cancel,
+                                                      [&](const fs::TreeSize &partial) {
+                // El avance se enseña como mucho cinco veces por segundo.
+                if (Clock::now() - lastSent < std::chrono::milliseconds(200)) {
+                    return;
+                }
+                lastSent = Clock::now();
+                QMetaObject::invokeMethod(this, [this, generation, name, partial] {
+                    onFolderSize(generation, name, partial, false);
+                }, Qt::QueuedConnection);
+            });
+            if (size.cancelled) {
+                return;
+            }
+            QMetaObject::invokeMethod(this, [this, generation, name, size] {
+                onFolderSize(generation, name, size, true);
+            }, Qt::QueuedConnection);
+        }
+        QMetaObject::invokeMethod(this, [this, generation] {
+            if (generation != m_sizeGeneration) {
+                return;
+            }
+            m_sizeTask = tasks::TaskHandle();
+            emit folderSizesChanged();
+            if (m_sizeRestartPending) {
+                m_sizeRestartPending = false;
+                startMeasuringFolders();
+            }
+        }, Qt::QueuedConnection);
+    });
+    emit folderSizesChanged();
+}
+
+void DirectoryModel::onFolderSize(quint64 generation, const QString &name, const fs::TreeSize &size, bool finished)
+{
+    if (generation != m_sizeGeneration) {
+        return;
+    }
+    FolderSize &known = m_folderSizes[name];
+    known.size = size;
+    known.finished = finished;
+    const int row = rowOfName(name);
+    if (row >= 0) {
+        emit dataChanged(index(row, int(Column::Size)), index(row, int(Column::Size)));
+    }
 }
 
 void DirectoryModel::replaceEntries(std::vector<fs::Entry> &&entries)
@@ -310,8 +448,22 @@ QVariant DirectoryModel::data(const QModelIndex &index, int role) const
         case Column::Name:
             return entry.name;
         case Column::Size:
-            if (entry.isDirectory || entry.statFailed) {
-                return QString();   // el tamaño de carpetas llega con su propio cálculo
+            if (entry.isDirectory) {
+                // El tamaño de una carpeta solo se conoce si se pidió calcularlo.
+                const FolderSize *folder = folderSizeAt(index.row());
+                if (folder == nullptr) {
+                    return QString();
+                }
+                QString text = core::formatSize(folder->size.bytes, m_sizeUnits);
+                if (!folder->finished) {
+                    text += QStringLiteral("…");   // sigue sumando
+                } else if (folder->size.incomplete) {
+                    text = tr("≥ %1").arg(text);   // hubo subcarpetas ilegibles
+                }
+                return text;
+            }
+            if (entry.statFailed) {
+                return QString();
             }
             return core::formatSize(entry.size, m_sizeUnits);
         case Column::Type:
@@ -341,6 +493,19 @@ QVariant DirectoryModel::data(const QModelIndex &index, int role) const
         }
         if (column == Column::Size && !entry.isDirectory) {
             return tr("%1 bytes").arg(QLocale().toString(entry.size));
+        }
+        if (column == Column::Size && entry.isDirectory) {
+            if (const FolderSize *folder = folderSizeAt(index.row())) {
+                QString tip = tr("%1 bytes en %2 archivos y %3 carpetas")
+                                  .arg(QLocale().toString(folder->size.bytes), QLocale().toString(folder->size.files),
+                                       QLocale().toString(folder->size.folders));
+                if (!folder->finished) {
+                    tip += tr(" (calculando…)");
+                } else if (folder->size.incomplete) {
+                    tip += tr("\nHay subcarpetas que no se pudieron leer: el tamaño real es mayor.");
+                }
+                return tip;
+            }
         }
         break;
     case Qt::EditRole:

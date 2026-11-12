@@ -5,7 +5,7 @@
 Estados: **Terminada** (cumple §26) · **Parcial** · **Pendiente** · **Bloqueada**.
 
 ## Punto de reanudación (se actualiza tras cada paso; si hubo un corte, empieza aquí)
-Sesión del 2026-11-12, rama `fase-1/core`. Cada paso terminado queda en un commit ya enviado a GitHub; lo que no esté en `git log` no está hecho. Antes de seguir: `git status` (puede haber cambios a medias sin confirmar) y compilar con el preset `release`.
+Sesión del 2026-11-12, rama `fase-1/core`. (A las ~09:50 hubo un corte de luz real: el último commit local quedó vacío en disco y se recuperó de GitHub quitando los objetos vacíos de `.git/objects` y haciendo `git fetch`.) Cada paso terminado queda en un commit ya enviado a GitHub; lo que no esté en `git log` no está hecho. Antes de seguir: `git status` (puede haber cambios a medias sin confirmar) y compilar con el preset `release`.
 
 | # | Paso | Estado |
 |---|---|---|
@@ -15,8 +15,8 @@ Sesión del 2026-11-12, rama `fase-1/core`. Cada paso terminado queda en un comm
 | 4 | Arrastrar y soltar | **Hecho** en código y pruebas (eventos simulados, Ubuntu). **Falta arrastrar de verdad con el ratón** en Wayland, X11 y Windows, y desde/hacia otras aplicaciones |
 | 5 | Diálogo de recuperación al arrancar | **Hecho** (Revertir / Descartar / Decidir más tarde; «Reanudar» deshabilitado). Prueba con proceso matado a mitad de copia, Ubuntu. Incluye la retención automática del historial y un cerrojo para que solo una instancia revise el historial |
 | 6 | Vista de la papelera | **Hecho**: ventana «Papelera» (menú Ir y barra) con restaurar, eliminar y vaciar; el motor anota restaurar y eliminar en el historial. Pruebas en Ubuntu; la ventana no se ha visto a mano. Faltan: retención y tamaño máximo, unidades desconectadas como «no disponibles» |
-| 7 | Tamaño de carpetas | En curso |
-| 8 | Verificación manual (Ubuntu y VM de Windows), fusionar a `main`, informe de cierre | Pendiente |
+| 7 | Tamaño de carpetas | **Hecho**: opción «Calcular el tamaño de las carpetas» (menú Ver, desactivada por defecto), progresivo y cancelable. Pruebas en Ubuntu release y ASan. Falta: ordenar por ese tamaño y medir su coste en un disco mecánico |
+| 8 | Verificación manual (Ubuntu y VM de Windows), fusionar a `main`, informe de cierre | En curso: primero TSan local y CI completa |
 
 ## Fase 0 — Arquitectura y entorno
 | Tarea | Estado | Verificado en | Qué falta |

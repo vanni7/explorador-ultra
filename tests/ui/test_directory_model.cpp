@@ -235,6 +235,60 @@ private slots:
         QTRY_COMPARE_WITH_TIMEOUT(model.entryAt(0).name, QStringLiteral("archivo99999.dat"), 60000);
     }
 
+    void folderSizesAppearOnRequest()
+    {
+        QTemporaryDir directory;
+        QVERIFY(QDir(directory.path()).mkpath(QStringLiteral("fotos/viaje")));
+        QVERIFY(QDir(directory.path()).mkpath(QStringLiteral("vacia")));
+        writeFile(directory.filePath(QStringLiteral("fotos/a.jpg")), 1500);
+        writeFile(directory.filePath(QStringLiteral("fotos/viaje/b.jpg")), 2500);
+        writeFile(directory.filePath(QStringLiteral("suelto.txt")), 10);
+
+        DirectoryModel model(m_scheduler);
+        model.setPath(directory.path());
+        QVERIFY(waitUntilSettled(model));
+        const int photos = model.rowOfName(QStringLiteral("fotos"));
+        const int empty = model.rowOfName(QStringLiteral("vacia"));
+        const QModelIndex photosSize = model.index(photos, int(Column::Size));
+
+        // Sin pedirlo, las carpetas no muestran tamaño (ni se recorre el disco).
+        QCOMPARE(model.data(photosSize).toString(), QString());
+        QVERIFY(model.folderSizeAt(photos) == nullptr);
+
+        model.setFolderSizesEnabled(true);
+        QTRY_VERIFY_WITH_TIMEOUT(model.folderSizeAt(empty) != nullptr && model.folderSizeAt(empty)->finished
+                                     && model.folderSizeAt(photos) != nullptr
+                                     && model.folderSizeAt(photos)->finished, 10000);
+        QCOMPARE(model.folderSizeAt(photos)->size.bytes, qint64(4000));
+        QCOMPARE(model.folderSizeAt(photos)->size.files, qint64(2));
+        QCOMPARE(model.folderSizeAt(photos)->size.folders, qint64(1));
+        QCOMPARE(model.data(photosSize).toString(), core::formatSize(4000, core::SizeUnits::Decimal));
+        QCOMPARE(model.folderSizeAt(empty)->size.bytes, qint64(0));
+        QTRY_VERIFY(!model.isMeasuringFolders());
+
+        // Al refrescar se conserva lo ya calculado y se mide solo lo nuevo.
+        QVERIFY(QDir(directory.path()).mkdir(QStringLiteral("nueva")));
+        writeFile(directory.filePath(QStringLiteral("nueva/c.bin")), 700);
+        model.refresh();
+        QVERIFY(waitUntilSettled(model));
+        QVERIFY(model.folderSizeAt(model.rowOfName(QStringLiteral("fotos"))) != nullptr);
+        QTRY_VERIFY_WITH_TIMEOUT(model.folderSizeAt(model.rowOfName(QStringLiteral("nueva"))) != nullptr
+                                     && model.folderSizeAt(model.rowOfName(QStringLiteral("nueva")))->finished,
+                                 10000);
+        QCOMPARE(model.folderSizeAt(model.rowOfName(QStringLiteral("nueva")))->size.bytes, qint64(700));
+
+        // Al desactivarlo, los tamaños desaparecen; al cambiar de carpeta, también.
+        model.setFolderSizesEnabled(false);
+        QVERIFY(model.folderSizeAt(model.rowOfName(QStringLiteral("fotos"))) == nullptr);
+        model.setFolderSizesEnabled(true);
+        model.setPath(directory.filePath(QStringLiteral("fotos")));
+        QVERIFY(waitUntilSettled(model));
+        QTRY_VERIFY_WITH_TIMEOUT(model.folderSizeAt(model.rowOfName(QStringLiteral("viaje"))) != nullptr
+                                     && model.folderSizeAt(model.rowOfName(QStringLiteral("viaje")))->finished,
+                                 10000);
+        QCOMPARE(model.folderSizeAt(model.rowOfName(QStringLiteral("viaje")))->size.bytes, qint64(2500));
+    }
+
     void destroyingWhileLoadingIsSafe()
     {
         QTemporaryDir directory;
