@@ -10,14 +10,17 @@ add_library(eu_ui STATIC
     src/PathBar.cpp
     src/Sidebar.cpp
     src/TrashDialog.cpp
+    src/VolumesView.cpp
     include/eu/ui/BrowserPane.h
     include/eu/ui/DirectoryModel.h
     include/eu/ui/FileActions.h
     include/eu/ui/FileClipboard.h
+    include/eu/ui/Locations.h
     include/eu/ui/MainWindow.h
     include/eu/ui/PathBar.h
     include/eu/ui/Sidebar.h
-    include/eu/ui/TrashDialog.h)
+    include/eu/ui/TrashDialog.h
+    include/eu/ui/VolumesView.h)
 add_library(eu::ui ALIAS eu_ui)
 
 target_include_directories(eu_ui PUBLIC include)

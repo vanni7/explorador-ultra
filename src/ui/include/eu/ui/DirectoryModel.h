@@ -47,6 +47,8 @@ public:
     /// Cambia de carpeta. Cancela la carga anterior si seguía en curso.
     void setPath(const QString &path);
     QString path() const { return m_path; }
+    /// Deja el modelo sin carpeta y vacío (estado Empty). Cancela la carga en curso.
+    void clear();
 
     /// Vuelve a leer la carpeta actual conservando lo que hay a la vista hasta
     /// que llega el contenido nuevo.

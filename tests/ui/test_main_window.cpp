@@ -1,9 +1,12 @@
 // Explorador Ultra — SPDX-License-Identifier: GPL-3.0-or-later
 #include "eu/ui/BrowserPane.h"
 #include "eu/ui/FileClipboard.h"
+#include "eu/ui/Locations.h"
 #include "eu/ui/MainWindow.h"
 #include "eu/ui/PathBar.h"
+#include "eu/ui/Sidebar.h"
 #include "eu/ui/TrashDialog.h"
+#include "eu/ui/VolumesView.h"
 
 #include <QApplication>
 #include <QClipboard>
@@ -707,6 +710,132 @@ private slots:
         pane->goBack();
         QVERIFY(waitReady(pane));
         QCOMPARE(pane->model()->rowCount(), 4);
+    }
+
+    void volumesLocationListsDrivesWithTheirSpace()
+    {
+        QTemporaryDir directory;
+        QVERIFY(QDir(directory.path()).mkpath(QStringLiteral("discoA/dentro")));
+        QVERIFY(QDir(directory.path()).mkpath(QStringLiteral("discoB")));
+        const QString rootA = QDir::cleanPath(directory.filePath(QStringLiteral("discoA")));
+        const QString rootB = QDir::cleanPath(directory.filePath(QStringLiteral("discoB")));
+
+        fs::Volume a;
+        a.rootPath = rootA;
+        a.displayName = QStringLiteral("Datos");
+        a.fileSystem = QStringLiteral("ext4");
+        a.kind = fs::DeviceKind::Ssd;
+        a.totalBytes = 1000000000;   // 1 GB
+        a.freeBytes = 250000000;     // 250 MB libres -> 75 % ocupado
+        fs::Volume b;
+        b.rootPath = rootB;
+        b.displayName = QStringLiteral("USB");
+        b.fileSystem = QStringLiteral("exfat");
+        b.kind = fs::DeviceKind::Removable;
+        b.totalBytes = 16000000000;
+        b.freeBytes = 16000000000;
+
+        MainWindow window(m_scheduler, openJournal(directory));
+        BrowserPane *pane = window.openTab(rootA + QStringLiteral("/dentro"));
+        QVERIFY(waitReady(pane));
+        pane->setVolumeSource([a, b] { return QList<fs::Volume>{a, b}; });
+        window.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&window));
+
+        // Un clic en el rótulo "Unidades" del árbol lleva a la lista.
+        Sidebar *sidebar = window.sidebar();
+        QModelIndex section;
+        for (int row = 0; row < sidebar->model()->rowCount(); ++row) {
+            if (sidebar->model()->index(row, 0).data().toString() == QStringLiteral("Unidades")) {
+                section = sidebar->model()->index(row, 0);
+            }
+        }
+        QVERIFY(section.isValid());
+        QTest::mouseClick(sidebar->viewport(), Qt::LeftButton, Qt::NoModifier, sidebar->visualRect(section).center());
+        QVERIFY(pane->showsVolumes());
+        QCOMPARE(pane->currentPath(), volumesLocation());
+        VolumesView *volumes = pane->volumesView();
+        QTRY_COMPARE(volumes->topLevelItemCount(), 2);
+        QVERIFY(volumes->isVisible());
+        QVERIFY(!pane->view()->isVisible());
+
+        // Tamaño total, ocupado, libre y porcentaje de cada unidad.
+        QTreeWidgetItem *first = volumes->topLevelItem(0);
+        QCOMPARE(first->text(VolumesView::NameColumn), QStringLiteral("Datos"));
+        QCOMPARE(first->text(VolumesView::LocationColumn), QDir::toNativeSeparators(rootA));
+        QVERIFY(first->text(VolumesView::TypeColumn).contains(QStringLiteral("SSD")));
+        QVERIFY(first->text(VolumesView::TypeColumn).contains(QStringLiteral("ext4")));
+        QCOMPARE(first->text(VolumesView::TotalColumn), core::formatSize(1000000000));
+        QCOMPARE(first->text(VolumesView::UsedColumn), core::formatSize(750000000));
+        QCOMPARE(first->text(VolumesView::FreeColumn), core::formatSize(250000000));
+        QVERIFY(first->text(VolumesView::UsageColumn).startsWith(QStringLiteral("75")));
+        QVERIFY(!first->icon(VolumesView::NameColumn).isNull());
+        QVERIFY(volumes->topLevelItem(1)->text(VolumesView::UsageColumn).startsWith(QStringLiteral("0")));
+
+        // Ordenar por espacio libre usa el número, no el texto.
+        volumes->sortByColumn(VolumesView::FreeColumn, Qt::DescendingOrder);
+        QCOMPARE(volumes->topLevelItem(0)->text(VolumesView::NameColumn), QStringLiteral("USB"));
+        volumes->sortByColumn(VolumesView::NameColumn, Qt::AscendingOrder);
+
+        // Aquí no hay carpeta: nada que copiar, crear ni pegar.
+        QVERIFY(pane->selectedPaths().isEmpty());
+        QVERIFY(!pane->canGoUp());
+        QVERIFY(pane->statusText().contains(QStringLiteral("2 unidad")));
+        window.newFolder();
+        QVERIFY(!window.fileActions()->isBusy());
+        pane->showFilter();
+        QVERIFY(!pane->isFilterVisible());
+        QCOMPARE(PathBar::crumbsFor(volumesLocation()).size(), 1);
+
+        // Cambiar las unidades de tamaño cambia el texto de la lista.
+        pane->setSizeUnits(core::SizeUnits::Binary);
+        QCOMPARE(volumes->topLevelItem(0)->text(VolumesView::TotalColumn),
+                 core::formatSize(1000000000, core::SizeUnits::Binary));
+        pane->setSizeUnits(core::SizeUnits::Decimal);
+
+        // Abrir una unidad entra en su raíz; subir desde la raíz vuelve a la
+        // lista con esa unidad seleccionada.
+        volumes->setCurrentItem(volumes->topLevelItem(0));
+        QVERIFY(pane->statusText().contains(QStringLiteral("Datos")));
+        emit volumes->itemActivated(volumes->topLevelItem(0), 0);
+        QCOMPARE(pane->currentPath(), rootA);
+        QVERIFY(!pane->showsVolumes());
+        QVERIFY(waitReady(pane));
+        QVERIFY(pane->view()->isVisible());
+        QVERIFY(pane->model()->rowOfName(QStringLiteral("dentro")) >= 0);
+
+        pane->goBack();
+        QVERIFY(pane->showsVolumes());
+        QTRY_COMPARE(volumes->selectedRoot(), rootA);
+        pane->goForward();
+        QCOMPARE(pane->currentPath(), rootA);
+        QVERIFY(waitReady(pane));
+
+        // La pestaña en "Unidades" se recuerda entre sesiones.
+        pane->navigateTo(volumesLocation());
+        QVERIFY(pane->showsVolumes());
+        window.close();
+        MainWindow restored(m_scheduler);
+        restored.restoreSession();
+        QCOMPARE(restored.tabCount(), 1);
+        QVERIFY(restored.currentPane()->showsVolumes());
+        QSettings().clear();
+    }
+
+    void goingUpFromARootShowsTheVolumes()
+    {
+        MainWindow window(m_scheduler);
+        BrowserPane *pane = window.openTab(QDir::rootPath());
+        QVERIFY(waitReady(pane));
+        QVERIFY(pane->canGoUp());
+        pane->goUp();
+        QVERIFY(pane->showsVolumes());
+        QVERIFY(!pane->canGoUp());
+        QVERIFY(pane->canGoBack());
+        // Las unidades reales del equipo: al menos la del sistema, con tamaño.
+        QTRY_VERIFY(pane->volumesView()->topLevelItemCount() >= 1);
+        pane->goBack();
+        QCOMPARE(pane->currentPath(), QDir::cleanPath(QDir::rootPath()));
     }
 
     void pasteIntoAnotherFolder()

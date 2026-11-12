@@ -1,6 +1,7 @@
 // Explorador Ultra — SPDX-License-Identifier: GPL-3.0-or-later
 #pragma once
 
+#include "eu/fs/Volumes.h"
 #include "eu/ui/DirectoryModel.h"
 #include "eu/ui/FileClipboard.h"
 
@@ -21,6 +22,8 @@ class DirectoryWatcher;
 
 namespace eu::ui {
 
+class VolumesView;
+
 /// Carpeta superior de una ruta, o cadena vacía si ya es una raíz.
 /// Es un cálculo sobre el texto: no toca el disco.
 QString parentPathOf(const QString &path);
@@ -35,13 +38,25 @@ public:
     BrowserPane(tasks::Scheduler &scheduler, fs::DirectoryWatcher &watcher, QWidget *parent = nullptr);
     ~BrowserPane() override;
 
-    QString currentPath() const { return m_model->path(); }
+    /// Carpeta que se está viendo, o volumesLocation() si la pestaña muestra
+    /// la lista de unidades.
+    QString currentPath() const { return m_location; }
+    /// true si la pestaña muestra la lista de unidades en vez de una carpeta.
+    bool showsVolumes() const;
+    VolumesView *volumesView() const { return m_volumesView; }
+    /// De dónde sale la lista de unidades (por defecto, del sistema). Se llama
+    /// en un hilo de trabajo. Las pruebas ponen aquí unidades inventadas.
+    void setVolumeSource(std::function<QList<fs::Volume>()> source);
+    void setSizeUnits(core::SizeUnits units);
+    /// Pone el foco del teclado en la lista que esté a la vista.
+    void focusContent();
     DirectoryModel *model() const { return m_model; }
     QTreeView *view() const { return m_view; }
 
     bool canGoBack() const { return !m_backHistory.isEmpty(); }
     bool canGoForward() const { return !m_forwardHistory.isEmpty(); }
-    bool canGoUp() const { return !parentPathOf(currentPath()).isEmpty(); }
+    /// Desde la raíz de una unidad se sube a la lista de unidades.
+    bool canGoUp() const { return !currentPath().isEmpty() && !showsVolumes(); }
 
     /// Rutas completas de lo seleccionado.
     QStringList selectedPaths() const;
@@ -107,7 +122,10 @@ private:
     void onEditingFinished();
     void applyFilterText(const QString &text);
     void updateFilterInfo();
+    void reloadVolumes();
 
+    tasks::Scheduler &m_scheduler;
+    QString m_location;   ///< Lo que muestra la pestaña: una carpeta o volumesLocation().
     DirectoryModel *m_model = nullptr;
     fs::DirectoryWatcher &m_watcher;
     QTreeView *m_view = nullptr;
@@ -115,6 +133,13 @@ private:
     QWidget *m_messagePage = nullptr;
     QLabel *m_messageLabel = nullptr;
     QPushButton *m_retryButton = nullptr;
+
+    // Lista de unidades (ubicación "Unidades").
+    VolumesView *m_volumesView = nullptr;
+    std::function<QList<fs::Volume>()> m_volumeSource;
+    QTimer m_volumesTimer;            ///< Mantiene al día el espacio libre mientras se ve la lista.
+    bool m_volumesLoading = false;
+    QString m_volumeToSelect;         ///< Unidad que se selecciona al llegar la lista.
 
     // Barra de filtro local (SPEC §6.6).
     QWidget *m_filterBar = nullptr;

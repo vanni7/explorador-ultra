@@ -4,6 +4,8 @@
 #include "eu/core/NaturalCompare.h"
 #include "eu/core/SizeFormat.h"
 #include "eu/fs/DirectoryLister.h"
+#include "eu/ui/Locations.h"
+#include "eu/ui/VolumesView.h"
 
 #include <QApplication>
 #include <QDir>
@@ -32,20 +34,6 @@ QIcon themedIcon(const QString &name, QStyle::StandardPixmap fallback)
     return QIcon::fromTheme(name, QApplication::style()->standardIcon(fallback));
 }
 
-QIcon iconForVolume(const fs::Volume &volume)
-{
-    switch (volume.kind) {
-    case fs::DeviceKind::Removable:
-        return themedIcon(QStringLiteral("drive-removable-media"), QStyle::SP_DriveFDIcon);
-    case fs::DeviceKind::Network:
-        return themedIcon(QStringLiteral("folder-remote"), QStyle::SP_DriveNetIcon);
-    case fs::DeviceKind::Optical:
-        return themedIcon(QStringLiteral("media-optical"), QStyle::SP_DriveCDIcon);
-    default:
-        return themedIcon(QStringLiteral("drive-harddisk"), QStyle::SP_DriveHDIcon);
-    }
-}
-
 QStandardItem *makeSection(const QString &title)
 {
     auto *section = new QStandardItem(title);
@@ -69,6 +57,7 @@ Sidebar::Sidebar(tasks::Scheduler &scheduler, fs::VolumeMonitor &volumes, QWidge
 
     m_favoritesSection = makeSection(tr("Favoritos"));
     m_volumesSection = makeSection(tr("Unidades"));
+    m_volumesSection->setToolTip(tr("Ver todas las unidades con su tamaño y su espacio libre"));
     m_model->appendRow(m_favoritesSection);
     m_model->appendRow(m_volumesSection);
 
@@ -88,7 +77,8 @@ Sidebar::Sidebar(tasks::Scheduler &scheduler, fs::VolumeMonitor &volumes, QWidge
     connect(this, &QTreeView::clicked, this, &Sidebar::onClicked);
     // Con el teclado: Intro va al lugar; las flechas despliegan y recogen.
     connect(this, &QTreeView::activated, this, [this](const QModelIndex &index) {
-        const QString path = index.data(PathRole).toString();
+        const QString path = index == m_volumesSection->index() ? volumesLocation()
+                                                                 : index.data(PathRole).toString();
         if (!path.isEmpty() && !(QApplication::mouseButtons() & Qt::LeftButton)) {
             emit placeActivated(path);
         }
@@ -109,7 +99,9 @@ Sidebar::Sidebar(tasks::Scheduler &scheduler, fs::VolumeMonitor &volumes, QWidge
 
 void Sidebar::onClicked(const QModelIndex &index)
 {
-    const QString path = index.data(PathRole).toString();
+    // El rótulo "Unidades" abre la lista de unidades con su espacio.
+    const bool isVolumesSection = index == m_volumesSection->index();
+    const QString path = isVolumesSection ? volumesLocation() : index.data(PathRole).toString();
     if (path.isEmpty()) {
         return;
     }
@@ -121,7 +113,10 @@ void Sidebar::onClicked(const QModelIndex &index)
         return;
     }
     // Si ya se está viendo esa carpeta, el clic solo cambia desplegado/recogido.
-    if (path == m_currentPath) {
+    if (isVolumesSection) {
+        setExpanded(index, true);
+        emit placeActivated(path);
+    } else if (path == m_currentPath) {
         setExpanded(index, !isExpanded(index));
     } else {
         setExpanded(index, true);

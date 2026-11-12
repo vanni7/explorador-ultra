@@ -4,6 +4,13 @@
 <context>
     <name>eu::ui::BrowserPane</name>
     <message numerus="yes">
+        <source>%n unidad(es)</source>
+        <translation>
+            <numerusform>%n unidad</numerusform>
+            <numerusform>%n unidades</numerusform>
+        </translation>
+    </message>
+    <message numerus="yes">
         <source>Cargando… %n elemento(s)</source>
         <translation>
             <numerusform>Cargando… %n elemento</numerusform>

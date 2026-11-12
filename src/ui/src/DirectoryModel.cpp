@@ -73,6 +73,26 @@ void DirectoryModel::setPath(const QString &path)
     startLoading(false);
 }
 
+void DirectoryModel::clear()
+{
+    retireCurrentTask();
+    ++m_generation;   // lo que llegue de la carga anterior se descarta
+    m_revealTimer.stop();
+    m_path.clear();
+    m_filter = search::Query();
+    stopMeasuringFolders();
+    m_folderSizes.clear();
+    m_pending.clear();
+    m_progressive = false;
+    m_keepCurrentContent = false;
+    beginResetModel();
+    m_entries.clear();
+    m_unfiltered.clear();
+    m_hiddenCount = 0;
+    endResetModel();
+    setState(State::Empty);
+}
+
 void DirectoryModel::refresh()
 {
     if (!m_path.isEmpty()) {

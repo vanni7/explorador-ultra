@@ -2,6 +2,7 @@
 #include "eu/ui/PathBar.h"
 
 #include "eu/ui/FileClipboard.h"
+#include "eu/ui/Locations.h"
 
 #include <QAbstractItemView>
 #include <QClipboard>
@@ -58,6 +59,10 @@ PathBar::PathBar(QWidget *parent)
 QList<QPair<QString, QString>> PathBar::crumbsFor(const QString &path)
 {
     QList<QPair<QString, QString>> crumbs;
+    if (isVolumesLocation(path)) {
+        crumbs.append({tr("Unidades"), volumesLocation()});
+        return crumbs;
+    }
     const QString clean = QDir::cleanPath(path);
     if (clean.isEmpty()) {
         return crumbs;
@@ -198,7 +203,8 @@ void PathBar::mousePressEvent(QMouseEvent *event)
     // es querer pegarla en otro sitio. Si en el portapapeles hay archivos
     // copiados o cortados se respetan: perderlos estropearía un "pegar" pendiente.
     QClipboard *clipboard = QGuiApplication::clipboard();
-    if (fileSelectionFrom(clipboard->mimeData()).isEmpty()) {
+    // La lista de unidades no es una ruta: no hay nada útil que copiar.
+    if (!isVolumesLocation(m_path) && fileSelectionFrom(clipboard->mimeData()).isEmpty()) {
         clipboard->setText(m_edit->text());
         emit pathCopied(m_edit->text());
     }

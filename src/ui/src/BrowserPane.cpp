@@ -3,6 +3,8 @@
 
 #include "eu/fs/DirectoryWatcher.h"
 #include "eu/ui/FileClipboard.h"
+#include "eu/ui/Locations.h"
+#include "eu/ui/VolumesView.h"
 
 #include <QApplication>
 #include <QDesktopServices>
@@ -16,6 +18,7 @@
 #include <QLineEdit>
 #include <QMimeData>
 #include <QPainter>
+#include <QPointer>
 #include <QPushButton>
 #include <QRubberBand>
 #include <QSignalBlocker>
@@ -315,7 +318,8 @@ QString parentPathOf(const QString &path)
 }
 
 BrowserPane::BrowserPane(tasks::Scheduler &scheduler, fs::DirectoryWatcher &watcher, QWidget *parent)
-    : QWidget(parent), m_model(new DirectoryModel(scheduler, this)), m_watcher(watcher)
+    : QWidget(parent), m_scheduler(scheduler), m_model(new DirectoryModel(scheduler, this)), m_watcher(watcher),
+      m_volumeSource(&fs::listVolumes)
 {
     auto *fileView = new FileView(m_model, this);
     fileView->onDrop = [this](const QStringList &paths, const QString &destination, bool move) {
@@ -369,6 +373,20 @@ BrowserPane::BrowserPane(tasks::Scheduler &scheduler, fs::DirectoryWatcher &watc
     m_stack->setContentsMargins(0, 0, 0, 0);
     m_stack->addWidget(m_view);
     m_stack->addWidget(m_messagePage);
+
+    // Lista de unidades: lo que se ve en la ubicación "Unidades".
+    m_volumesView = new VolumesView(this);
+    m_stack->addWidget(m_volumesView);
+    connect(m_volumesView, &VolumesView::volumeActivated, this, &BrowserPane::navigateTo);
+    connect(m_volumesView, &QTreeWidget::itemSelectionChanged, this, &BrowserPane::statusChanged);
+    // El espacio libre cambia solo: se vuelve a consultar cada pocos segundos,
+    // pero solo mientras la lista está en pantalla.
+    m_volumesTimer.setInterval(3000);
+    connect(&m_volumesTimer, &QTimer::timeout, this, [this] {
+        if (isVisible()) {
+            reloadVolumes();
+        }
+    });
 
     // Barra de filtro: aparece bajo la lista, con otro color de fondo, para
     // que no se confunda con la búsqueda global de la barra superior.
@@ -440,7 +458,7 @@ BrowserPane::~BrowserPane()
 
 void BrowserPane::navigateTo(const QString &path)
 {
-    const QString clean = QDir::cleanPath(path);
+    const QString clean = isVolumesLocation(path) ? volumesLocation() : QDir::cleanPath(path);
     if (clean.isEmpty() || clean == currentPath()) {
         return;
     }
@@ -460,6 +478,10 @@ void BrowserPane::goBack()
     m_forwardHistory.append(leaving);
     // Al volver se deja seleccionada la carpeta de la que se viene, si es hija.
     const QString target = m_backHistory.takeLast();
+    if (isVolumesLocation(target)) {
+        changePath(target, leaving);   // queda seleccionada la unidad de la que se viene
+        return;
+    }
     changePath(target, parentPathOf(leaving) == target ? QDir(leaving).dirName() : QString());
 }
 
@@ -474,14 +496,19 @@ void BrowserPane::goForward()
 
 void BrowserPane::goUp()
 {
-    const QString parent = parentPathOf(currentPath());
-    if (parent.isEmpty()) {
+    if (!canGoUp()) {
         return;
     }
     const QString leaving = currentPath();
+    const QString parent = parentPathOf(leaving);
     m_backHistory.append(leaving);
     m_forwardHistory.clear();
-    changePath(parent, QDir(leaving).dirName());
+    if (parent.isEmpty()) {
+        // Por encima de la raíz de una unidad está la lista de unidades.
+        changePath(volumesLocation(), leaving);
+    } else {
+        changePath(parent, QDir(leaving).dirName());
+    }
 }
 
 void BrowserPane::changePath(const QString &path, const QString &nameToSelect)
@@ -490,10 +517,25 @@ void BrowserPane::changePath(const QString &path, const QString &nameToSelect)
         m_watcher.unwatch(m_watchedPath);
         m_watchedPath.clear();
     }
-    m_model->setPath(path);
-    // setPath vacía el modelo; lo que haya que seleccionar se fija después.
-    m_selectedNames = nameToSelect.isEmpty() ? QStringList() : QStringList{nameToSelect};
-    m_currentName = nameToSelect;
+    m_location = path;
+    if (showsVolumes()) {
+        // No hay carpeta que leer: el modelo queda vacío y se enseña la lista
+        // de unidades. `nameToSelect` es aquí la raíz de la unidad a seleccionar.
+        m_model->clear();
+        m_selectedNames.clear();
+        m_currentName.clear();
+        m_volumeToSelect = nameToSelect;
+        m_stack->setCurrentWidget(m_volumesView);
+        reloadVolumes();
+        m_volumesTimer.start();
+    } else {
+        m_volumesTimer.stop();
+        m_stack->setCurrentWidget(m_view);
+        m_model->setPath(path);
+        // setPath vacía el modelo; lo que haya que seleccionar se fija después.
+        m_selectedNames = nameToSelect.isEmpty() ? QStringList() : QStringList{nameToSelect};
+        m_currentName = nameToSelect;
+    }
     m_pendingNames.clear();
     m_editing = false;
     m_refreshDeferred = false;
@@ -513,6 +555,10 @@ void BrowserPane::changePath(const QString &path, const QString &nameToSelect)
 
 void BrowserPane::refresh()
 {
+    if (showsVolumes()) {
+        reloadVolumes();
+        return;
+    }
     if (m_editing) {
         m_refreshDeferred = true;   // se hará al terminar de escribir el nombre
         return;
@@ -520,8 +566,69 @@ void BrowserPane::refresh()
     m_model->refresh();
 }
 
+bool BrowserPane::showsVolumes() const
+{
+    return isVolumesLocation(m_location);
+}
+
+void BrowserPane::setVolumeSource(std::function<QList<fs::Volume>()> source)
+{
+    m_volumeSource = std::move(source);
+    if (showsVolumes()) {
+        reloadVolumes();
+    }
+}
+
+void BrowserPane::setSizeUnits(core::SizeUnits units)
+{
+    m_model->setSizeUnits(units);
+    m_volumesView->setSizeUnits(units);
+}
+
+void BrowserPane::focusContent()
+{
+    if (showsVolumes()) {
+        m_volumesView->setFocus();
+    } else {
+        m_view->setFocus();
+    }
+}
+
+void BrowserPane::reloadVolumes()
+{
+    if (m_volumesLoading) {
+        return;   // una unidad lenta no debe acumular consultas
+    }
+    m_volumesLoading = true;
+    // Consultar el espacio puede tardar (unidades de red, discos dormidos):
+    // se hace en una tarea y el resultado vuelve al hilo de interfaz.
+    const QPointer<BrowserPane> self(this);
+    m_scheduler.submit(tasks::Category::Listing, tasks::Priority::VisibleNavigation,
+                       [self, source = m_volumeSource](const tasks::CancelToken &) {
+        const QList<fs::Volume> volumes = source();
+        QMetaObject::invokeMethod(qApp, [self, volumes] {
+            if (!self) {
+                return;
+            }
+            self->m_volumesLoading = false;
+            if (!self->showsVolumes()) {
+                return;
+            }
+            self->m_volumesView->setVolumes(volumes);
+            if (!self->m_volumeToSelect.isEmpty()) {
+                self->m_volumesView->selectRoot(self->m_volumeToSelect);
+                self->m_volumeToSelect.clear();
+            }
+            emit self->statusChanged();
+        }, Qt::QueuedConnection);
+    });
+}
+
 void BrowserPane::showFilter()
 {
+    if (showsVolumes()) {
+        return;   // el filtro es de una carpeta
+    }
     m_filterBar->show();
     m_filterEdit->setFocus(Qt::ShortcutFocusReason);
     m_filterEdit->selectAll();
@@ -676,6 +783,10 @@ void BrowserPane::setFolderSizesEnabled(bool enabled)
 
 void BrowserPane::onModelStateChanged(DirectoryModel::State state)
 {
+    if (showsVolumes()) {
+        emit statusChanged();   // la lista de unidades sigue a la vista
+        return;
+    }
     switch (state) {
     case DirectoryModel::State::Failed:
         m_messageLabel->setText(tr("No se puede mostrar esta carpeta.\n%1\n\n%2")
@@ -745,6 +856,9 @@ void BrowserPane::restoreSelection()
 QStringList BrowserPane::selectedPaths() const
 {
     QStringList paths;
+    if (showsVolumes()) {
+        return paths;   // una unidad no se copia, corta ni borra como un archivo
+    }
     const QModelIndexList rows = m_view->selectionModel()->selectedRows();
     for (const QModelIndex &index : rows) {
         paths.append(m_model->filePath(index.row()));
@@ -788,6 +902,19 @@ void BrowserPane::openSelection()
 
 QString BrowserPane::statusText() const
 {
+    if (showsVolumes()) {
+        const QList<fs::Volume> volumes = m_volumesView->volumes();
+        QString summary = tr("%n unidad(es)", nullptr, int(volumes.size()));
+        const QString selected = m_volumesView->selectedRoot();
+        for (const fs::Volume &volume : volumes) {
+            if (volume.rootPath == selected && volume.totalBytes > 0) {
+                summary += tr(" · %1: %2 libres de %3")
+                               .arg(volume.displayName, core::formatSize(volume.freeBytes, m_model->sizeUnits()),
+                                    core::formatSize(volume.totalBytes, m_model->sizeUnits()));
+            }
+        }
+        return summary;
+    }
     QString text;
     switch (m_model->state()) {
     case DirectoryModel::State::Loading:

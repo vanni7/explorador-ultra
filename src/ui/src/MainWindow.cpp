@@ -1,6 +1,8 @@
 // Explorador Ultra — SPDX-License-Identifier: GPL-3.0-or-later
 #include "eu/ui/MainWindow.h"
 
+#include "eu/ui/Locations.h"
+
 #include "eu/core/Version.h"
 #include "eu/ui/BrowserPane.h"
 #include "eu/ui/FileClipboard.h"
@@ -179,7 +181,7 @@ void MainWindow::createActions()
             m_trashDialog->setSizeUnits(units);
         }
         for (int i = 0; i < m_tabs->count(); ++i) {
-            static_cast<BrowserPane *>(m_tabs->widget(i))->model()->setSizeUnits(units);
+            static_cast<BrowserPane *>(m_tabs->widget(i))->setSizeUnits(units);
         }
         updateStatus();
     });
@@ -399,7 +401,10 @@ void MainWindow::updateEditActions()
         return;   // aún se está construyendo la ventana
     }
     const BrowserPane *pane = currentPane();
-    const bool canModify = pane != nullptr && m_actions->isAvailable();
+    // En la lista de unidades no hay carpeta donde crear, pegar ni filtrar.
+    const bool inFolder = pane != nullptr && !pane->showsVolumes();
+    const bool canModify = inFolder && m_actions->isAvailable();
+    m_filterAction->setEnabled(inFolder);
     const qsizetype selected = pane ? pane->view()->selectionModel()->selectedRows().size() : 0;
     const bool canPaste = !fileSelectionFrom(QGuiApplication::clipboard()->mimeData()).isEmpty();
 
@@ -444,7 +449,7 @@ void MainWindow::showContextMenu(BrowserPane *pane, const QPoint &globalPosition
 void MainWindow::newFolder()
 {
     BrowserPane *pane = currentPane();
-    if (pane == nullptr || !m_actions->isAvailable()) {
+    if (pane == nullptr || pane->showsVolumes() || !m_actions->isAvailable()) {
         return;
     }
     // Se crea ya con un nombre libre y se deja listo para escribir el definitivo.
@@ -456,7 +461,7 @@ void MainWindow::newFolder()
 void MainWindow::newFile()
 {
     BrowserPane *pane = currentPane();
-    if (pane == nullptr || !m_actions->isAvailable()) {
+    if (pane == nullptr || pane->showsVolumes() || !m_actions->isAvailable()) {
         return;
     }
     const quint64 id = m_actions->createFile(pane->currentPath(), pane->unusedName(tr("Nuevo archivo.txt")));
@@ -496,7 +501,8 @@ void MainWindow::cutSelection()
 
 void MainWindow::paste()
 {
-    if (const BrowserPane *pane = currentPane()) {
+    const BrowserPane *pane = currentPane();
+    if (pane != nullptr && !pane->showsVolumes()) {
         pasteInto(pane->currentPath());
     }
 }
@@ -968,7 +974,7 @@ BrowserPane *MainWindow::openTab(const QString &path)
     auto *pane = new BrowserPane(m_scheduler, m_watcher, m_tabs);
     pane->setShowHidden(m_showHiddenAction->isChecked());
     pane->setFolderSizesEnabled(m_folderSizesAction->isChecked());
-    pane->model()->setSizeUnits(m_binaryUnitsAction->isChecked() ? core::SizeUnits::Binary
+    pane->setSizeUnits(m_binaryUnitsAction->isChecked() ? core::SizeUnits::Binary
                                                                 : core::SizeUnits::Decimal);
 
     connect(pane, &BrowserPane::pathChanged, this, [this, pane] {
@@ -1002,7 +1008,7 @@ BrowserPane *MainWindow::openTab(const QString &path)
     const int index = m_tabs->addTab(pane, QString());
     pane->navigateTo(path);
     m_tabs->setCurrentIndex(index);
-    pane->view()->setFocus();
+    pane->focusContent();
     return pane;
 }
 
@@ -1042,7 +1048,7 @@ void MainWindow::navigateCurrentTo(const QString &path)
 {
     if (BrowserPane *pane = currentPane()) {
         pane->navigateTo(path);
-        pane->view()->setFocus();
+        pane->focusContent();
     }
 }
 
@@ -1081,12 +1087,12 @@ void MainWindow::updateTabTitle(BrowserPane *pane)
         return;
     }
     const QString path = pane->currentPath();
-    QString title = QDir(path).dirName();
+    QString title = pane->showsVolumes() ? tr("Unidades") : QDir(path).dirName();
     if (title.isEmpty()) {
         title = QDir::toNativeSeparators(path);   // raíces: "/" o "C:\"
     }
     m_tabs->setTabText(index, title);
-    m_tabs->setTabToolTip(index, QDir::toNativeSeparators(path));
+    m_tabs->setTabToolTip(index, pane->showsVolumes() ? title : QDir::toNativeSeparators(path));
     if (pane == currentPane()) {
         setWindowTitle(QStringLiteral("%1 — %2").arg(title, core::applicationName()));
     }
