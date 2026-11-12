@@ -1,6 +1,6 @@
 # Estado del proyecto
 
-Última actualización: 2026-11-12 · Fase actual: **1 (en curso)**; la Fase 0 fue aprobada
+Última actualización: 2026-11-12 · Fase actual: **2 (por empezar)**; la Fase 1 se entregó el 12-nov con puntos abiertos (ver `INFORME_FASE_1.md`)
 
 Estados: **Terminada** (cumple §26) · **Parcial** · **Pendiente** · **Bloqueada**.
 
@@ -16,7 +16,7 @@ Sesión del 2026-11-12, rama `fase-1/core`. (A las ~09:50 hubo un corte de luz r
 | 5 | Diálogo de recuperación al arrancar | **Hecho** (Revertir / Descartar / Decidir más tarde; «Reanudar» deshabilitado). Prueba con proceso matado a mitad de copia, Ubuntu. Incluye la retención automática del historial y un cerrojo para que solo una instancia revise el historial |
 | 6 | Vista de la papelera | **Hecho**: ventana «Papelera» (menú Ir y barra) con restaurar, eliminar y vaciar; el motor anota restaurar y eliminar en el historial. Pruebas en Ubuntu; la ventana no se ha visto a mano. Faltan: retención y tamaño máximo, unidades desconectadas como «no disponibles» |
 | 7 | Tamaño de carpetas | **Hecho**: opción «Calcular el tamaño de las carpetas» (menú Ver, desactivada por defecto), progresivo y cancelable. Pruebas en Ubuntu release y ASan. Falta: ordenar por ese tamaño y medir su coste en un disco mecánico |
-| 8 | Verificación, fusión a `main` e informe de cierre | **Parcial**. CI completa en verde hasta `f72388c` y 16 pruebas + arranque en la VM de Windows. El dueño probó la aplicación en Ubuntu (Wayland) el 12-nov y dio el visto bueno para seguir; sus cinco observaciones están corregidas (paso 9). Falta: CI del paso 9, fusionar a `main` e informe de cierre |
+| 8 | Verificación, fusión a `main` e informe de cierre | **Hecho** el 12-nov: CI completa en verde en `15dcc32`, rama fusionada a `main`, informe en `docs/INFORME_FASE_1.md`. La fase se entrega **con puntos abiertos** (sección E del informe): la ventana no se ha usado a mano en Windows ni en X11 real, y faltan mediciones |
 | 9 | Correcciones tras la prueba del dueño: selección con recuadro, soltar sobre el árbol de carpetas, clic en el árbol despliega/recoge, iconos por tipo, clic en la ruta la copia | **Hecho**; probado con ratón simulado en una pantalla virtual X11 (Xvfb + xdotool) y con pruebas automáticas. En Wayland lo tiene que confirmar el dueño |
 
 ## Fase 0 — Arquitectura y entorno
@@ -44,7 +44,7 @@ Sesión del 2026-11-12, rama `fase-1/core`. (A las ~09:50 hubo un corte de luz r
 | `app` | Ventana mínima con `--smoke-test` | Parcial | No es todavía el explorador |
 | `bench` | `eu-bench` (mktree, listing, sort, copy) | Parcial | `copy` solo en Linux/macOS |
 
-## Fase 1 — Explorador funcional (en curso)
+## Fase 1 — Explorador funcional (entregada con puntos abiertos)
 Rama `fase-1/core`. "CI completa" = Ubuntu 22.04/24.04, ASan, Windows, macOS Intel y ARM.
 
 | Función | Estado | Verificado en | Qué falta |

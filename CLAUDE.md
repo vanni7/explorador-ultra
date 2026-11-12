@@ -36,12 +36,10 @@ Los resultados solo se anotan en `docs/BENCHMARKS.md` si se midieron de verdad.
 - macOS: solo GitHub Actions.
 
 ## Estado (2026-11-12)
-Fase 1 en la rama `fase-1/core` (repositorio: github.com/vanni7/explorador-ultra), sin fusionar a `main`.
-**El punto exacto donde seguir está en la tabla «Punto de reanudación» de `docs/STATUS.md`**, que se actualiza (con commit y envío a GitHub) tras cada paso.
+Fase 1 entregada y fusionada a `main` (repositorio: github.com/vanni7/explorador-ultra), con puntos abiertos listados en `docs/INFORME_FASE_1.md` (sección E). El dueño probó la aplicación en Ubuntu/Wayland y pidió seguir adelante.
 
-**Hecho:** `core`, `tasks`, `fs` (incluye `measureTree`), `journal`, `ops`, `trash`, el motor `ops::Engine` y la interfaz con operaciones: `ui::FileActions` (motor en tareas), menú Edición y contextual, atajos, renombrado en línea, portapapeles, arrastrar y soltar, avance con Cancelar, diálogo de recuperación al arrancar, ventana de la papelera y tamaño de carpetas.
-
-**Falta para cerrar la Fase 1:** que el dueño pruebe la aplicación a mano (lista en `docs/STATUS.md`), fusionar a `main` con la CI en verde e informe de cierre.
+**Siguiente:** Fase 2 — Búsqueda y rendimiento (`docs/PHASE_PLAN.md`), en una rama nueva `fase-2/...`. Antes de programar, leer §6 de `docs/SPEC.md`.
+**El punto exacto donde seguir está siempre en la tabla «Punto de reanudación» de `docs/STATUS.md`**, que se actualiza (con commit y envío a GitHub) tras cada paso.
 
 ## Notas útiles
 - Captura de la ventana sin pantalla: `XAUTHORITY=$(ls /run/user/1000/.mutter-Xwaylandauth.*) QT_QPA_PLATFORM=xcb ./build/release/bin/explorador-ultra --captura salida.png <carpeta>`.
