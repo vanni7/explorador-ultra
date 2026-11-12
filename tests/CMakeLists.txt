@@ -1,7 +1,7 @@
 # Cada módulo tiene su propia carpeta de pruebas (Qt Test, ver ADR-0004).
 function(eu_add_test name)
     qt_add_executable(${name} ${ARGN})
-    target_link_libraries(${name} PRIVATE eu::core eu::tasks eu::fs eu::ui Qt6::Test)
+    target_link_libraries(${name} PRIVATE eu::core eu::tasks eu::fs eu::journal eu::ui Qt6::Test)
     eu_target_defaults(${name})
     # Los límites de tiempo solo tienen sentido en compilaciones optimizadas:
     # con sanitizers o en Debug todo va muchas veces más lento.
@@ -24,3 +24,4 @@ eu_add_test(test_fs_volumes_watcher fs/test_volumes_watcher.cpp)
 eu_add_test(test_ui_entry_sort ui/test_entry_sort.cpp)
 eu_add_test(test_ui_directory_model ui/test_directory_model.cpp)
 eu_add_test(test_ui_main_window ui/test_main_window.cpp)
+eu_add_test(test_journal journal/test_journal.cpp)

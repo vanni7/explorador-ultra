@@ -7,7 +7,7 @@ Versión = la instalada en el equipo de desarrollo (Ubuntu 26.04) el 2026-11-11.
 |---|---|---|---|---|---|
 | Qt (Core, Gui, Widgets, Svg, Test) | 6.12.0 | LGPL-3.0 / GPL-3.0 | Base de la aplicación, SVG, pruebas | dinámico | **Sí** |
 | Qt Multimedia, Qt PDF, Qt Image Formats | 6.12.0 | LGPL-3.0 / GPL-3.0 | Audio/video, PDF, TIFF/WebP | dinámico | Fase 3 |
-| SQLite | 3.46.1 | Dominio público | Historial, índice, etiquetas, FTS5 | dinámico (Linux) / vcpkg | Fase 1 |
+| SQLite (incluido en Qt SQL, controlador QSQLITE) | 3.53.4 | Dominio público | Historial, índice, etiquetas, FTS5 | dentro del complemento de Qt | **Sí** (ADR-0011) |
 | libarchive | 3.8.5 | BSD-2-Clause | ZIP, 7z, TAR, GZ, ISO; lectura de RAR | dinámico / vcpkg | Fase 4 |
 | FFmpeg (avformat, avcodec, swscale) | 8.0.1 | LGPL-2.1+ (GPL según opciones) | Fotogramas de video, metadatos multimedia | dinámico / vcpkg | Fase 3 |
 | Exiv2 | 0.28.8 | GPL-2.0-or-later | EXIF, XMP, IPTC | dinámico / vcpkg | Fase 3 |

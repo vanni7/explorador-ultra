@@ -21,7 +21,7 @@ set(EU_SANITIZER "" CACHE STRING "Sanitizer a activar: address, undefined, threa
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_SOURCE_DIR}/cmake")
 include(EuCompilerOptions)
 
-find_package(Qt6 6.8 REQUIRED COMPONENTS Core Gui Widgets Svg LinguistTools)
+find_package(Qt6 6.8 REQUIRED COMPONENTS Core Gui Widgets Svg Sql LinguistTools)
 qt_standard_project_setup()
 
 # Todos los ejecutables van a build/<preset>/bin en las tres plataformas.
@@ -31,6 +31,7 @@ set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
 add_subdirectory(src/core)
 add_subdirectory(src/tasks)
 add_subdirectory(src/fs)
+add_subdirectory(src/journal)
 add_subdirectory(src/ui)
 add_subdirectory(src/app)
 

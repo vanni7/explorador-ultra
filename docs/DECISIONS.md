@@ -73,3 +73,10 @@ Formato: contexto, decisión, alternativas y consecuencias. Las decisiones previ
 - **Fecha:** 2026-11-11 · **Estado:** aceptada (instrucción del usuario)
 - **Decisión:** el usuario aprobó iniciar la Fase 1. El repositorio se publica en GitHub como `explorador-ultra` (público, para disponer de runners de macOS). Los commits usan el correo `noreply` de la cuenta de GitHub.
 - **Consecuencias:** desde este punto se aplica la regla 15 de §25: ramas por fase y fusión a `main` solo con la CI en verde.
+
+## ADR-0011 — SQLite a través de Qt SQL
+- **Fecha:** 2026-11-11 · **Estado:** aceptada (sustituye la parte de SQLite de ADR-0003)
+- **Contexto:** el historial, las etiquetas y el índice necesitan SQLite. Los binarios oficiales de Qt 6.12 ya traen el controlador `QSQLITE` con SQLite 3.53.4 incluido, compilado con FTS5 y seguro entre hilos (comprobado en Linux).
+- **Decisión:** usar Qt SQL (`QSqlDatabase`, controlador `QSQLITE`) en lugar de enlazar SQLite por separado. Cada hilo abre su propia conexión; las bases van en modo WAL.
+- **Alternativas:** SQLite del sistema en Linux y vcpkg en Windows/macOS (versiones distintas por plataforma y una dependencia más que empaquetar).
+- **Consecuencias:** la misma versión de SQLite en las tres plataformas y sin vcpkg por ahora. El módulo `journal` depende de `Qt6::Sql`. Si en la Fase 2 el índice necesitara funciones de SQLite que Qt SQL no expone, se reevaluará.
