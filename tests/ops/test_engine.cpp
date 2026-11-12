@@ -398,7 +398,10 @@ private slots:
         }
         const QString trashDirectory = trash::trashDirectoryFor(directory.path()).value();
         QList<trash::TrashItem> mine;
-        for (const trash::TrashItem &item : trash::listTrash(trashDirectory).value()) {
+        // La lista se guarda en una variable: recorrer directamente el
+        // resultado de la llamada usaría datos ya destruidos.
+        const QList<trash::TrashItem> inTrash = trash::listTrash(trashDirectory).value();
+        for (const trash::TrashItem &item : inTrash) {
             if (item.originalPath == first || item.originalPath == second) {
                 mine.append(item);
             }
