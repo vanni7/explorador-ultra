@@ -709,6 +709,38 @@ private slots:
         QCOMPARE(pane->model()->rowCount(), 4);
     }
 
+    void pasteIntoAnotherFolder()
+    {
+        // Lo que hace "Pegar en esta carpeta" del menú del árbol de lugares:
+        // pegar en una carpeta que no es la que se está viendo.
+        QTemporaryDir data;
+        QTemporaryDir directory;
+        QVERIFY(QDir(directory.path()).mkdir(QStringLiteral("destino")));
+        writeFile(directory.filePath(QStringLiteral("a.txt")), 5);
+        writeFile(directory.filePath(QStringLiteral("b.txt")), 5);
+        const QString destination = directory.filePath(QStringLiteral("destino"));
+
+        MainWindow window(m_scheduler, openJournal(data));
+        window.show();
+        BrowserPane *pane = window.openTab(directory.path());
+        QVERIFY(waitReady(pane));
+
+        selectNames(pane, {QStringLiteral("a.txt")});
+        window.copySelection();
+        window.pasteInto(destination);
+        QTRY_VERIFY_WITH_TIMEOUT(QFileInfo::exists(destination + QStringLiteral("/a.txt")), 10000);
+        QVERIFY(waitIdle(window));
+        QVERIFY(QFileInfo::exists(directory.filePath(QStringLiteral("a.txt"))));
+        QCOMPARE(pane->currentPath(), QDir::cleanPath(directory.path()));   // no se cambia de carpeta
+
+        selectNames(pane, {QStringLiteral("b.txt")});
+        window.cutSelection();
+        window.pasteInto(destination);
+        QTRY_VERIFY_WITH_TIMEOUT(QFileInfo::exists(destination + QStringLiteral("/b.txt")), 10000);
+        QVERIFY(waitIdle(window));
+        QVERIFY(!QFileInfo::exists(directory.filePath(QStringLiteral("b.txt"))));
+    }
+
     void withoutJournalTheWindowOnlyBrowses()
     {
         QTemporaryDir directory;

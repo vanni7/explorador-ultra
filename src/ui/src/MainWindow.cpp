@@ -90,6 +90,7 @@ MainWindow::MainWindow(tasks::Scheduler &scheduler, std::shared_ptr<journal::Jou
     connect(m_tabs, &QTabWidget::tabCloseRequested, this, &MainWindow::closeTab);
     connect(m_sidebar, &Sidebar::placeActivated, this, &MainWindow::navigateCurrentTo);
     connect(m_sidebar, &Sidebar::filesDropped, this, &MainWindow::transfer);
+    connect(m_sidebar, &Sidebar::contextMenuRequested, this, &MainWindow::showSidebarMenu);
     m_sidebar->setMoveByDefaultRule([this](const QString &source, const QString &destination) {
         return movesByDefault(source, destination);
     });
@@ -495,18 +496,48 @@ void MainWindow::cutSelection()
 
 void MainWindow::paste()
 {
-    const BrowserPane *pane = currentPane();
-    if (pane == nullptr) {
-        return;
+    if (const BrowserPane *pane = currentPane()) {
+        pasteInto(pane->currentPath());
     }
+}
+
+void MainWindow::pasteInto(const QString &destination)
+{
     const FileSelection selection = fileSelectionFrom(QGuiApplication::clipboard()->mimeData());
-    if (selection.isEmpty()) {
+    if (selection.isEmpty() || destination.isEmpty()) {
         return;
     }
-    transfer(selection.paths, pane->currentPath(), selection.cut);
+    transfer(selection.paths, destination, selection.cut);
     if (selection.cut) {
         // Lo cortado se pega una sola vez.
         QGuiApplication::clipboard()->clear();
+    }
+}
+
+void MainWindow::showSidebarMenu(const QString &path, const QPoint &globalPosition)
+{
+    QMenu menu(this);
+    QAction *open = menu.addAction(m_openAction->icon(), tr("Abrir"));
+    QAction *openInTab = menu.addAction(m_newTabAction->icon(), tr("Abrir en una pestaña nueva"));
+    menu.addSeparator();
+    // No se reutiliza la acción "Pegar" del menú Edición: aquella pega en la
+    // carpeta de la pestaña; esta, en la carpeta del árbol sobre la que se pulsó.
+    QAction *pasteHere = menu.addAction(m_pasteAction->icon(), tr("Pegar en esta carpeta"));
+    pasteHere->setEnabled(m_actions->isAvailable()
+                          && !fileSelectionFrom(QGuiApplication::clipboard()->mimeData()).isEmpty());
+    menu.addSeparator();
+    QAction *copyPath = menu.addAction(tr("Copiar la ruta"));
+
+    const QAction *chosen = menu.exec(globalPosition);
+    if (chosen == open) {
+        navigateCurrentTo(path);
+    } else if (chosen == openInTab) {
+        openTab(path);
+    } else if (chosen == pasteHere) {
+        pasteInto(path);
+    } else if (chosen == copyPath) {
+        QGuiApplication::clipboard()->setText(QDir::toNativeSeparators(path));
+        statusBar()->showMessage(tr("Ruta copiada al portapapeles."), 4000);
     }
 }
 

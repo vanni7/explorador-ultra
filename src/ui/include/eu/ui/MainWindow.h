@@ -78,6 +78,8 @@ public slots:
     void copySelection();
     void cutSelection();
     void paste();
+    /// Pega lo que hay en el portapapeles dentro de `destination`.
+    void pasteInto(const QString &destination);
     void trashSelection();
     void deleteSelectionPermanently();
     void undo();
@@ -107,6 +109,7 @@ private:
     void createEditActions();
     void createProgressWidgets();
     void showContextMenu(BrowserPane *pane, const QPoint &globalPosition);
+    void showSidebarMenu(const QString &path, const QPoint &globalPosition);
     void updateEditActions();
     void copyToClipboard(bool cut);
     /// Copia o mueve `paths` a `destination` (pegar y soltar acaban aquí).

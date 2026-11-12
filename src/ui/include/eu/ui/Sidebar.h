@@ -37,6 +37,8 @@ public:
 signals:
     /// El usuario eligió un lugar.
     void placeActivated(const QString &path);
+    /// Clic derecho (o tecla de menú) sobre una carpeta del árbol.
+    void contextMenuRequested(const QString &path, const QPoint &globalPosition);
     /// Se soltaron archivos sobre una carpeta del árbol.
     void filesDropped(const QStringList &paths, const QString &destination, bool move);
 

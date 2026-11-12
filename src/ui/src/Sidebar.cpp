@@ -94,6 +94,14 @@ Sidebar::Sidebar(tasks::Scheduler &scheduler, fs::VolumeMonitor &volumes, QWidge
         }
     });
 
+    setContextMenuPolicy(Qt::CustomContextMenu);
+    connect(this, &QWidget::customContextMenuRequested, this, [this](const QPoint &position) {
+        const QString path = pathAt(position);
+        if (!path.isEmpty()) {
+            emit contextMenuRequested(path, viewport()->mapToGlobal(position));
+        }
+    });
+
     setAcceptDrops(true);
     setDragDropMode(QAbstractItemView::DropOnly);
     setDropIndicatorShown(false);
