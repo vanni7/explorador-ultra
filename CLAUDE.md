@@ -36,4 +36,10 @@ Los resultados solo se anotan en `docs/BENCHMARKS.md` si se midieron de verdad.
 - macOS: solo GitHub Actions.
 
 ## Estado
-Fase 0 entregada; ver `docs/INFORME_FASE_0.md`. La Fase 1 requiere aprobación del usuario.
+Fase 1 en curso en la rama `fase-1/core` (repositorio: github.com/vanni7/explorador-ultra). Hechos: `core`, `tasks`, `fs` y la interfaz navegable (`ui`). **Siguiente:** `journal` → `ops` → `trash`, y después conectar las operaciones (copiar, mover, renombrar, eliminar, deshacer) a la interfaz; luego tamaño de carpetas. Detalle en `docs/STATUS.md`.
+
+## Notas útiles
+- Captura de la ventana sin pantalla: `XAUTHORITY=$(ls /run/user/1000/.mutter-Xwaylandauth.*) QT_QPA_PLATFORM=xcb ./build/release/bin/explorador-ultra --captura salida.png <carpeta>`.
+- Tras añadir textos con `%n`: ejecutar `lupdate -pluralonly ...` y `python3 tools/fill_plurals.py` (instrucciones dentro del guion).
+- Qt para Windows no se instala con aqtinstall 3.3.0: usar `tools/windows/fetch_qt_windows.py` (la CI ya lo hace).
+- Los objetos de interfaz que lanzan tareas no deben usar `this` en el hilo de trabajo: capturar un `QPointer` y volver al hilo de interfaz con `QMetaObject::invokeMethod(qApp, ...)` (ver `Sidebar.cpp`).
