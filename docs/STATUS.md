@@ -10,8 +10,8 @@ Sesión del 2026-11-12, rama `fase-1/core`. Cada paso terminado queda en un comm
 | # | Paso | Estado |
 |---|---|---|
 | 1 | Revisar la CI de `journal`, `ops`, `trash` y el motor | **Hecho**: en verde en Ubuntu 22.04/24.04, ASan, Windows y macOS |
-| 2 | `ui::FileActions`: ejecutar el motor en tareas y devolver el resultado a la interfaz | En curso |
-| 3 | Menú contextual, atajos, renombrado en línea, portapapeles, progreso y errores | Pendiente |
+| 2 | `ui::FileActions`: ejecutar el motor en tareas y devolver el resultado a la interfaz | **Hecho** (6 pruebas en `test_ui_file_actions`, Ubuntu) |
+| 3 | Menú contextual, atajos, renombrado en línea, portapapeles, progreso y errores | En curso |
 | 4 | Arrastrar y soltar | Pendiente |
 | 5 | Diálogo de recuperación al arrancar | Pendiente |
 | 6 | Vista de la papelera | Pendiente |

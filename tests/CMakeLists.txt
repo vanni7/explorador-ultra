@@ -22,6 +22,7 @@ eu_add_test(test_tasks_scheduler tasks/test_scheduler.cpp)
 eu_add_test(test_fs_directory_lister fs/test_directory_lister.cpp)
 eu_add_test(test_fs_volumes_watcher fs/test_volumes_watcher.cpp)
 eu_add_test(test_ui_entry_sort ui/test_entry_sort.cpp)
+eu_add_test(test_ui_file_actions ui/test_file_actions.cpp)
 
 # Las pruebas que crean una QApplication no se ejecutan con TSan: Qt y libdbus
 # no están compilados con ese detector y dan avisos falsos dentro de sus
