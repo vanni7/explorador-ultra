@@ -33,6 +33,8 @@ Un módulo solo puede depender de módulos de capas inferiores. Solo la capa 5 u
 | 5 | `ui`, `app` | todo lo anterior, Qt Widgets |
 | aparte | `indexsvc-win` | solo `core`; proceso separado, habla con `index` por *named pipe* |
 
+Nota de implementación: `ops` contiene las operaciones elementales (`FileOps`) y el motor (`Engine`). Como el motor usa la papelera y la papelera usa las operaciones elementales, el motor se compila como biblioteca aparte (`eu_ops_engine`), después de `eu_trash`.
+
 Relaciones clave: `ops` escribe en `journal` **antes** de tocar el disco; `trash`, `rename`, `organize`, `sync` y `dupes` nunca modifican archivos por su cuenta: piden las operaciones a `ops`, de modo que todo queda en el historial y se puede deshacer. `thumbs`, `preview` y `print` usan `QImage` (Qt Gui) pero no Widgets.
 
 ## Ubicación virtual (`Location`)

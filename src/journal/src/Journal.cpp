@@ -230,8 +230,9 @@ core::Result<StepId> Journal::addStep(OperationId operation, StepKind kind, cons
     query.addBindValue(operation);
     query.addBindValue(int(kind));
     query.addBindValue(int(StepState::Pending));
-    query.addBindValue(source);
-    query.addBindValue(target);
+    // Un QString nulo se guardaría como NULL; se quiere texto vacío.
+    query.addBindValue(source.isNull() ? QStringLiteral("") : source);
+    query.addBindValue(target.isNull() ? QStringLiteral("") : target);
     if (!query.exec()) {
         return databaseError(query.lastError(), m_filePath);
     }

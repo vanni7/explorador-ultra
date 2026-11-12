@@ -34,6 +34,10 @@
 - En macOS solo hay CI: la interfaz se marca "no verificada manualmente en macOS".
 - X11 se prueba iniciando sesión "GNOME en Xorg" o con `QT_QPA_PLATFORM=xcb` (XWayland); arrastrar y soltar se prueba en ambos.
 
+## Qué cubre cada sanitizer
+- **ASan + UBSan** (preset `asan`, también en la CI): todas las pruebas.
+- **TSan** (preset `tsan`, local): todas menos las que crean una `QApplication` (`test_ui_directory_model`, `test_ui_main_window`). Los binarios oficiales de Qt y libdbus no están instrumentados y TSan informa de carreras dentro de ellos que no son del proyecto.
+
 ## Lista manual de la Fase 0 (hecha)
 - [x] La ventana mínima abre en Ubuntu 26.04 (Wayland) y muestra versión de Qt e icono.
 - [x] Compila, pasa las pruebas y arranca con `--smoke-test` (plataforma `offscreen`) en la VM de Windows.
