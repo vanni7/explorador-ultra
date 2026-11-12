@@ -1,8 +1,22 @@
 # Estado del proyecto
 
-Última actualización: 2026-11-11 · Fase actual: **1 (en curso)**; la Fase 0 fue aprobada
+Última actualización: 2026-11-12 · Fase actual: **1 (en curso)**; la Fase 0 fue aprobada
 
 Estados: **Terminada** (cumple §26) · **Parcial** · **Pendiente** · **Bloqueada**.
+
+## Punto de reanudación (se actualiza tras cada paso; si hubo un corte, empieza aquí)
+Sesión del 2026-11-12, rama `fase-1/core`. Cada paso terminado queda en un commit ya enviado a GitHub; lo que no esté en `git log` no está hecho. Antes de seguir: `git status` (puede haber cambios a medias sin confirmar) y compilar con el preset `release`.
+
+| # | Paso | Estado |
+|---|---|---|
+| 1 | Revisar la CI de `journal`, `ops`, `trash` y el motor | **Hecho**: en verde en Ubuntu 22.04/24.04, ASan, Windows y macOS |
+| 2 | `ui::FileActions`: ejecutar el motor en tareas y devolver el resultado a la interfaz | En curso |
+| 3 | Menú contextual, atajos, renombrado en línea, portapapeles, progreso y errores | Pendiente |
+| 4 | Arrastrar y soltar | Pendiente |
+| 5 | Diálogo de recuperación al arrancar | Pendiente |
+| 6 | Vista de la papelera | Pendiente |
+| 7 | Tamaño de carpetas | Pendiente |
+| 8 | Verificación manual (Ubuntu y VM de Windows), fusionar a `main`, informe de cierre | Pendiente |
 
 ## Fase 0 — Arquitectura y entorno
 | Tarea | Estado | Verificado en | Qué falta |
