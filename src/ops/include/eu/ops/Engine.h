@@ -4,6 +4,7 @@
 #include "eu/core/Error.h"
 #include "eu/journal/Journal.h"
 #include "eu/tasks/Cancel.h"
+#include "eu/trash/Trash.h"
 
 #include <QList>
 #include <QString>
@@ -72,8 +73,16 @@ public:
     /// Eliminación definitiva. No se puede deshacer.
     Outcome deletePermanently(const QStringList &paths, const tasks::CancelToken &cancel);
 
+    /// Devuelve elementos de la papelera a su ubicación original. No
+    /// sobrescribe: si ahí ya hay algo con ese nombre, ese elemento se queda
+    /// en la papelera y se informa en `errors`. No se deshace con Deshacer
+    /// (basta con volver a enviarlo a la papelera).
+    Outcome restoreFromTrash(const QList<trash::TrashItem> &items, const tasks::CancelToken &cancel);
+    /// Elimina para siempre elementos que están en la papelera.
+    Outcome purgeFromTrash(const QList<trash::TrashItem> &items, const tasks::CancelToken &cancel);
+
     /// true si la operación se puede deshacer (terminó, no era una eliminación
-    /// permanente y no se deshizo ya).
+    /// permanente ni una restauración de la papelera, y no se deshizo ya).
     static bool canUndo(const journal::Operation &operation);
 
     /// Deshace una operación. Antes de cada paso comprueba que el disco está

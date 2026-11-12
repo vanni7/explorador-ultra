@@ -381,6 +381,63 @@ private slots:
         QCOMPARE(treeOf(source).size(), 20);
     }
 
+    void restoreAndPurgeFromTrashAreJournaled()
+    {
+        QTemporaryDir directory;
+        QTemporaryDir journalDirectory;
+        auto journal = journal::Journal::open(journalDirectory.filePath(QStringLiteral("h.db"))).value();
+        Engine engine(journal);
+        const QString first = directory.filePath(QStringLiteral("uno.txt"));
+        const QString second = directory.filePath(QStringLiteral("carpeta"));
+        writeFile(first, "uno");
+        writeFile(second + QStringLiteral("/dentro.txt"), "dentro");
+
+        const Outcome trashed = engine.trash({first, second}, m_noCancel);
+        if (!trashed.ok()) {
+            QSKIP("El volumen temporal de este equipo no admite papelera.");
+        }
+        const QString trashDirectory = trash::trashDirectoryFor(directory.path()).value();
+        QList<trash::TrashItem> mine;
+        for (const trash::TrashItem &item : trash::listTrash(trashDirectory).value()) {
+            if (item.originalPath == first || item.originalPath == second) {
+                mine.append(item);
+            }
+        }
+        QCOMPARE(mine.size(), 2);
+
+        // Si en el sitio original ya hay algo, no se sobrescribe: se queda en la papelera.
+        writeFile(first, "otro");
+        const trash::TrashItem fileItem = mine[0].originalPath == first ? mine[0] : mine[1];
+        const trash::TrashItem folderItem = mine[0].originalPath == first ? mine[1] : mine[0];
+        const Outcome blocked = engine.restoreFromTrash({fileItem}, m_noCancel);
+        QCOMPARE(blocked.errors.size(), 1);
+        QCOMPARE(blocked.errors.first().code, core::ErrorCode::AlreadyExists);
+        QCOMPARE(readFile(first), QByteArray("otro"));
+        QVERIFY(QFileInfo::exists(fileItem.storedPath()));
+
+        // Con el sitio libre, vuelve tal cual estaba.
+        QVERIFY(QFile::remove(first));
+        const Outcome restored = engine.restoreFromTrash({fileItem}, m_noCancel);
+        QVERIFY2(restored.ok(), qPrintable(describe(restored)));
+        QCOMPARE(restored.resultPaths, QStringList{first});
+        QCOMPARE(readFile(first), QByteArray("uno"));
+        QVERIFY(!QFileInfo::exists(fileItem.infoPath()));
+        // Queda en el historial y no se ofrece deshacerla.
+        const journal::Operation operation = journal->operation(restored.operationId).value();
+        QCOMPARE(operation.kind, journal::OperationKind::Restore);
+        QVERIFY(!Engine::canUndo(operation));
+        QVERIFY(!engine.undo(restored.operationId, m_noCancel).ok());
+        QCOMPARE(readFile(first), QByteArray("uno"));
+
+        // Eliminar para siempre lo que sigue en la papelera.
+        const Outcome purged = engine.purgeFromTrash({folderItem}, m_noCancel);
+        QVERIFY2(purged.ok(), qPrintable(describe(purged)));
+        QVERIFY(!QFileInfo::exists(folderItem.storedPath()));
+        QVERIFY(!QFileInfo::exists(folderItem.infoPath()));
+        QVERIFY(!QFileInfo::exists(second));
+        QCOMPARE(journal->operation(purged.operationId).value().kind, journal::OperationKind::Delete);
+    }
+
     void killedMidMoveLosesNothingAndReverts()
     {
         const QString helper = QCoreApplication::applicationDirPath() + QStringLiteral("/eu-crash-helper");

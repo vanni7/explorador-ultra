@@ -6,6 +6,7 @@
 #include <QFileInfo>
 #include <QPointer>
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 
@@ -248,6 +249,46 @@ quint64 FileActions::discardInterrupted(const journal::Operation &operation)
         result.undoneDescription = operation.description;
         ops::Engine(context.journal).discardInterrupted(operation.id);
         result.outcome.operationId = operation.id;
+    });
+}
+
+void FileActions::listTrash()
+{
+    const QPointer<FileActions> self(this);
+    m_scheduler.submit(tasks::Category::Listing, tasks::Priority::UserInteraction,
+                       [self](const tasks::CancelToken &) {
+        QList<trash::TrashItem> items;
+        const QStringList directories = trash::existingTrashDirectories();
+        for (const QString &directory : directories) {
+            const auto listed = trash::listTrash(directory);
+            if (listed.ok()) {
+                items.append(listed.value());
+            }
+        }
+        std::sort(items.begin(), items.end(), [](const trash::TrashItem &a, const trash::TrashItem &b) {
+            return a.deletedMs > b.deletedMs;
+        });
+        QMetaObject::invokeMethod(qApp, [self, items] {
+            if (self) {
+                emit self->trashListed(items);
+            }
+        }, Qt::QueuedConnection);
+    });
+}
+
+quint64 FileActions::restoreFromTrash(const QList<trash::TrashItem> &items)
+{
+    return start(ActionKind::RestoreTrash, {}, tasks::Category::General,
+                 [items](const Context &context, ActionResult &result) {
+        result.outcome = ops::Engine(context.journal).restoreFromTrash(items, context.cancel);
+    });
+}
+
+quint64 FileActions::purgeFromTrash(const QList<trash::TrashItem> &items)
+{
+    return start(ActionKind::PurgeTrash, {}, tasks::Category::Transfer,
+                 [items](const Context &context, ActionResult &result) {
+        result.outcome = ops::Engine(context.journal).purgeFromTrash(items, context.cancel);
     });
 }
 

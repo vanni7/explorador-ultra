@@ -26,6 +26,7 @@ namespace eu::ui {
 class BrowserPane;
 class PathBar;
 class Sidebar;
+class TrashDialog;
 
 /// Ventana principal: barra superior, panel de lugares y pestañas de exploración.
 class MainWindow : public QMainWindow
@@ -79,6 +80,8 @@ public slots:
     void trashSelection();
     void deleteSelectionPermanently();
     void undo();
+    /// Abre (o trae al frente) la ventana de la papelera.
+    eu::ui::TrashDialog *showTrash();
 
 signals:
     /// Lo que se le comunica al usuario al terminar una acción (texto de la
@@ -141,6 +144,8 @@ private:
     QToolButton *m_cancelButton = nullptr;
     QTimer m_progressDelay;   ///< El indicador solo aparece si la acción no es instantánea.
 
+    TrashDialog *m_trashDialog = nullptr;
+
     QAction *m_backAction = nullptr;
     QAction *m_forwardAction = nullptr;
     QAction *m_upAction = nullptr;
@@ -163,6 +168,7 @@ private:
     QAction *m_deleteAction = nullptr;
     QAction *m_undoAction = nullptr;
     QAction *m_selectAllAction = nullptr;
+    QAction *m_showTrashAction = nullptr;
 };
 
 } // namespace eu::ui

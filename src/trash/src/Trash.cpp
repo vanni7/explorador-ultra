@@ -13,6 +13,7 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QSaveFile>
+#include <QStorageInfo>
 #include <QUuid>
 
 #include <algorithm>
@@ -280,9 +281,16 @@ QStringList existingTrashDirectories()
             directories.append(candidate);
         }
     };
-    const QList<fs::Volume> volumes = fs::listVolumes();
-    for (const fs::Volume &volume : volumes) {
-        addIfExists(QDir(volume.rootPath).filePath(trashFolderName()));
+    // Se miran todas las unidades montadas, no solo las que se enseñan en el
+    // panel de unidades: una unidad en memoria como /tmp no aparece allí, pero
+    // lo que se borra en ella va a su propia papelera y tiene que poder verse.
+    const QList<QStorageInfo> mounted = QStorageInfo::mountedVolumes();
+    for (const QStorageInfo &storage : mounted) {
+        // "autofs" monta al tocarlo: preguntar por él podría colgarse.
+        if (!storage.isValid() || !storage.isReady() || storage.fileSystemType() == "autofs") {
+            continue;
+        }
+        addIfExists(QDir(storage.rootPath()).filePath(trashFolderName()));
     }
     addIfExists(QDir::home().filePath(trashFolderName()));
     return directories;

@@ -6,6 +6,7 @@
 #include "eu/ui/FileClipboard.h"
 #include "eu/ui/PathBar.h"
 #include "eu/ui/Sidebar.h"
+#include "eu/ui/TrashDialog.h"
 
 #include <QAction>
 #include <QApplication>
@@ -158,6 +159,9 @@ void MainWindow::createActions()
     m_binaryUnitsAction->setCheckable(true);
     connect(m_binaryUnitsAction, &QAction::toggled, this, [this](bool binary) {
         const core::SizeUnits units = binary ? core::SizeUnits::Binary : core::SizeUnits::Decimal;
+        if (m_trashDialog != nullptr) {
+            m_trashDialog->setSizeUnits(units);
+        }
         for (int i = 0; i < m_tabs->count(); ++i) {
             static_cast<BrowserPane *>(m_tabs->widget(i))->model()->setSizeUnits(units);
         }
@@ -256,6 +260,13 @@ void MainWindow::createEditActions()
     connect(m_selectAllAction, &QAction::triggered, this, [this] {
         if (auto *pane = currentPane()) pane->view()->selectAll();
     });
+
+    m_showTrashAction = new QAction(themedIcon(QStringLiteral("user-trash-full"), QStyle::SP_TrashIcon),
+                                    tr("Papelera"), this);
+    m_showTrashAction->setToolTip(tr("Ver la papelera: restaurar o eliminar para siempre"));
+    connect(m_showTrashAction, &QAction::triggered, this, &MainWindow::showTrash);
+    menuBar()->actions().constLast()->menu()->addSeparator();
+    menuBar()->actions().constLast()->menu()->addAction(m_showTrashAction);
 
     // Estos atajos solo actúan cuando el foco está en la zona de archivos. Así
     // Supr o Ctrl+V no hacen nada inesperado mientras se escribe una ruta o
@@ -491,6 +502,35 @@ void MainWindow::deleteSelectionPermanently()
     if (askPermanentDelete(paths, {})) {
         m_requestedCounts.insert(m_actions->deletePermanently(paths), int(paths.size()));
     }
+}
+
+TrashDialog *MainWindow::showTrash()
+{
+    if (m_trashDialog == nullptr) {
+        m_trashDialog = new TrashDialog(m_actions, this);
+        m_trashDialog->setSizeUnits(m_binaryUnitsAction->isChecked() ? core::SizeUnits::Binary
+                                                                     : core::SizeUnits::Decimal);
+        connect(m_trashDialog, &TrashDialog::restoreRequested, this, [this](const QList<trash::TrashItem> &items) {
+            m_requestedCounts.insert(m_actions->restoreFromTrash(items), int(items.size()));
+        });
+        connect(m_trashDialog, &TrashDialog::purgeRequested, this,
+                [this](const QList<trash::TrashItem> &items, bool everything) {
+            QStringList paths;
+            for (const trash::TrashItem &item : items) {
+                paths.append(item.originalPath);
+            }
+            const QString reason = everything ? tr("Se va a vaciar la papelera de todas las unidades conectadas.")
+                                              : tr("Estos elementos están en la papelera.");
+            if (askPermanentDelete(paths, reason)) {
+                m_requestedCounts.insert(m_actions->purgeFromTrash(items), int(items.size()));
+            }
+        });
+    }
+    m_trashDialog->show();
+    m_trashDialog->raise();
+    m_trashDialog->activateWindow();
+    m_trashDialog->reload();
+    return m_trashDialog;
 }
 
 void MainWindow::undo()
@@ -737,7 +777,12 @@ void MainWindow::onActionFinished(const ActionResult &result)
                 + tr("Se recupera con Deshacer (%1).").arg(m_undoAction->shortcut().toString(QKeySequence::NativeText));
             break;
         case ActionKind::Delete:
+        case ActionKind::PurgeTrash:
             message = tr("%n elemento(s) eliminado(s) permanentemente.", nullptr, qMax(0, requested - failed));
+            break;
+        case ActionKind::RestoreTrash:
+            message = tr("Se restauraron %n elemento(s) a su ubicación original.", nullptr,
+                         int(outcome.resultPaths.size()));
             break;
         case ActionKind::Undo:
             if (outcome.ok()) {
@@ -829,6 +874,7 @@ void MainWindow::createToolBar()
     toolBar->addWidget(search);
 
     toolBar->addAction(m_newTabAction);
+    toolBar->addAction(m_showTrashAction);
 }
 
 BrowserPane *MainWindow::openTab(const QString &path)

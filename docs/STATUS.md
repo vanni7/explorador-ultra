@@ -14,8 +14,8 @@ Sesión del 2026-11-12, rama `fase-1/core`. Cada paso terminado queda en un comm
 | 3 | Menú contextual, atajos, renombrado en línea, portapapeles, progreso y errores | **Hecho** (pruebas en `test_ui_main_window`, Ubuntu release y ASan). Sin probar a mano con teclado y ratón; falta ver la CI |
 | 4 | Arrastrar y soltar | **Hecho** en código y pruebas (eventos simulados, Ubuntu). **Falta arrastrar de verdad con el ratón** en Wayland, X11 y Windows, y desde/hacia otras aplicaciones |
 | 5 | Diálogo de recuperación al arrancar | **Hecho** (Revertir / Descartar / Decidir más tarde; «Reanudar» deshabilitado). Prueba con proceso matado a mitad de copia, Ubuntu. Incluye la retención automática del historial y un cerrojo para que solo una instancia revise el historial |
-| 6 | Vista de la papelera | En curso |
-| 7 | Tamaño de carpetas | Pendiente |
+| 6 | Vista de la papelera | **Hecho**: ventana «Papelera» (menú Ir y barra) con restaurar, eliminar y vaciar; el motor anota restaurar y eliminar en el historial. Pruebas en Ubuntu; la ventana no se ha visto a mano. Faltan: retención y tamaño máximo, unidades desconectadas como «no disponibles» |
+| 7 | Tamaño de carpetas | En curso |
 | 8 | Verificación manual (Ubuntu y VM de Windows), fusionar a `main`, informe de cierre | Pendiente |
 
 ## Fase 0 — Arquitectura y entorno

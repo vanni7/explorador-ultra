@@ -27,6 +27,8 @@ enum class ActionKind {
     Undo,
     Revert,    ///< Revertir una operación que quedó a medias por un cierre inesperado.
     Discard,   ///< Darla por perdida: limpiar los restos y dejar lo ya hecho.
+    RestoreTrash,   ///< Sacar elementos de la papelera a su sitio original.
+    PurgeTrash,     ///< Eliminar para siempre elementos de la papelera.
 };
 
 /// Lo que pasó con una acción, ya de vuelta en el hilo de interfaz.
@@ -86,6 +88,12 @@ public:
     quint64 revertInterrupted(const journal::Operation &operation);
     quint64 discardInterrupted(const journal::Operation &operation);
 
+    /// Lee en segundo plano la papelera de todas las unidades conectadas y
+    /// avisa con trashListed().
+    void listTrash();
+    quint64 restoreFromTrash(const QList<trash::TrashItem> &items);
+    quint64 purgeFromTrash(const QList<trash::TrashItem> &items);
+
 public slots:
     /// Pide a todas las acciones en curso que se detengan. Terminan de forma
     /// ordenada y avisan con finished() (con `cancelled` en su resultado).
@@ -99,6 +107,8 @@ signals:
     void runningCountChanged(int count);
     /// Hay operaciones que no terminaron porque la aplicación se cerró de golpe.
     void interruptedOperationsFound(const QList<eu::journal::Operation> &operations);
+    /// Contenido de la papelera, del más reciente al más antiguo.
+    void trashListed(const QList<eu::trash::TrashItem> &items);
 
 private:
     struct Context

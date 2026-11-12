@@ -493,9 +493,48 @@ Outcome Engine::deletePermanently(const QStringList &paths, const tasks::CancelT
     return run.outcome;
 }
 
+Outcome Engine::restoreFromTrash(const QList<trash::TrashItem> &items, const tasks::CancelToken &cancel)
+{
+    Run run(*m_journal, cancel, {});
+    if (!run.begin(journal::OperationKind::Restore,
+                   tr("Restaurar %1 elemento(s) de la papelera").arg(items.size()))) {
+        return run.outcome;
+    }
+    for (const trash::TrashItem &item : items) {
+        if (run.cancelled()) {
+            break;
+        }
+        if (run.step(journal::StepKind::Rename, item.storedPath(), item.originalPath, item.originalPath,
+                     [&] { return trash::restoreItem(item); })) {
+            run.outcome.resultPaths.append(item.originalPath);
+        }
+    }
+    run.finish();
+    return run.outcome;
+}
+
+Outcome Engine::purgeFromTrash(const QList<trash::TrashItem> &items, const tasks::CancelToken &cancel)
+{
+    Run run(*m_journal, cancel, {});
+    if (!run.begin(journal::OperationKind::Delete,
+                   tr("Eliminar permanentemente %1 elemento(s) de la papelera").arg(items.size()))) {
+        return run.outcome;
+    }
+    for (const trash::TrashItem &item : items) {
+        if (run.cancelled()) {
+            break;
+        }
+        const journal::StepKind kind = item.isDirectory ? journal::StepKind::RemoveDirectory
+                                                        : journal::StepKind::RemoveFile;
+        run.step(kind, item.storedPath(), {}, {}, [&] { return trash::purgeItem(item, cancel); });
+    }
+    run.finish();
+    return run.outcome;
+}
+
 bool Engine::canUndo(const journal::Operation &operation)
 {
-    if (operation.kind == journal::OperationKind::Delete) {
+    if (operation.kind == journal::OperationKind::Delete || operation.kind == journal::OperationKind::Restore) {
         return false;
     }
     return operation.state == journal::OperationState::Completed
@@ -517,6 +556,14 @@ Outcome Engine::undo(journal::OperationId operationId, const tasks::CancelToken 
     if (operation.value().kind == journal::OperationKind::Delete) {
         outcome.errors.append({core::ErrorCode::NotSupported,
                                tr("Una eliminación permanente no se puede deshacer."), {}, 0});
+        return outcome;
+    }
+    if (operation.value().kind == journal::OperationKind::Restore) {
+        // El registro del elemento en la papelera ya no existe: devolverlo
+        // allí lo dejaría sin datos de origen. Se vuelve a enviar a la papelera.
+        outcome.errors.append({core::ErrorCode::NotSupported,
+                               tr("Una restauración no se deshace; envía de nuevo el elemento a la papelera."),
+                               {}, 0});
         return outcome;
     }
 

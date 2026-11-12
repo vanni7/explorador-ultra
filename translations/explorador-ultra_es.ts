@@ -105,6 +105,13 @@
         </translation>
     </message>
     <message numerus="yes">
+        <source>Se restauraron %n elemento(s) a su ubicación original.</source>
+        <translation>
+            <numerusform>Se restauró %n elemento a su ubicación original.</numerusform>
+            <numerusform>Se restauraron %n elementos a su ubicación original.</numerusform>
+        </translation>
+    </message>
+    <message numerus="yes">
         <source> %n omitido(s) porque ya existía(n) en el destino.</source>
         <translation>
             <numerusform> %n omitido porque ya existía en el destino.</numerusform>
@@ -116,6 +123,16 @@
         <translation>
             <numerusform>Hubo %n problema. El detalle está abajo.</numerusform>
             <numerusform>Hubo %n problemas. El detalle está abajo.</numerusform>
+        </translation>
+    </message>
+</context>
+<context>
+    <name>eu::ui::TrashDialog</name>
+    <message numerus="yes">
+        <source>%n elemento(s) en la papelera</source>
+        <translation>
+            <numerusform>%n elemento en la papelera</numerusform>
+            <numerusform>%n elementos en la papelera</numerusform>
         </translation>
     </message>
 </context>

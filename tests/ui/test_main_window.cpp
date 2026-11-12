@@ -3,6 +3,7 @@
 #include "eu/ui/FileClipboard.h"
 #include "eu/ui/MainWindow.h"
 #include "eu/ui/PathBar.h"
+#include "eu/ui/TrashDialog.h"
 
 #include <QApplication>
 #include <QClipboard>
@@ -523,6 +524,75 @@ private slots:
         QVERIFY2(QDir(destination).isEmpty(), qPrintable(QDir(destination).entryList().join(QLatin1Char(','))));
         QCOMPARE(QDir(directory.filePath(QStringLiteral("fotos"))).entryList(QDir::Files).size(), 6);
         QVERIFY(openJournal(data)->incompleteOperations().value().isEmpty());
+    }
+
+    void trashWindowRestoresAndPurges()
+    {
+        QTemporaryDir data;
+        QTemporaryDir directory;
+        const QString keep = directory.filePath(QStringLiteral("recuperar.txt"));
+        const QString drop = directory.filePath(QStringLiteral("borrar.txt"));
+        writeFile(keep, 11);
+        writeFile(drop, 22);
+        MainWindow window(m_scheduler, openJournal(data));
+        window.show();
+        BrowserPane *pane = window.openTab(directory.path());
+        QVERIFY(waitReady(pane));
+
+        bool trashUnsupported = false;
+        window.setDeleteConfirmation([&trashUnsupported](const QStringList &) {
+            trashUnsupported = true;
+            return false;
+        });
+        selectNames(pane, {QStringLiteral("recuperar.txt"), QStringLiteral("borrar.txt")});
+        window.trashSelection();
+        QTRY_VERIFY_WITH_TIMEOUT(trashUnsupported || !QFileInfo::exists(keep), 10000);
+        QVERIFY(waitIdle(window));
+        if (trashUnsupported) {
+            QSKIP("El volumen temporal de este equipo no admite papelera.");
+        }
+
+        // La ventana de la papelera muestra los dos elementos (y quizá otros
+        // que ya hubiera: la prueba solo toca los suyos).
+        TrashDialog *trashWindow = window.showTrash();
+        const auto listed = [&](const QString &originalPath) {
+            const QList<trash::TrashItem> items = trashWindow->items();
+            return std::any_of(items.begin(), items.end(), [&](const trash::TrashItem &item) {
+                return item.originalPath == originalPath;
+            });
+        };
+        QTRY_VERIFY_WITH_TIMEOUT(listed(keep) && listed(drop), 10000);
+
+        // Restaurar uno: vuelve a su carpeta con su contenido.
+        trashWindow->selectOriginalPaths({keep});
+        trashWindow->restoreSelected();
+        QTRY_VERIFY_WITH_TIMEOUT(QFileInfo::exists(keep), 10000);
+        QCOMPARE(QFileInfo(keep).size(), qint64(11));
+        QVERIFY(waitIdle(window));
+        QTRY_VERIFY_WITH_TIMEOUT(!trashWindow->isLoading() && !listed(keep) && listed(drop), 10000);
+
+        // Eliminar el otro para siempre: pide confirmación; sin ella no pasa nada.
+        int questions = 0;
+        bool answer = false;
+        window.setDeleteConfirmation([&](const QStringList &paths) {
+            ++questions;
+            return answer && paths == QStringList{drop};
+        });
+        trashWindow->selectOriginalPaths({drop});
+        trashWindow->purgeSelected();
+        QCOMPARE(questions, 1);
+        QVERIFY(waitIdle(window));
+        trashWindow->reload();
+        QTRY_VERIFY_WITH_TIMEOUT(!trashWindow->isLoading(), 10000);
+        QVERIFY(listed(drop));
+
+        answer = true;
+        trashWindow->selectOriginalPaths({drop});
+        trashWindow->purgeSelected();
+        QCOMPARE(questions, 2);
+        QTRY_VERIFY_WITH_TIMEOUT(!trashWindow->isLoading() && !listed(drop), 10000);
+        QVERIFY(waitIdle(window));
+        QVERIFY(!QFileInfo::exists(drop));
     }
 
     void withoutJournalTheWindowOnlyBrowses()

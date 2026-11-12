@@ -26,6 +26,10 @@ PLURALS = {
     "¿Eliminar permanentemente %n elemento(s)?": (
         "¿Eliminar permanentemente %n elemento?", "¿Eliminar permanentemente %n elementos?"),
     "…y %n más": ("…y %n más", "…y %n más"),
+    "%n elemento(s) en la papelera": ("%n elemento en la papelera", "%n elementos en la papelera"),
+    "Se restauraron %n elemento(s) a su ubicación original.": (
+        "Se restauró %n elemento a su ubicación original.",
+        "Se restauraron %n elementos a su ubicación original."),
     "La última vez la aplicación se cerró sin terminar %n operación(es).": (
         "La última vez la aplicación se cerró sin terminar %n operación.",
         "La última vez la aplicación se cerró sin terminar %n operaciones."),
