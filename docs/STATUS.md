@@ -16,7 +16,7 @@ Sesión del 2026-11-12, rama `fase-1/core`. (A las ~09:50 hubo un corte de luz r
 | 5 | Diálogo de recuperación al arrancar | **Hecho** (Revertir / Descartar / Decidir más tarde; «Reanudar» deshabilitado). Prueba con proceso matado a mitad de copia, Ubuntu. Incluye la retención automática del historial y un cerrojo para que solo una instancia revise el historial |
 | 6 | Vista de la papelera | **Hecho**: ventana «Papelera» (menú Ir y barra) con restaurar, eliminar y vaciar; el motor anota restaurar y eliminar en el historial. Pruebas en Ubuntu; la ventana no se ha visto a mano. Faltan: retención y tamaño máximo, unidades desconectadas como «no disponibles» |
 | 7 | Tamaño de carpetas | **Hecho**: opción «Calcular el tamaño de las carpetas» (menú Ver, desactivada por defecto), progresivo y cancelable. Pruebas en Ubuntu release y ASan. Falta: ordenar por ese tamaño y medir su coste en un disco mecánico |
-| 8 | Verificación manual (Ubuntu y VM de Windows), fusionar a `main`, informe de cierre | En curso: primero TSan local y CI completa |
+| 8 | Verificación, fusión a `main` e informe de cierre | **Parcial**. Hecho: TSan local, CI completa en verde (commit `f72388c`: Ubuntu 22.04/24.04, ASan, Windows, macOS Intel y ARM) y las 16 pruebas + arranque en la VM de Windows con zona horaria de México. **Falta: que el dueño use la aplicación a mano** (operaciones con teclado y ratón, arrastrar, papelera, recuperación) en Ubuntu y en Windows; después, fusionar a `main` e informe de cierre |
 
 ## Fase 0 — Arquitectura y entorno
 | Tarea | Estado | Verificado en | Qué falta |
@@ -57,9 +57,9 @@ Rama `fase-1/core`. "CI completa" = Ubuntu 22.04/24.04, ASan, Windows, macOS Int
 | Árbol de lugares (favoritos y unidades) | Parcial | Ubuntu (captura) | Unidades de red con tiempo de espera; favoritos editables |
 | Navegación e historial, barra de ruta con migas | Parcial | Ubuntu + pruebas | Verificación manual con teclado y ratón |
 | Vista detallada virtualizada con orden natural | Parcial | Ubuntu: 100 000 archivos en ~365 ms, primeras filas a 21 ms | Medir el bloqueo del hilo de interfaz; columnas opcionales |
-| `journal`: historial persistente (write-ahead) | Parcial | Ubuntu y VM de Windows (pruebas locales) | **CI pendiente**; retención automática al arrancar |
-| `ops`: operaciones elementales (copia atómica, renombrar sin sobrescribir, borrado sin seguir enlaces) | Parcial | Ubuntu (13 pruebas, ASan, TSan) | **CI pendiente** (Windows y macOS sin probar) |
-| `trash`: papelera propia por volumen | Parcial | Ubuntu: raíz de volumen (tmpfs) y carpeta personal (disco del sistema) | **CI pendiente**; vista unificada de la papelera en la interfaz; retención y tamaño máximo |
+| `journal`: historial persistente (write-ahead) | Parcial | CI completa; VM de Windows | Retención configurable (hoy fija: 30 días o 10 000 operaciones, aplicada al arrancar) |
+| `ops`: operaciones elementales (copia atómica, renombrar sin sobrescribir, borrado sin seguir enlaces) | Parcial | CI completa; VM de Windows con zona horaria de México | Verificación manual. El 12-nov se corrigió que la copia desplazaba la fecha de modificación en Windows para fechas de antiguos horarios de verano |
+| `trash`: papelera propia por volumen | Parcial | CI completa; Ubuntu: raíz de volumen (tmpfs) y carpeta personal (disco del sistema) | Retención y tamaño máximo; probar en una USB real |
 | Motor de operaciones (`ops::Engine`): crear, renombrar, copiar, mover (también entre unidades), papelera, restaurar, eliminar, deshacer | Parcial | CI completa; Ubuntu (17 pruebas, ASan, TSan), con movimiento real entre tmpfs y ext4 | Sobrescribir y demás políticas de colisión (Fase 4); deshacer una restauración |
 | Recuperación tras cierre inesperado | Parcial | Ubuntu: proceso matado a mitad de mover y de copiar; diálogo al arrancar con revertir, descartar o decidir más tarde | "Reanudar" no existe (botón deshabilitado); ver el diálogo a mano |
 | Operaciones en la interfaz (menú Edición y contextual, atajos, renombrado en línea, portapapeles, arrastrar y soltar, progreso con Cancelar, avisos de error) | Parcial | Ubuntu: pruebas automáticas (release, ASan) | **Nadie lo ha usado aún con teclado y ratón**; arrastrar de verdad en Wayland/X11/Windows y con otras aplicaciones; marcar visualmente lo cortado; «Abrir con…» y «Propiedades» no existen |
