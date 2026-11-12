@@ -2,13 +2,17 @@
 #include "eu/ui/BrowserPane.h"
 
 #include "eu/fs/DirectoryWatcher.h"
+#include "eu/ui/FileClipboard.h"
 
 #include <QDesktopServices>
 #include <QDir>
+#include <QDragEnterEvent>
 #include <QHeaderView>
 #include <QItemSelectionModel>
 #include <QLabel>
 #include <QLineEdit>
+#include <QMimeData>
+#include <QPainter>
 #include <QPushButton>
 #include <QStackedLayout>
 #include <QStyledItemDelegate>
@@ -20,6 +24,8 @@
 #include <functional>
 
 namespace eu::ui {
+
+QString parentPathOf(const QString &path);
 
 namespace {
 
@@ -69,6 +75,153 @@ private:
     DirectoryModel *m_model;
 };
 
+/// La lista de archivos, con arrastrar y soltar.
+///
+/// Soltar sobre una carpeta deja los archivos dentro de ella; soltar en
+/// cualquier otro punto, en la carpeta que se está viendo. Con Ctrl se copia,
+/// con Mayús se mueve, y sin teclas decide la regla que pone la ventana.
+class FileView : public QTreeView
+{
+public:
+    FileView(DirectoryModel *model, QWidget *parent) : QTreeView(parent), m_model(model)
+    {
+        setDragEnabled(true);
+        setAcceptDrops(true);
+        setDragDropMode(QAbstractItemView::DragDrop);
+        setDropIndicatorShown(false);   // el destino se marca aquí, con un recuadro
+    }
+
+    std::function<bool(const QString &, const QString &)> moveByDefault;
+    std::function<void(const QStringList &, const QString &, bool)> onDrop;
+
+protected:
+    void dragEnterEvent(QDragEnterEvent *event) override
+    {
+        if (fileSelectionFrom(event->mimeData()).isEmpty()) {
+            event->ignore();
+            return;
+        }
+        event->acceptProposedAction();
+    }
+
+    void dragMoveEvent(QDragMoveEvent *event) override
+    {
+        const Plan plan = planFor(event);
+        setDropTarget(plan.valid, plan.targetRow);
+        if (!plan.valid) {
+            event->ignore();
+            return;
+        }
+        // El cursor muestra lo que va a pasar: mover o copiar.
+        event->setDropAction(plan.move ? Qt::MoveAction : Qt::CopyAction);
+        event->accept();
+    }
+
+    void dragLeaveEvent(QDragLeaveEvent *event) override
+    {
+        setDropTarget(false, -1);
+        event->accept();
+    }
+
+    void dropEvent(QDropEvent *event) override
+    {
+        const Plan plan = planFor(event);
+        setDropTarget(false, -1);
+        if (!plan.valid) {
+            event->ignore();
+            return;
+        }
+        // A la aplicación de origen siempre se le contesta "copiado", aunque
+        // aquí se vaya a mover. Si se le dijera "movido", algunos programas
+        // borrarían ellos mismos el original, incluso si nuestro movimiento
+        // falla o se omite por un nombre repetido. El original solo lo quita
+        // el motor de operaciones, después de comprobar el destino.
+        event->setDropAction(Qt::CopyAction);
+        event->accept();
+        if (onDrop) {
+            onDrop(plan.paths, plan.target, plan.move);
+        }
+    }
+
+    void paintEvent(QPaintEvent *event) override
+    {
+        QTreeView::paintEvent(event);
+        if (!m_dropActive) {
+            return;
+        }
+        QRect frame = viewport()->rect();
+        if (m_dropRow >= 0 && m_dropRow < m_model->rowCount()) {
+            frame = visualRect(m_model->index(m_dropRow, 0));
+            frame.setLeft(0);
+            frame.setRight(viewport()->width() - 1);
+        }
+        QPainter painter(viewport());
+        painter.setPen(QPen(palette().color(QPalette::Highlight), 2));
+        painter.drawRect(frame.adjusted(1, 1, -2, -2));
+    }
+
+private:
+    struct Plan
+    {
+        bool valid = false;
+        bool move = false;
+        int targetRow = -1;   ///< Fila de la carpeta de destino; -1 = la carpeta a la vista.
+        QString target;
+        QStringList paths;
+    };
+
+    Plan planFor(const QDropEvent *event) const
+    {
+        Plan plan;
+        plan.paths = fileSelectionFrom(event->mimeData()).paths;
+        if (plan.paths.isEmpty() || m_model->path().isEmpty() || m_model->state() != DirectoryModel::State::Ready) {
+            return plan;
+        }
+        plan.target = m_model->path();
+        const QModelIndex index = indexAt(event->position().toPoint());
+        if (index.isValid() && m_model->entryAt(index.row()).isDirectory) {
+            plan.targetRow = index.row();
+            plan.target = m_model->filePath(index.row());
+        }
+
+        const Qt::KeyboardModifiers modifiers = event->modifiers();
+        if (modifiers.testFlag(Qt::ControlModifier)) {
+            plan.move = false;
+        } else if (modifiers.testFlag(Qt::ShiftModifier)) {
+            plan.move = true;
+        } else {
+            plan.move = moveByDefault ? moveByDefault(plan.paths.first(), plan.target) : false;
+        }
+
+        bool somethingToDo = false;
+        for (const QString &path : std::as_const(plan.paths)) {
+            // Una carpeta no se puede soltar dentro de sí misma.
+            if (plan.target == path || plan.target.startsWith(path + QLatin1Char('/'))) {
+                return plan;
+            }
+            // Mover algo a la carpeta donde ya está no cambia nada.
+            if (!plan.move || parentPathOf(path) != plan.target) {
+                somethingToDo = true;
+            }
+        }
+        plan.valid = somethingToDo;
+        return plan;
+    }
+
+    void setDropTarget(bool active, int row)
+    {
+        if (m_dropActive != active || m_dropRow != row) {
+            m_dropActive = active;
+            m_dropRow = row;
+            viewport()->update();
+        }
+    }
+
+    DirectoryModel *m_model;
+    bool m_dropActive = false;
+    int m_dropRow = -1;
+};
+
 } // namespace
 
 QString parentPathOf(const QString &path)
@@ -95,7 +248,11 @@ QString parentPathOf(const QString &path)
 BrowserPane::BrowserPane(tasks::Scheduler &scheduler, fs::DirectoryWatcher &watcher, QWidget *parent)
     : QWidget(parent), m_model(new DirectoryModel(scheduler, this)), m_watcher(watcher)
 {
-    m_view = new QTreeView(this);
+    auto *fileView = new FileView(m_model, this);
+    fileView->onDrop = [this](const QStringList &paths, const QString &destination, bool move) {
+        emit filesDropped(paths, destination, move);
+    };
+    m_view = fileView;
     m_view->setModel(m_model);
     m_view->setRootIsDecorated(false);
     m_view->setUniformRowHeights(true);   // imprescindible para que 100 000 filas vayan fluidas
@@ -156,6 +313,11 @@ BrowserPane::BrowserPane(tasks::Scheduler &scheduler, fs::DirectoryWatcher &watc
             refresh();
         }
     });
+}
+
+void BrowserPane::setMoveByDefaultRule(std::function<bool(const QString &, const QString &)> rule)
+{
+    static_cast<FileView *>(m_view)->moveByDefault = std::move(rule);
 }
 
 BrowserPane::~BrowserPane()

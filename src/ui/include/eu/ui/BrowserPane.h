@@ -6,6 +6,8 @@
 #include <QStringList>
 #include <QWidget>
 
+#include <functional>
+
 class QLabel;
 class QPushButton;
 class QStackedLayout;
@@ -52,6 +54,11 @@ public:
     /// "Nueva carpeta (2)"… Se calcula con lo que hay a la vista, sin tocar el disco.
     QString unusedName(const QString &wanted) const;
 
+    /// Regla para decidir qué hace soltar archivos sin pulsar ninguna tecla:
+    /// la función recibe (origen, carpeta de destino) y devuelve true si debe
+    /// moverse. Sin regla, se copia (lo que nunca quita nada del origen).
+    void setMoveByDefaultRule(std::function<bool(const QString &, const QString &)> rule);
+
 public slots:
     void navigateTo(const QString &path);
     void goBack();
@@ -75,6 +82,8 @@ signals:
     /// Clic derecho (o tecla de menú) sobre la lista. `globalPosition` es
     /// dónde mostrar el menú.
     void contextMenuRequested(const QPoint &globalPosition);
+    /// Se soltaron archivos (de esta u otra aplicación) sobre `destination`.
+    void filesDropped(const QStringList &paths, const QString &destination, bool move);
 
 private:
     void changePath(const QString &path, const QString &nameToSelect);

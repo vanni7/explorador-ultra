@@ -4,7 +4,9 @@
 #include "eu/ui/MainWindow.h"
 #include "eu/ui/PathBar.h"
 
+#include <QApplication>
 #include <QClipboard>
+#include <QDragEnterEvent>
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
@@ -393,6 +395,85 @@ private slots:
         QTRY_VERIFY_WITH_TIMEOUT(!QFileInfo::exists(directory.filePath(QStringLiteral("b.txt"))), 10000);
         QVERIFY(waitIdle(window));
         QTRY_COMPARE_WITH_TIMEOUT(pane->model()->rowCount(), 1, 10000);
+    }
+
+    void dragAndDrop()
+    {
+        QTemporaryDir data;
+        QTemporaryDir directory;
+        QVERIFY(QDir(directory.path()).mkdir(QStringLiteral("carpeta")));
+        writeFile(directory.filePath(QStringLiteral("a.txt")), 5);
+        writeFile(directory.filePath(QStringLiteral("b.txt")), 5);
+        const QString folder = directory.filePath(QStringLiteral("carpeta"));
+
+        MainWindow window(m_scheduler, openJournal(data));
+        window.resize(900, 600);
+        window.show();
+        BrowserPane *pane = window.openTab(directory.path());
+        QVERIFY(waitReady(pane));
+        QTreeView *view = pane->view();
+
+        // Lo que la lista entrega al arrastrar: las rutas de lo seleccionado.
+        selectNames(pane, {QStringLiteral("a.txt"), QStringLiteral("b.txt")});
+        std::unique_ptr<QMimeData> dragged(pane->model()->mimeData(view->selectionModel()->selectedIndexes()));
+        QVERIFY(dragged != nullptr);
+        QCOMPARE(fileSelectionFrom(dragged.get()).paths.size(), 2);
+
+        const auto dropAt = [&](const QMimeData *mime, const QPoint &position, Qt::KeyboardModifiers modifiers) {
+            QDragEnterEvent enter(position, Qt::CopyAction | Qt::MoveAction, mime, Qt::LeftButton, modifiers);
+            QApplication::sendEvent(view->viewport(), &enter);
+            QDragMoveEvent move(position, Qt::CopyAction | Qt::MoveAction, mime, Qt::LeftButton, modifiers);
+            QApplication::sendEvent(view->viewport(), &move);
+            if (!move.isAccepted()) {
+                QDragLeaveEvent leave;
+                QApplication::sendEvent(view->viewport(), &leave);
+                return false;
+            }
+            QDropEvent drop(position, Qt::CopyAction | Qt::MoveAction, mime, Qt::LeftButton, modifiers);
+            QApplication::sendEvent(view->viewport(), &drop);
+            // Al origen nunca se le dice "movido": el original lo quita el motor.
+            return drop.isAccepted() && drop.dropAction() == Qt::CopyAction;
+        };
+        const auto centerOf = [&](const QString &name) {
+            return view->visualRect(pane->model()->index(pane->model()->rowOfName(name), 0)).center();
+        };
+        const QPoint emptyArea(view->viewport()->width() / 2, view->viewport()->height() - 5);
+
+        // Mayús + soltar sobre el espacio vacío de la misma carpeta: no hay nada que mover.
+        QVERIFY(!dropAt(dragged.get(), emptyArea, Qt::ShiftModifier));
+
+        // Ctrl + soltar sobre la carpeta: copia dentro de ella.
+        QVERIFY(dropAt(dragged.get(), centerOf(QStringLiteral("carpeta")), Qt::ControlModifier));
+        QTRY_VERIFY_WITH_TIMEOUT(QFileInfo::exists(folder + QStringLiteral("/a.txt")), 10000);
+        QVERIFY(waitIdle(window));
+        QVERIFY(QFileInfo::exists(directory.filePath(QStringLiteral("a.txt"))));
+        QVERIFY(QFileInfo::exists(folder + QStringLiteral("/b.txt")));
+
+        // Mayús + soltar sobre la carpeta: mueve. Ya hay "a.txt" dentro, así
+        // que se omite sin sobrescribir y el original sigue en su sitio.
+        QVERIFY(waitReady(pane));
+        std::unique_ptr<QMimeData> onlyA(makeFileMimeData({directory.filePath(QStringLiteral("a.txt"))}, false));
+        QSignalSpy reports(&window, &MainWindow::actionReported);
+        QVERIFY(dropAt(onlyA.get(), centerOf(QStringLiteral("carpeta")), Qt::ShiftModifier));
+        QTRY_VERIFY_WITH_TIMEOUT(reports.count() >= 1, 10000);
+        QVERIFY(waitIdle(window));
+        QVERIFY(QFileInfo::exists(directory.filePath(QStringLiteral("a.txt"))));
+
+        // Archivos que llegan de fuera (otra carpeta) y se sueltan en el espacio vacío.
+        QTemporaryDir outside;
+        writeFile(outside.filePath(QStringLiteral("externo.txt")), 7);
+        std::unique_ptr<QMimeData> external(makeFileMimeData({outside.filePath(QStringLiteral("externo.txt"))}, false));
+        QVERIFY(dropAt(external.get(), emptyArea, Qt::ShiftModifier));
+        QTRY_VERIFY_WITH_TIMEOUT(QFileInfo::exists(directory.filePath(QStringLiteral("externo.txt"))), 10000);
+        QVERIFY(waitIdle(window));
+        QVERIFY(!QFileInfo::exists(outside.filePath(QStringLiteral("externo.txt"))));
+
+        // Una carpeta no se puede soltar dentro de sí misma, ni texto que no son archivos.
+        std::unique_ptr<QMimeData> itself(makeFileMimeData({folder}, false));
+        QVERIFY(!dropAt(itself.get(), centerOf(QStringLiteral("carpeta")), Qt::ControlModifier));
+        QMimeData text;
+        text.setText(QStringLiteral("hola"));
+        QVERIFY(!dropAt(&text, emptyArea, Qt::ControlModifier));
     }
 
     void withoutJournalTheWindowOnlyBrowses()

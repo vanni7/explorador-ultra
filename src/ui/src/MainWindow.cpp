@@ -768,6 +768,28 @@ BrowserPane *MainWindow::openTab(const QString &path)
     connect(pane, &BrowserPane::contextMenuRequested, this, [this, pane](const QPoint &globalPosition) {
         showContextMenu(pane, globalPosition);
     });
+    connect(pane, &BrowserPane::filesDropped, this, &MainWindow::transfer);
+    // Soltar sin teclas: dentro de la misma unidad se mueve y entre unidades
+    // se copia, como en los exploradores habituales. Se decide con la lista
+    // de unidades que ya está en memoria, sin consultar el disco.
+    pane->setMoveByDefaultRule([this](const QString &source, const QString &destination) {
+        const auto rootOf = [this](const QString &path) {
+            QString best;
+            const QList<fs::Volume> volumes = m_volumeMonitor.volumes();
+            for (const fs::Volume &volume : volumes) {
+                const QString root = volume.rootPath;
+                const bool inside = path == root
+                    || path.startsWith(root.endsWith(QLatin1Char('/')) ? root : root + QLatin1Char('/'));
+                if (inside && root.size() > best.size()) {
+                    best = root;
+                }
+            }
+            return best;
+        };
+        const QString sourceRoot = rootOf(source);
+        // Si no se sabe en qué unidad está, se copia: es lo que no quita nada.
+        return !sourceRoot.isEmpty() && sourceRoot == rootOf(destination);
+    });
     connect(pane, &BrowserPane::openFailed, this, [this](const QString &failedPath) {
         statusBar()->showMessage(tr("No se pudo abrir %1").arg(QDir::toNativeSeparators(failedPath)), 6000);
     });

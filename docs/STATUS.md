@@ -12,8 +12,8 @@ Sesión del 2026-11-12, rama `fase-1/core`. Cada paso terminado queda en un comm
 | 1 | Revisar la CI de `journal`, `ops`, `trash` y el motor | **Hecho**: en verde en Ubuntu 22.04/24.04, ASan, Windows y macOS |
 | 2 | `ui::FileActions`: ejecutar el motor en tareas y devolver el resultado a la interfaz | **Hecho** (6 pruebas en `test_ui_file_actions`, Ubuntu) |
 | 3 | Menú contextual, atajos, renombrado en línea, portapapeles, progreso y errores | **Hecho** (pruebas en `test_ui_main_window`, Ubuntu release y ASan). Sin probar a mano con teclado y ratón; falta ver la CI |
-| 4 | Arrastrar y soltar | En curso |
-| 5 | Diálogo de recuperación al arrancar | Pendiente |
+| 4 | Arrastrar y soltar | **Hecho** en código y pruebas (eventos simulados, Ubuntu). **Falta arrastrar de verdad con el ratón** en Wayland, X11 y Windows, y desde/hacia otras aplicaciones |
+| 5 | Diálogo de recuperación al arrancar | En curso |
 | 6 | Vista de la papelera | Pendiente |
 | 7 | Tamaño de carpetas | Pendiente |
 | 8 | Verificación manual (Ubuntu y VM de Windows), fusionar a `main`, informe de cierre | Pendiente |

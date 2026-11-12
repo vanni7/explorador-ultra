@@ -83,6 +83,11 @@ public:
     /// con renameRequested() y devuelve false. El nombre nuevo aparece cuando
     /// el disco cambia de verdad.
     bool setData(const QModelIndex &index, const QVariant &value, int role = Qt::EditRole) override;
+    // Arrastrar: el modelo solo entrega la lista de archivos. Soltar lo
+    // resuelve la vista, que es quien sabe sobre qué carpeta se soltó.
+    QStringList mimeTypes() const override;
+    QMimeData *mimeData(const QModelIndexList &indexes) const override;
+    Qt::DropActions supportedDragActions() const override;
 
 signals:
     void stateChanged(eu::ui::DirectoryModel::State state);

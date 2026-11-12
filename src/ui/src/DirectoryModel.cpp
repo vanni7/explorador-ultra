@@ -2,6 +2,7 @@
 #include "eu/ui/DirectoryModel.h"
 
 #include "eu/fs/DirectoryLister.h"
+#include "eu/ui/FileClipboard.h"
 
 #include <QAbstractFileIconProvider>
 #include <QDateTime>
@@ -373,11 +374,43 @@ Qt::ItemFlags DirectoryModel::flags(const QModelIndex &index) const
     if (!index.isValid()) {
         return Qt::NoItemFlags;
     }
-    Qt::ItemFlags result = Qt::ItemIsEnabled | Qt::ItemIsSelectable;
+    Qt::ItemFlags result = Qt::ItemIsEnabled | Qt::ItemIsSelectable | Qt::ItemIsDragEnabled;
     if (index.column() == int(Column::Name)) {
         result |= Qt::ItemIsEditable;   // renombrado en línea (SPEC §8.2)
     }
     return result;
+}
+
+QStringList DirectoryModel::mimeTypes() const
+{
+    return {QStringLiteral("text/uri-list")};
+}
+
+QMimeData *DirectoryModel::mimeData(const QModelIndexList &indexes) const
+{
+    // La vista pasa un índice por celda: cada fila aparece varias veces.
+    QStringList paths;
+    int lastRow = -1;
+    for (const QModelIndex &index : indexes) {
+        if (index.isValid() && index.row() != lastRow && index.column() == int(Column::Name)) {
+            paths.append(filePath(index.row()));
+            lastRow = index.row();
+        }
+    }
+    if (paths.isEmpty()) {
+        for (const QModelIndex &index : indexes) {
+            const QString path = filePath(index.row());
+            if (!paths.contains(path)) {
+                paths.append(path);
+            }
+        }
+    }
+    return paths.isEmpty() ? nullptr : makeFileMimeData(paths, false);
+}
+
+Qt::DropActions DirectoryModel::supportedDragActions() const
+{
+    return Qt::CopyAction | Qt::MoveAction;
 }
 
 bool DirectoryModel::setData(const QModelIndex &index, const QVariant &value, int role)
