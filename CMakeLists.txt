@@ -32,6 +32,8 @@ add_subdirectory(src/core)
 add_subdirectory(src/tasks)
 add_subdirectory(src/fs)
 add_subdirectory(src/journal)
+add_subdirectory(src/ops)
+add_subdirectory(src/trash)
 add_subdirectory(src/ui)
 add_subdirectory(src/app)
 

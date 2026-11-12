@@ -80,3 +80,10 @@ Formato: contexto, decisión, alternativas y consecuencias. Las decisiones previ
 - **Decisión:** usar Qt SQL (`QSqlDatabase`, controlador `QSQLITE`) en lugar de enlazar SQLite por separado. Cada hilo abre su propia conexión; las bases van en modo WAL.
 - **Alternativas:** SQLite del sistema en Linux y vcpkg en Windows/macOS (versiones distintas por plataforma y una dependencia más que empaquetar).
 - **Consecuencias:** la misma versión de SQLite en las tres plataformas y sin vcpkg por ahora. El módulo `journal` depende de `Qt6::Sql`. Si en la Fase 2 el índice necesitara funciones de SQLite que Qt SQL no expone, se reevaluará.
+
+## ADR-0012 — Nombre y estructura de la papelera
+- **Fecha:** 2026-11-11 · **Estado:** aceptada (precisa SPEC §10)
+- **Contexto:** §10 pide una carpeta `PapeleraExploradorUltra` por volumen, oculta "según la convención de cada plataforma". En Linux y macOS, oculto significa nombre con punto inicial; en Windows es un atributo. Un mismo disco externo puede usarse en los tres sistemas.
+- **Decisión:** la carpeta se llama `.PapeleraExploradorUltra` en todas las plataformas y en Windows recibe además el atributo de oculto. Dentro, cada elemento ocupa `<id>/<nombre original>` y `<id>.info` (JSON con ruta original, fecha, tamaño e id). El `.info` se escribe antes de mover el elemento.
+- **Alternativas:** nombre sin punto y archivo `.hidden` (solo lo respetan algunos exploradores de Linux).
+- **Consecuencias:** en el disco del sistema de Linux la papelera queda en `~/.PapeleraExploradorUltra` (la raíz no es escribible). Los `.info` cuyo id no coincide con su nombre de archivo se ignoran, para que un archivo manipulado no pueda apuntar fuera de la papelera.
