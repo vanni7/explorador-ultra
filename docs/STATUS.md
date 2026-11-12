@@ -9,8 +9,8 @@ Fase 2 — Búsqueda y rendimiento, rama `fase-2/busqueda` (sale de `main` con l
 
 | # | Paso | Estado |
 |---|---|---|
-| 1 | Módulo `search`: gramática, analizador y evaluador de consultas; `docs/SEARCH_SYNTAX.md` | En curso |
-| 2 | Filtrado local de la carpeta a la vista (meta: 100 000 elementos < 50 ms por tecla) | Pendiente |
+| 1 | Módulo `search`: gramática, analizador y evaluador de consultas; `docs/SEARCH_SYNTAX.md` | **Hecho** (48 pruebas en `test_search_query`, Ubuntu; 100 000 nombres en ~15 ms). `tag:` y `content:` se aceptan pero se informan como no disponibles. Falta ver la CI |
+| 2 | Filtrado local de la carpeta a la vista (meta: 100 000 elementos < 50 ms por tecla) | En curso |
 | 3 | Búsqueda recursiva progresiva (pausa, cancelación < 500 ms, contadores) y resultados como ubicación virtual | Pendiente |
 | 4 | Alcances: carpeta, con subcarpetas, unidad, varias unidades, todas | Pendiente |
 | 5 | Índice SQLite opcional, vigilancia de cambios, asistente de primer arranque, resultados «del índice» | Pendiente |
