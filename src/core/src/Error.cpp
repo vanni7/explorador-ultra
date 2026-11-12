@@ -100,7 +100,7 @@ Error errorFromErrno(int errnoValue, const QString &path)
     // Para errores sin clasificar se conserva el texto del sistema: es mejor
     // un mensaje técnico que "Error desconocido" a secas.
     error.message = (code == ErrorCode::Unknown)
-        ? QString::fromLocal8Bit(std::strerror(errnoValue))
+        ? qt_error_string(errnoValue)   // texto del sistema, seguro entre hilos
         : describe(code);
     return error;
 }

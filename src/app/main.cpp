@@ -13,6 +13,7 @@
 #include <QIcon>
 #include <QLibraryInfo>
 #include <QLocale>
+#include <QSettings>
 #include <QStandardPaths>
 #include <QTimer>
 #include <QTranslator>
@@ -25,6 +26,9 @@ int main(int argc, char *argv[])
     QApplication::setApplicationVersion(eu::core::versionString());
     QApplication::setOrganizationName(QStringLiteral("ExploradorUltra"));
     QApplication::setDesktopFileName(QStringLiteral("explorador-ultra"));
+    // Configuración en un archivo de texto legible en las tres plataformas
+    // (en Windows, sin esto, iría al registro). SPEC §20.
+    QSettings::setDefaultFormat(QSettings::IniFormat);
     QApplication::setWindowIcon(QIcon(QStringLiteral(":/icon/explorador-ultra.svg")));
 
     // Traducciones: primero las de Qt (botones estándar, diálogos) y luego las

@@ -6,6 +6,7 @@
 #include <QDir>
 #include <QFile>
 #include <QItemSelectionModel>
+#include <QSettings>
 #include <QSignalSpy>
 #include <QStandardPaths>
 #include <QTemporaryDir>
@@ -43,6 +44,11 @@ private slots:
     {
         // Las pruebas no deben leer ni escribir la configuración real del usuario.
         QStandardPaths::setTestModeEnabled(true);
+        // Igual que en main(): sin estos nombres QSettings no tiene dónde guardar en Windows.
+        QCoreApplication::setOrganizationName(QStringLiteral("ExploradorUltraPruebas"));
+        QCoreApplication::setApplicationName(QStringLiteral("test_ui_main_window"));
+        QSettings::setDefaultFormat(QSettings::IniFormat);
+        QSettings().clear();
     }
 
     void parentPaths()
