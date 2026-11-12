@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Icono de Explorador Ultra. Diseño original, GPL-3.0-or-later.
+     Idea: una carpeta (organización) con una brújula cuya aguja es un rayo
+     (exploración + rapidez). Formas grandes y planas para que se lea a 16 px. -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256">
+  <defs>
+    <linearGradient id="fondo" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#4F46E5"/>
+      <stop offset="1" stop-color="#06B6D4"/>
+    </linearGradient>
+    <linearGradient id="carpeta" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#FFFFFF"/>
+      <stop offset="1" stop-color="#E0E7FF"/>
+    </linearGradient>
+  </defs>
+  <!-- Fondo: cuadrado redondeado -->
+  <rect x="8" y="8" width="240" height="240" rx="56" fill="url(#fondo)"/>
+  <!-- Pestaña de la carpeta -->
+  <path d="M40 92 a16 16 0 0 1 16 -16 h48 a12 12 0 0 1 9 4 l15 16 h-88 z" fill="#C7D2FE"/>
+  <!-- Cuerpo de la carpeta -->
+  <rect x="40" y="92" width="176" height="112" rx="18" fill="url(#carpeta)"/>
+  <!-- Brújula -->
+  <circle cx="128" cy="148" r="40" fill="#312E81"/>
+  <!-- Aguja en forma de rayo -->
+  <path d="M138 114 l-28 40 h18 l-10 28 l28 -40 h-18 z" fill="#FACC15"/>
+</svg>

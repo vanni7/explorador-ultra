@@ -1,0 +1,5 @@
+<RCC>
+  <qresource prefix="/icon">
+    <file alias="explorador-ultra.svg">../../assets/icon/explorador-ultra.svg</file>
+  </qresource>
+</RCC>

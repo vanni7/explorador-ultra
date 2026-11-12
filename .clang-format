@@ -1,0 +1,9 @@
+# Estilo del proyecto: el de Qt/WebKit, con líneas de hasta 110 caracteres.
+BasedOnStyle: WebKit
+ColumnLimit: 110
+IndentWidth: 4
+BreakBeforeBraces: Linux
+NamespaceIndentation: None
+PointerAlignment: Right
+AllowShortFunctionsOnASingleLine: Empty
+SortIncludes: CaseSensitive

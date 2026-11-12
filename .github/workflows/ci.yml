@@ -1,0 +1,74 @@
+# Compila y prueba Explorador Ultra en las tres plataformas en cada push (SPEC §22).
+name: CI
+
+on:
+  push:
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  QT_VERSION: "6.12.0"
+
+jobs:
+  build:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { name: "Ubuntu 22.04",        os: ubuntu-22.04,   preset: release }
+          - { name: "Ubuntu 24.04",        os: ubuntu-24.04,   preset: release }
+          - { name: "Ubuntu 24.04 ASan+UBSan", os: ubuntu-24.04, preset: asan }
+          - { name: "Windows (MSVC)",      os: windows-latest, preset: release }
+          - { name: "macOS Intel",         os: macos-15-intel, preset: release }
+          - { name: "macOS Apple Silicon", os: macos-latest,   preset: release }
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Dependencias del sistema (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build libgl1-mesa-dev libxkbcommon-dev \
+            libxkbcommon-x11-0 libxcb-cursor0 libxcb-icccm4 libxcb-image0 \
+            libxcb-keysyms1 libxcb-render-util0 libxcb-xinerama0 libxcb-xkb1 libfontconfig1
+
+      - name: Ninja (macOS)
+        if: runner.os == 'macOS'
+        run: brew install ninja
+
+      - name: Compilador MSVC en el PATH (Windows)
+        if: runner.os == 'Windows'
+        uses: ilammy/msvc-dev-cmd@v1
+
+      - name: Instalar Qt
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: ${{ env.QT_VERSION }}
+          cache: true
+
+      - name: Configurar
+        shell: bash
+        run: EU_QT_DIR="$QT_ROOT_DIR" cmake --preset ${{ matrix.preset }}
+
+      - name: Compilar
+        run: cmake --build --preset ${{ matrix.preset }}
+
+      - name: Pruebas
+        run: ctest --preset ${{ matrix.preset }}
+
+      - name: Arranque real de la aplicación (smoke test)
+        shell: bash
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: |
+          dir=build/${{ matrix.preset }}/bin
+          if [ "$RUNNER_OS" = "macOS" ]; then
+            "$dir/explorador-ultra.app/Contents/MacOS/explorador-ultra" --smoke-test
+          else
+            "$dir/explorador-ultra" --smoke-test
+          fi

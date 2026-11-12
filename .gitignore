@@ -1,0 +1,7 @@
+build/
+*.user
+.vscode/
+.idea/
+compile_commands.json
+Prompt_Explorador_Ultra.md
+aqtinstall.log
