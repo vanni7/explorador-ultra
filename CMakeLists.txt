@@ -30,6 +30,7 @@ set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
 
 add_subdirectory(src/core)
 add_subdirectory(src/tasks)
+add_subdirectory(src/fs)
 add_subdirectory(src/app)
 
 if(EU_BUILD_TESTS)

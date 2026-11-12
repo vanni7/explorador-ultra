@@ -11,6 +11,8 @@
 // en docs/BENCHMARKS.md. Aquí nunca se escribe un valor que no se haya medido.
 
 #include "eu/core/NaturalCompare.h"
+#include "eu/fs/DirectoryLister.h"
+#include "eu/fs/Volumes.h"
 
 #include <QCoreApplication>
 #include <QDir>
@@ -118,8 +120,28 @@ void measureListing(const QString &name,
                .arg(QString::number(memoryAfter - memoryBefore, 'f', 1)));
 }
 
+int commandVolumes()
+{
+    const QList<eu::fs::Volume> volumes = eu::fs::listVolumes();
+    for (const eu::fs::Volume &volume : volumes) {
+        out() << volume.rootPath << ';' << volume.displayName << ';' << volume.fileSystem << ";tipo="
+              << int(volume.kind) << ";libre=" << volume.freeBytes / 1'000'000'000 << " GB\n";
+    }
+    return 0;
+}
+
 int commandListing(const QString &folder)
 {
+    // 0) El listador real de la aplicación (módulo fs).
+    measureListing(QStringLiteral("eu_fs_listDirectory"), [&](const auto &onEntry) {
+        eu::fs::listDirectory(folder, eu::fs::ListOptions(), eu::tasks::CancelToken(),
+                              [&](std::vector<eu::fs::Entry> &&batch) {
+            for (eu::fs::Entry &entry : batch) {
+                onEntry(Entry{std::move(entry.name), entry.size, entry.modifiedMs / 1000, entry.isDirectory});
+            }
+        });
+    });
+
 #ifdef Q_OS_UNIX
     // 1) POSIX: readdir + fstatat. Es el piso de lo que cuesta en Linux/macOS.
     measureListing(QStringLiteral("posix_readdir_fstatat"), [&](const auto &onEntry) {
@@ -314,12 +336,15 @@ int main(int argc, char *argv[])
     if (command == QStringLiteral("listing") && arguments.size() == 3) {
         return commandListing(arguments[2]);
     }
+    if (command == QStringLiteral("volumes")) {
+        return commandVolumes();
+    }
     if (command == QStringLiteral("sort") && arguments.size() == 3) {
         return commandSort(arguments[2]);
     }
     if (command == QStringLiteral("copy") && arguments.size() == 4) {
         return commandCopy(arguments[2], arguments[3]);
     }
-    out() << "Uso: eu-bench mktree <carpeta> <n> | listing <carpeta> | sort <carpeta> | copy <origen> <carpetaDestino>\n";
+    out() << "Uso: eu-bench mktree <carpeta> <n> | volumes | listing <carpeta> | sort <carpeta> | copy <origen> <carpetaDestino>\n";
     return 2;
 }
