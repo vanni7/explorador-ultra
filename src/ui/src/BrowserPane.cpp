@@ -325,10 +325,10 @@ BrowserPane::BrowserPane(tasks::Scheduler &scheduler, fs::DirectoryWatcher &watc
     m_view->setAllColumnsShowFocus(true);
     m_view->setSelectionMode(QAbstractItemView::ExtendedSelection);
     m_view->setSelectionBehavior(QAbstractItemView::SelectRows);
-    // Renombrar: con la tecla de edición (F2; Intro en macOS) o con un clic
-    // sobre el nombre de un elemento ya seleccionado. El doble clic sigue
-    // abriendo: Qt distingue los dos casos por el tiempo entre clics (SPEC §8.2).
-    m_view->setEditTriggers(QAbstractItemView::EditKeyPressed | QAbstractItemView::SelectedClicked);
+    // Renombrar: con la tecla de edición (F2; Intro en macOS) o desde el menú.
+    // El "clic lento" sobre un nombre ya seleccionado queda desactivado, como
+    // se acordó en la Fase 0: se confunde con el doble clic y con el arrastre.
+    m_view->setEditTriggers(QAbstractItemView::EditKeyPressed);
     auto *nameDelegate = new NameDelegate(m_model, this);
     nameDelegate->onEditingStarted = [this] { m_editing = true; };
     m_view->setItemDelegateForColumn(int(Column::Name), nameDelegate);
