@@ -7,6 +7,7 @@
 #include <QFileInfo>
 #include <QTemporaryDir>
 #include <QTest>
+#include <QTimeZone>
 
 using namespace eu;
 using namespace eu::ops;
@@ -110,7 +111,9 @@ private slots:
         writeFile(source, content);
         QFile stamper(source);
         QVERIFY(stamper.open(QIODevice::ReadWrite));
-        const QDateTime oldDate = QDateTime::fromSecsSinceEpoch(1'600'000'000);
+        // Septiembre de 2020: en México aún había horario de verano. Es el caso
+        // que desplazaba la fecha en Windows; todo se maneja en UTC.
+        const QDateTime oldDate = QDateTime::fromSecsSinceEpoch(1'600'000'000, QTimeZone::UTC);
         QVERIFY(stamper.setFileTime(oldDate, QFileDevice::FileModificationTime));
         stamper.close();
 
@@ -121,7 +124,8 @@ private slots:
         QVERIFY2(status.ok(), status.ok() ? "" : qPrintable(status.error().message));
         QCOMPARE(readFile(target), content);
         QCOMPARE(reported, qint64(content.size()));
-        QCOMPARE(QFileInfo(target).lastModified().toSecsSinceEpoch(), oldDate.toSecsSinceEpoch());
+        QCOMPARE(QFileInfo(target).lastModified(QTimeZone::UTC).toSecsSinceEpoch(), oldDate.toSecsSinceEpoch());
+        QCOMPARE(stampOf(target).modifiedMs, oldDate.toMSecsSinceEpoch());
         QVERIFY(!QFileInfo::exists(target + partialSuffix()));
         QCOMPARE(readFile(source), content);   // el origen queda intacto
     }

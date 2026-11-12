@@ -6,6 +6,7 @@
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
+#include <QTimeZone>
 
 #include <cerrno>
 #include <filesystem>
@@ -102,7 +103,8 @@ FileStamp stampOf(const QString &path)
     if (status.type() == std::filesystem::file_type::regular) {
         const QFileInfo info(path);
         stamp.size = info.size();
-        stamp.modifiedMs = info.lastModified().toMSecsSinceEpoch();
+        // En UTC: pasar por la hora local puede desplazar la fecha (ver copyFile).
+        stamp.modifiedMs = info.lastModified(QTimeZone::UTC).toMSecsSinceEpoch();
     }
     return stamp;
 }
@@ -255,7 +257,10 @@ core::Status copyFile(const QString &source, const QString &target, const tasks:
     QFile::setPermissions(partialPath, input.permissions());
     QFile stamped(partialPath);
     if (stamped.open(QIODevice::ReadWrite)) {
-        stamped.setFileTime(QFileInfo(source).lastModified(), QFileDevice::FileModificationTime);
+        // La fecha se lee y se escribe en UTC. Con la hora local, en Windows y en
+        // zonas que tuvieron horario de verano y ya no (México), cada conversión
+        // movía una hora las fechas de aquellos veranos.
+        stamped.setFileTime(QFileInfo(source).lastModified(QTimeZone::UTC), QFileDevice::FileModificationTime);
         stamped.close();
     }
 

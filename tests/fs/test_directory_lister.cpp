@@ -245,7 +245,13 @@ private slots:
         write(QStringLiteral("a/dos.bin"), 2000);
         write(QStringLiteral("a/b/c/tres.bin"), 3000);
         // Un enlace a la propia carpeta: si se siguiera, la suma no acabaría nunca.
+#ifdef Q_OS_WIN
+        // En Windows, QFile::link crea un acceso directo (.lnk), que es un
+        // archivo corriente con su propio tamaño: no sirve para esta prueba.
+        const bool linked = false;
+#else
         const bool linked = QFile::link(directory.path(), root.filePath(QStringLiteral("a/ciclo")));
+#endif
 
         int progressCalls = 0;
         const tasks::CancelToken cancel;
