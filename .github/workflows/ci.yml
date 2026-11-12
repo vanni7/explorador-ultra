@@ -45,11 +45,35 @@ jobs:
         if: runner.os == 'Windows'
         uses: ilammy/msvc-dev-cmd@v1
 
-      - name: Instalar Qt
+      - name: Instalar Qt (Linux y macOS)
+        if: runner.os != 'Windows'
         uses: jurplel/install-qt-action@v4
         with:
           version: ${{ env.QT_VERSION }}
           cache: true
+
+      # aqtinstall (lo que usa install-qt-action) no encuentra Qt 6.12 para
+      # Windows; se descarga con el guion propio. Ver docs/ENVIRONMENT.md.
+      - name: Caché de Qt (Windows)
+        if: runner.os == 'Windows'
+        id: qt-windows-cache
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/qt/${{ env.QT_VERSION }}
+          key: qt-windows-${{ env.QT_VERSION }}-msvc2022_64-${{ hashFiles('tools/windows/fetch_qt_windows.py') }}
+
+      - name: Descargar Qt (Windows)
+        if: runner.os == 'Windows' && steps.qt-windows-cache.outputs.cache-hit != 'true'
+        shell: bash
+        run: python tools/windows/fetch_qt_windows.py "$RUNNER_TEMP/qt" "$QT_VERSION"
+
+      - name: Rutas de Qt (Windows)
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          qt="$(cygpath -m "$RUNNER_TEMP")/qt/$QT_VERSION/msvc2022_64"
+          echo "QT_ROOT_DIR=$qt" >> "$GITHUB_ENV"
+          echo "$(cygpath -w "$qt/bin")" >> "$GITHUB_PATH"
 
       - name: Configurar
         shell: bash

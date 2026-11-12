@@ -9,3 +9,7 @@ function(eu_add_test name)
 endfunction()
 
 eu_add_test(test_core_natural_compare core/test_natural_compare.cpp)
+eu_add_test(test_core_error core/test_error.cpp)
+eu_add_test(test_core_size_format core/test_size_format.cpp)
+eu_add_test(test_core_file_name core/test_file_name.cpp)
+eu_add_test(test_core_log core/test_log.cpp)

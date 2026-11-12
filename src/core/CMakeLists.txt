@@ -1,7 +1,11 @@
 # Módulo core: tipos comunes, sin dependencia de la interfaz gráfica.
 add_library(eu_core STATIC
-    src/Version.cpp
-    src/NaturalCompare.cpp)
+    src/Error.cpp
+    src/FileName.cpp
+    src/Log.cpp
+    src/NaturalCompare.cpp
+    src/SizeFormat.cpp
+    src/Version.cpp)
 add_library(eu::core ALIAS eu_core)
 
 target_include_directories(eu_core PUBLIC include)
