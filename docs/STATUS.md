@@ -5,19 +5,19 @@
 Estados: **Terminada** (cumple §26) · **Parcial** · **Pendiente** · **Bloqueada**.
 
 ## Punto de reanudación (se actualiza tras cada paso; si hubo un corte, empieza aquí)
-Sesión del 2026-11-12, rama `fase-1/core`. (A las ~09:50 hubo un corte de luz real: el último commit local quedó vacío en disco y se recuperó de GitHub quitando los objetos vacíos de `.git/objects` y haciendo `git fetch`.) Cada paso terminado queda en un commit ya enviado a GitHub; lo que no esté en `git log` no está hecho. Antes de seguir: `git status` (puede haber cambios a medias sin confirmar) y compilar con el preset `release`.
+Fase 2 — Búsqueda y rendimiento, rama `fase-2/busqueda` (sale de `main` con la Fase 1 ya fusionada). Cada paso terminado queda en un commit ya enviado a GitHub; lo que no esté en `git log` no está hecho. Antes de seguir: `git status` y compilar con el preset `release`. Si git dice «objeto vacío» tras un corte, ver las notas de `CLAUDE.md`.
 
 | # | Paso | Estado |
 |---|---|---|
-| 1 | Revisar la CI de `journal`, `ops`, `trash` y el motor | **Hecho**: en verde en Ubuntu 22.04/24.04, ASan, Windows y macOS |
-| 2 | `ui::FileActions`: ejecutar el motor en tareas y devolver el resultado a la interfaz | **Hecho** (6 pruebas en `test_ui_file_actions`, Ubuntu) |
-| 3 | Menú contextual, atajos, renombrado en línea, portapapeles, progreso y errores | **Hecho** (pruebas en `test_ui_main_window`, Ubuntu release y ASan). Sin probar a mano con teclado y ratón; falta ver la CI |
-| 4 | Arrastrar y soltar | **Hecho** en código y pruebas (eventos simulados, Ubuntu). **Falta arrastrar de verdad con el ratón** en Wayland, X11 y Windows, y desde/hacia otras aplicaciones |
-| 5 | Diálogo de recuperación al arrancar | **Hecho** (Revertir / Descartar / Decidir más tarde; «Reanudar» deshabilitado). Prueba con proceso matado a mitad de copia, Ubuntu. Incluye la retención automática del historial y un cerrojo para que solo una instancia revise el historial |
-| 6 | Vista de la papelera | **Hecho**: ventana «Papelera» (menú Ir y barra) con restaurar, eliminar y vaciar; el motor anota restaurar y eliminar en el historial. Pruebas en Ubuntu; la ventana no se ha visto a mano. Faltan: retención y tamaño máximo, unidades desconectadas como «no disponibles» |
-| 7 | Tamaño de carpetas | **Hecho**: opción «Calcular el tamaño de las carpetas» (menú Ver, desactivada por defecto), progresivo y cancelable. Pruebas en Ubuntu release y ASan. Falta: ordenar por ese tamaño y medir su coste en un disco mecánico |
-| 8 | Verificación, fusión a `main` e informe de cierre | **Hecho** el 12-nov: CI completa en verde en `15dcc32`, rama fusionada a `main`, informe en `docs/INFORME_FASE_1.md`. La fase se entrega **con puntos abiertos** (sección E del informe): la ventana no se ha usado a mano en Windows ni en X11 real, y faltan mediciones |
-| 9 | Correcciones tras la prueba del dueño: selección con recuadro, soltar sobre el árbol de carpetas, clic en el árbol despliega/recoge, iconos por tipo, clic en la ruta la copia | **Hecho**; probado con ratón simulado en una pantalla virtual X11 (Xvfb + xdotool) y con pruebas automáticas. En Wayland lo tiene que confirmar el dueño |
+| 1 | Módulo `search`: gramática, analizador y evaluador de consultas; `docs/SEARCH_SYNTAX.md` | En curso |
+| 2 | Filtrado local de la carpeta a la vista (meta: 100 000 elementos < 50 ms por tecla) | Pendiente |
+| 3 | Búsqueda recursiva progresiva (pausa, cancelación < 500 ms, contadores) y resultados como ubicación virtual | Pendiente |
+| 4 | Alcances: carpeta, con subcarpetas, unidad, varias unidades, todas | Pendiente |
+| 5 | Índice SQLite opcional, vigilancia de cambios, asistente de primer arranque, resultados «del índice» | Pendiente |
+| 6 | Concurrencia adaptativa por dispositivo en `tasks` | Pendiente |
+| 7 | Mediciones (`BENCHMARKS.md`), verificación manual, CI, fusionar a `main`, informe | Pendiente |
+
+Pasos de la Fase 1 (sesión del 12-nov): todos hechos; resumen en `INFORME_FASE_1.md`.
 
 ## Fase 0 — Arquitectura y entorno
 | Tarea | Estado | Verificado en | Qué falta |
