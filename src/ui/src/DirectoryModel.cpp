@@ -373,7 +373,24 @@ Qt::ItemFlags DirectoryModel::flags(const QModelIndex &index) const
     if (!index.isValid()) {
         return Qt::NoItemFlags;
     }
-    return Qt::ItemIsEnabled | Qt::ItemIsSelectable;
+    Qt::ItemFlags result = Qt::ItemIsEnabled | Qt::ItemIsSelectable;
+    if (index.column() == int(Column::Name)) {
+        result |= Qt::ItemIsEditable;   // renombrado en línea (SPEC §8.2)
+    }
+    return result;
+}
+
+bool DirectoryModel::setData(const QModelIndex &index, const QVariant &value, int role)
+{
+    if (!index.isValid() || role != Qt::EditRole || index.column() != int(Column::Name)
+        || index.row() >= int(m_entries.size())) {
+        return false;
+    }
+    const QString newName = value.toString();
+    if (!newName.isEmpty() && newName != m_entries[size_t(index.row())].name) {
+        emit renameRequested(filePath(index.row()), newName);
+    }
+    return false;
 }
 
 void DirectoryModel::sort(int column, Qt::SortOrder order)

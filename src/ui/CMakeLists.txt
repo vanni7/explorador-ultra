@@ -5,12 +5,14 @@ add_library(eu_ui STATIC
     src/DirectoryModel.cpp
     src/EntrySort.cpp
     src/FileActions.cpp
+    src/FileClipboard.cpp
     src/MainWindow.cpp
     src/PathBar.cpp
     src/Sidebar.cpp
     include/eu/ui/BrowserPane.h
     include/eu/ui/DirectoryModel.h
     include/eu/ui/FileActions.h
+    include/eu/ui/FileClipboard.h
     include/eu/ui/MainWindow.h
     include/eu/ui/PathBar.h
     include/eu/ui/Sidebar.h)

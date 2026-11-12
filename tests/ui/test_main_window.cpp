@@ -1,10 +1,16 @@
 // Explorador Ultra — SPDX-License-Identifier: GPL-3.0-or-later
 #include "eu/ui/BrowserPane.h"
+#include "eu/ui/FileClipboard.h"
 #include "eu/ui/MainWindow.h"
 #include "eu/ui/PathBar.h"
 
+#include <QClipboard>
 #include <QDir>
 #include <QFile>
+#include <QFileInfo>
+#include <QGuiApplication>
+#include <QLineEdit>
+#include <QMimeData>
 #include <QItemSelectionModel>
 #include <QSettings>
 #include <QSignalSpy>
@@ -12,6 +18,9 @@
 #include <QTemporaryDir>
 #include <QTest>
 #include <QTreeView>
+#include <QUrl>
+
+#include <memory>
 
 using namespace eu;
 using namespace eu::ui;
@@ -28,6 +37,31 @@ void writeFile(const QString &path, qsizetype bytes = 0)
 bool waitReady(BrowserPane *pane)
 {
     return QTest::qWaitFor([pane] { return pane->model()->state() != DirectoryModel::State::Loading; }, 20000);
+}
+
+/// Espera a que la ventana no tenga operaciones de archivos en curso.
+bool waitIdle(MainWindow &window)
+{
+    return QTest::qWaitFor([&window] { return !window.fileActions()->isBusy(); }, 30000);
+}
+
+void selectNames(BrowserPane *pane, const QStringList &names)
+{
+    pane->view()->selectionModel()->clearSelection();
+    for (const QString &name : names) {
+        const int row = pane->model()->rowOfName(name);
+        QVERIFY2(row >= 0, qPrintable(name));
+        pane->view()->selectionModel()->select(pane->model()->index(row, 0),
+                                               QItemSelectionModel::Select | QItemSelectionModel::Rows);
+        // Solo mueve el cursor: setCurrentIndex de la vista deseleccionaría lo anterior.
+        pane->view()->selectionModel()->setCurrentIndex(pane->model()->index(row, 0), QItemSelectionModel::NoUpdate);
+    }
+}
+
+std::shared_ptr<journal::Journal> openJournal(const QTemporaryDir &directory)
+{
+    auto journal = journal::Journal::open(directory.filePath(QStringLiteral("historial.db")));
+    return journal.ok() ? journal.value() : nullptr;
 }
 
 } // namespace
@@ -172,6 +206,207 @@ private slots:
         QCOMPARE(window.currentPane(), other);
         QCOMPARE(window.currentPane()->currentPath(), QDir::cleanPath(second.path()));
         QVERIFY(waitReady(other));
+    }
+
+    void fileClipboardRoundTrip()
+    {
+        const QStringList paths{QStringLiteral("/tmp/a b.txt"), QStringLiteral("/tmp/ñandú")};
+        std::unique_ptr<QMimeData> copied(makeFileMimeData(paths, false));
+        QCOMPARE(fileSelectionFrom(copied.get()).paths, paths);
+        QVERIFY(!fileSelectionFrom(copied.get()).cut);
+        std::unique_ptr<QMimeData> cut(makeFileMimeData(paths, true));
+        QVERIFY(fileSelectionFrom(cut.get()).cut);
+
+        // Lo que pone Nautilus al cortar: solo su formato propio y las URL.
+        QMimeData fromGnome;
+        fromGnome.setUrls({QUrl::fromLocalFile(QStringLiteral("/tmp/x"))});
+        fromGnome.setData(QStringLiteral("x-special/gnome-copied-files"), "cut\nfile:///tmp/x");
+        QVERIFY(fileSelectionFrom(&fromGnome).cut);
+
+        // Texto corriente o direcciones web no son archivos.
+        QMimeData text;
+        text.setText(QStringLiteral("hola"));
+        QVERIFY(fileSelectionFrom(&text).isEmpty());
+        QMimeData web;
+        web.setUrls({QUrl(QStringLiteral("https://example.org/a"))});
+        QVERIFY(fileSelectionFrom(&web).isEmpty());
+    }
+
+    void newFolderIsCreatedSelectedAndReadyToName()
+    {
+        QTemporaryDir data;
+        QTemporaryDir directory;
+        QVERIFY(QDir(directory.path()).mkdir(QStringLiteral("Nueva carpeta")));
+        MainWindow window(m_scheduler, openJournal(data));
+        window.show();
+        BrowserPane *pane = window.openTab(directory.path());
+        QVERIFY(waitReady(pane));
+
+        window.newFolder();
+        // Ya existía "Nueva carpeta": la nueva recibe otro nombre.
+        QTRY_VERIFY_WITH_TIMEOUT(QFileInfo(directory.filePath(QStringLiteral("Nueva carpeta (2)"))).isDir(), 10000);
+        QTRY_COMPARE_WITH_TIMEOUT(pane->selectedPaths(),
+                                  QStringList{directory.filePath(QStringLiteral("Nueva carpeta (2)"))}, 10000);
+        // Queda abierta la casilla para escribirle el nombre definitivo.
+        QTRY_VERIFY_WITH_TIMEOUT(pane->view()->findChild<QLineEdit *>() != nullptr, 5000);
+        auto *editor = pane->view()->findChild<QLineEdit *>();
+        QCOMPARE(editor->text(), QStringLiteral("Nueva carpeta (2)"));
+
+        editor->setText(QStringLiteral("Viajes"));
+        QTest::keyClick(editor, Qt::Key_Return);
+        QTRY_VERIFY_WITH_TIMEOUT(QFileInfo(directory.filePath(QStringLiteral("Viajes"))).isDir(), 10000);
+        QVERIFY(!QFileInfo::exists(directory.filePath(QStringLiteral("Nueva carpeta (2)"))));
+        QTRY_COMPARE_WITH_TIMEOUT(pane->selectedPaths(), QStringList{directory.filePath(QStringLiteral("Viajes"))},
+                                  10000);
+        QVERIFY(waitIdle(window));
+    }
+
+    void renameKeepsExtensionOutOfTheSelection()
+    {
+        QTemporaryDir data;
+        QTemporaryDir directory;
+        writeFile(directory.filePath(QStringLiteral("informe.pdf")));
+        MainWindow window(m_scheduler, openJournal(data));
+        window.show();
+        BrowserPane *pane = window.openTab(directory.path());
+        QVERIFY(waitReady(pane));
+        selectNames(pane, {QStringLiteral("informe.pdf")});
+
+        window.renameSelection();
+        QTRY_VERIFY(pane->view()->findChild<QLineEdit *>() != nullptr);
+        auto *editor = pane->view()->findChild<QLineEdit *>();
+        QTRY_COMPARE(editor->selectedText(), QStringLiteral("informe"));
+
+        // Un nombre no válido se rechaza con un aviso y el archivo no cambia.
+        QSignalSpy reports(&window, &MainWindow::actionReported);
+        editor->setText(QStringLiteral("a/b.pdf"));
+        QTest::keyClick(editor, Qt::Key_Return);
+        QTRY_COMPARE_WITH_TIMEOUT(reports.count(), 1, 10000);
+        QCOMPARE(reports.first().at(1).toBool(), true);
+        QVERIFY(QFileInfo::exists(directory.filePath(QStringLiteral("informe.pdf"))));
+        QVERIFY(waitIdle(window));
+    }
+
+    void copyCutPasteAndUndo()
+    {
+        QTemporaryDir data;
+        QTemporaryDir directory;
+        QVERIFY(QDir(directory.path()).mkdir(QStringLiteral("origen")));
+        writeFile(directory.filePath(QStringLiteral("origen/foto.jpg")), 1500);
+        writeFile(directory.filePath(QStringLiteral("origen/nota.txt")), 10);
+        QVERIFY(QDir(directory.path()).mkdir(QStringLiteral("destino")));
+        const QString source = directory.filePath(QStringLiteral("origen"));
+        const QString destination = directory.filePath(QStringLiteral("destino"));
+
+        MainWindow window(m_scheduler, openJournal(data));
+        window.show();
+        BrowserPane *pane = window.openTab(source);
+        QVERIFY(waitReady(pane));
+
+        // Copiar y pegar en otra carpeta.
+        selectNames(pane, {QStringLiteral("foto.jpg"), QStringLiteral("nota.txt")});
+        window.copySelection();
+        pane->navigateTo(destination);
+        QVERIFY(waitReady(pane));
+        window.paste();
+        QTRY_VERIFY_WITH_TIMEOUT(QFileInfo::exists(destination + QStringLiteral("/foto.jpg")), 10000);
+        QVERIFY(waitIdle(window));
+        QVERIFY(QFileInfo::exists(source + QStringLiteral("/foto.jpg")));
+        // Lo pegado queda seleccionado.
+        QTRY_COMPARE_WITH_TIMEOUT(pane->selectedPaths().size(), 2, 10000);
+
+        // Pegar otra vez en la misma carpeta no sobrescribe: crea copias con otro nombre.
+        window.paste();
+        QTRY_COMPARE_WITH_TIMEOUT(QDir(destination).entryList(QDir::Files).size(), 4, 10000);
+        QVERIFY(waitIdle(window));
+
+        // Deshacer quita solo esas últimas copias.
+        window.undo();
+        QTRY_COMPARE_WITH_TIMEOUT(QDir(destination).entryList(QDir::Files).size(), 2, 10000);
+        QVERIFY(waitIdle(window));
+
+        // Cortar y pegar mueve, y lo cortado se pega una sola vez.
+        QTRY_VERIFY_WITH_TIMEOUT(pane->model()->rowOfName(QStringLiteral("nota.txt")) >= 0, 10000);
+        QVERIFY(waitReady(pane));
+        selectNames(pane, {QStringLiteral("nota.txt")});
+        window.cutSelection();
+        QVERIFY(QDir(directory.path()).mkdir(QStringLiteral("otra")));
+        pane->navigateTo(directory.filePath(QStringLiteral("otra")));
+        QVERIFY(waitReady(pane));
+        window.paste();
+        QTRY_VERIFY_WITH_TIMEOUT(QFileInfo::exists(directory.filePath(QStringLiteral("otra/nota.txt"))), 10000);
+        QVERIFY(!QFileInfo::exists(destination + QStringLiteral("/nota.txt")));
+        QVERIFY(waitIdle(window));
+        QVERIFY(fileSelectionFrom(QGuiApplication::clipboard()->mimeData()).isEmpty());
+
+        // Deshacer devuelve el archivo a donde estaba.
+        window.undo();
+        QTRY_VERIFY_WITH_TIMEOUT(QFileInfo::exists(destination + QStringLiteral("/nota.txt")), 10000);
+        QVERIFY(waitIdle(window));
+    }
+
+    void trashAndPermanentDelete()
+    {
+        QTemporaryDir data;
+        QTemporaryDir directory;
+        writeFile(directory.filePath(QStringLiteral("a.txt")), 5);
+        writeFile(directory.filePath(QStringLiteral("b.txt")), 5);
+        MainWindow window(m_scheduler, openJournal(data));
+        window.show();
+        BrowserPane *pane = window.openTab(directory.path());
+        QVERIFY(waitReady(pane));
+
+        // Si el volumen temporal no admite papelera, la ventana pregunta por
+        // la eliminación permanente; aquí se contesta que no.
+        int questions = 0;
+        window.setDeleteConfirmation([&questions](const QStringList &) { ++questions; return false; });
+
+        selectNames(pane, {QStringLiteral("a.txt")});
+        QSignalSpy reports(&window, &MainWindow::actionReported);
+        window.trashSelection();
+        QTRY_VERIFY_WITH_TIMEOUT(reports.count() >= 1, 10000);
+        QVERIFY(waitIdle(window));
+        if (questions == 0) {
+            // Fue a la papelera: desaparece de la carpeta y Deshacer lo devuelve.
+            QVERIFY(!QFileInfo::exists(directory.filePath(QStringLiteral("a.txt"))));
+            QTRY_COMPARE_WITH_TIMEOUT(pane->model()->rowCount(), 1, 10000);
+            window.undo();
+            QTRY_VERIFY_WITH_TIMEOUT(QFileInfo::exists(directory.filePath(QStringLiteral("a.txt"))), 10000);
+            QVERIFY(waitIdle(window));
+        } else {
+            QVERIFY(QFileInfo::exists(directory.filePath(QStringLiteral("a.txt"))));
+        }
+
+        // Eliminación permanente: sin confirmar no se borra nada.
+        QTRY_COMPARE_WITH_TIMEOUT(pane->model()->rowCount(), 2, 10000);
+        QVERIFY(waitReady(pane));
+        selectNames(pane, {QStringLiteral("b.txt")});
+        questions = 0;
+        window.deleteSelectionPermanently();
+        QCOMPARE(questions, 1);
+        QVERIFY(waitIdle(window));
+        QVERIFY(QFileInfo::exists(directory.filePath(QStringLiteral("b.txt"))));
+
+        // Confirmando, se borra.
+        window.setDeleteConfirmation([](const QStringList &paths) { return paths.size() == 1; });
+        window.deleteSelectionPermanently();
+        QTRY_VERIFY_WITH_TIMEOUT(!QFileInfo::exists(directory.filePath(QStringLiteral("b.txt"))), 10000);
+        QVERIFY(waitIdle(window));
+        QTRY_COMPARE_WITH_TIMEOUT(pane->model()->rowCount(), 1, 10000);
+    }
+
+    void withoutJournalTheWindowOnlyBrowses()
+    {
+        QTemporaryDir directory;
+        writeFile(directory.filePath(QStringLiteral("a.txt")));
+        MainWindow window(m_scheduler);   // sin historial
+        BrowserPane *pane = window.openTab(directory.path());
+        QVERIFY(waitReady(pane));
+        selectNames(pane, {QStringLiteral("a.txt")});
+        window.trashSelection();
+        window.newFolder();
+        QTest::qWait(200);
+        QCOMPARE(QDir(directory.path()).entryList(QDir::AllEntries | QDir::NoDotAndDotDot).size(), 1);
     }
 
     void sessionIsRestored()

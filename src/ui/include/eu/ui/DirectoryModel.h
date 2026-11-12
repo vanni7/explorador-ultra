@@ -79,12 +79,18 @@ public:
     QVariant headerData(int section, Qt::Orientation orientation, int role = Qt::DisplayRole) const override;
     void sort(int column, Qt::SortOrder order = Qt::AscendingOrder) override;
     Qt::ItemFlags flags(const QModelIndex &index) const override;
+    /// Editar el nombre en la vista no cambia el modelo: pide el renombrado
+    /// con renameRequested() y devuelve false. El nombre nuevo aparece cuando
+    /// el disco cambia de verdad.
+    bool setData(const QModelIndex &index, const QVariant &value, int role = Qt::EditRole) override;
 
 signals:
     void stateChanged(eu::ui::DirectoryModel::State state);
     /// El contenido se sustituyó (carga terminada o refresco). La vista debe
     /// restaurar la selección a partir de los nombres.
     void contentReplaced();
+    /// El usuario escribió un nombre nuevo para un elemento.
+    void renameRequested(const QString &path, const QString &newName);
 
 private:
     struct TypeInfo

@@ -8,13 +8,68 @@
 #include <QHeaderView>
 #include <QItemSelectionModel>
 #include <QLabel>
+#include <QLineEdit>
 #include <QPushButton>
 #include <QStackedLayout>
+#include <QStyledItemDelegate>
+#include <QTimer>
 #include <QTreeView>
 #include <QUrl>
 #include <QVBoxLayout>
 
+#include <functional>
+
 namespace eu::ui {
+
+namespace {
+
+/// Cuántos caracteres del nombre se dejan seleccionados al empezar a
+/// renombrar: todo menos la extensión, para escribir encima sin perderla.
+/// "informe.pdf" -> 7, "copia.tar.gz" -> 5, ".bashrc" -> todo.
+qsizetype stemLength(const QString &name)
+{
+    qsizetype dot = name.lastIndexOf(QLatin1Char('.'));
+    if (dot <= 0) {
+        return name.size();
+    }
+    if (name.left(dot).endsWith(QStringLiteral(".tar"), Qt::CaseInsensitive) && dot > 4) {
+        dot -= 4;
+    }
+    return dot;
+}
+
+/// Editor del nombre en la lista. Solo añade dos cosas al de Qt: selecciona
+/// el nombre sin la extensión y avisa de cuándo empieza la edición.
+class NameDelegate : public QStyledItemDelegate
+{
+public:
+    NameDelegate(DirectoryModel *model, QObject *parent) : QStyledItemDelegate(parent), m_model(model) {}
+
+    std::function<void()> onEditingStarted;
+
+    QWidget *createEditor(QWidget *parent, const QStyleOptionViewItem &option,
+                          const QModelIndex &index) const override
+    {
+        QWidget *editor = QStyledItemDelegate::createEditor(parent, option, index);
+        if (onEditingStarted) {
+            onEditingStarted();
+        }
+        if (auto *lineEdit = qobject_cast<QLineEdit *>(editor)) {
+            const bool isDirectory = m_model->entryAt(index.row()).isDirectory;
+            const QString name = m_model->entryAt(index.row()).name;
+            const qsizetype length = isDirectory ? name.size() : stemLength(name);
+            // La vista selecciona todo el texto justo después de crear el
+            // editor; por eso la selección parcial se aplica un instante después.
+            QTimer::singleShot(0, lineEdit, [lineEdit, length] { lineEdit->setSelection(0, int(length)); });
+        }
+        return editor;
+    }
+
+private:
+    DirectoryModel *m_model;
+};
+
+} // namespace
 
 QString parentPathOf(const QString &path)
 {
@@ -48,7 +103,18 @@ BrowserPane::BrowserPane(tasks::Scheduler &scheduler, fs::DirectoryWatcher &watc
     m_view->setAllColumnsShowFocus(true);
     m_view->setSelectionMode(QAbstractItemView::ExtendedSelection);
     m_view->setSelectionBehavior(QAbstractItemView::SelectRows);
-    m_view->setEditTriggers(QAbstractItemView::NoEditTriggers);
+    // Renombrar: con la tecla de edición (F2; Intro en macOS) o con un clic
+    // sobre el nombre de un elemento ya seleccionado. El doble clic sigue
+    // abriendo: Qt distingue los dos casos por el tiempo entre clics (SPEC §8.2).
+    m_view->setEditTriggers(QAbstractItemView::EditKeyPressed | QAbstractItemView::SelectedClicked);
+    auto *nameDelegate = new NameDelegate(m_model, this);
+    nameDelegate->onEditingStarted = [this] { m_editing = true; };
+    m_view->setItemDelegateForColumn(int(Column::Name), nameDelegate);
+    connect(nameDelegate, &QAbstractItemDelegate::closeEditor, this, &BrowserPane::onEditingFinished);
+    m_view->setContextMenuPolicy(Qt::CustomContextMenu);
+    connect(m_view, &QWidget::customContextMenuRequested, this, [this](const QPoint &position) {
+        emit contextMenuRequested(m_view->viewport()->mapToGlobal(position));
+    });
     m_view->setSortingEnabled(true);
     m_view->sortByColumn(int(Column::Name), Qt::AscendingOrder);
     m_view->setAlternatingRowColors(true);
@@ -81,12 +147,13 @@ BrowserPane::BrowserPane(tasks::Scheduler &scheduler, fs::DirectoryWatcher &watc
     connect(m_view->selectionModel(), &QItemSelectionModel::selectionChanged, this, &BrowserPane::statusChanged);
     connect(m_model, &DirectoryModel::stateChanged, this, &BrowserPane::onModelStateChanged);
     connect(m_model, &DirectoryModel::contentReplaced, this, &BrowserPane::restoreSelection);
+    connect(m_model, &DirectoryModel::renameRequested, this, &BrowserPane::renameRequested);
     connect(m_model, &QAbstractItemModel::modelAboutToBeReset, this, &BrowserPane::rememberSelection);
     connect(m_model, &QAbstractItemModel::rowsInserted, this, &BrowserPane::statusChanged);
     connect(m_retryButton, &QPushButton::clicked, this, &BrowserPane::refresh);
     connect(&m_watcher, &fs::DirectoryWatcher::directoryChanged, this, [this](const QString &directory) {
         if (directory == m_watchedPath) {
-            m_model->refresh();
+            refresh();
         }
     });
 }
@@ -154,6 +221,9 @@ void BrowserPane::changePath(const QString &path, const QString &nameToSelect)
     // setPath vacía el modelo; lo que haya que seleccionar se fija después.
     m_selectedNames = nameToSelect.isEmpty() ? QStringList() : QStringList{nameToSelect};
     m_currentName = nameToSelect;
+    m_pendingNames.clear();
+    m_editing = false;
+    m_refreshDeferred = false;
 
     emit pathChanged(path);
     emit historyChanged();
@@ -162,7 +232,93 @@ void BrowserPane::changePath(const QString &path, const QString &nameToSelect)
 
 void BrowserPane::refresh()
 {
+    if (m_editing) {
+        m_refreshDeferred = true;   // se hará al terminar de escribir el nombre
+        return;
+    }
     m_model->refresh();
+}
+
+void BrowserPane::onEditingFinished()
+{
+    m_editing = false;
+    if (m_refreshDeferred) {
+        m_refreshDeferred = false;
+        m_model->refresh();
+    }
+}
+
+void BrowserPane::startRename()
+{
+    const QModelIndex current = m_view->currentIndex();
+    if (!current.isValid() || m_model->state() != DirectoryModel::State::Ready) {
+        return;
+    }
+    const QModelIndex nameIndex = m_model->index(current.row(), int(Column::Name));
+    m_view->setCurrentIndex(nameIndex);
+    m_view->edit(nameIndex);
+}
+
+void BrowserPane::selectWhenAvailable(const QStringList &names, bool editFirst)
+{
+    m_pendingNames = names;
+    m_pendingEdit = editFirst;
+    m_pendingAttempts = 2;   // si tras dos lecturas no aparecen, se deja de esperar
+    if (names.isEmpty()) {
+        return;
+    }
+    // Lo normal es que la vista aún no los tenga: se vuelve a leer la carpeta
+    // y se seleccionan cuando llegue el contenido nuevo (restoreSelection).
+    if (m_model->state() != DirectoryModel::State::Ready || !applyPendingSelection()) {
+        refresh();
+    }
+}
+
+bool BrowserPane::applyPendingSelection()
+{
+    QList<int> rows;
+    for (const QString &name : std::as_const(m_pendingNames)) {
+        const int row = m_model->rowOfName(name);
+        if (row >= 0) {
+            rows.append(row);
+        }
+    }
+    if (rows.isEmpty()) {
+        return false;
+    }
+    QItemSelectionModel *selection = m_view->selectionModel();
+    selection->clearSelection();
+    for (const int row : std::as_const(rows)) {
+        selection->select(m_model->index(row, 0), QItemSelectionModel::Select | QItemSelectionModel::Rows);
+    }
+    const QModelIndex first = m_model->index(rows.first(), int(Column::Name));
+    selection->setCurrentIndex(first, QItemSelectionModel::NoUpdate);
+    m_view->scrollTo(first);
+    const bool edit = m_pendingEdit;
+    m_pendingNames.clear();
+    m_pendingEdit = false;
+    if (edit) {
+        m_view->edit(first);
+    }
+    emit statusChanged();
+    return true;
+}
+
+QString BrowserPane::unusedName(const QString &wanted) const
+{
+    if (m_model->rowOfName(wanted) < 0) {
+        return wanted;
+    }
+    // "Nuevo archivo.txt" -> "Nuevo archivo (2).txt": el número va antes de la extensión.
+    const qsizetype dot = wanted.lastIndexOf(QLatin1Char('.'));
+    const QString stem = dot > 0 ? wanted.left(dot) : wanted;
+    const QString suffix = dot > 0 ? wanted.mid(dot) : QString();
+    for (int number = 2;; ++number) {
+        const QString candidate = QStringLiteral("%1 (%2)%3").arg(stem).arg(number).arg(suffix);
+        if (m_model->rowOfName(candidate) < 0) {
+            return candidate;
+        }
+    }
 }
 
 void BrowserPane::setShowHidden(bool show)
@@ -215,6 +371,14 @@ void BrowserPane::rememberSelection()
 
 void BrowserPane::restoreSelection()
 {
+    if (!m_pendingNames.isEmpty()) {
+        if (applyPendingSelection()) {
+            return;
+        }
+        if (--m_pendingAttempts <= 0) {
+            m_pendingNames.clear();
+        }
+    }
     QItemSelectionModel *selection = m_view->selectionModel();
     for (const QString &name : std::as_const(m_selectedNames)) {
         const int row = m_model->rowOfName(name);

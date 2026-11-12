@@ -18,6 +18,25 @@ PLURALS = {
     "%n elemento(s)": ("%n elemento", "%n elementos"),
     " (%n oculto(s))": (" (%n oculto)", " (%n ocultos)"),
     " · %n seleccionado(s)": (" · %n seleccionado", " · %n seleccionados"),
+    "%n elemento(s) listo(s) para mover: pega en la carpeta de destino.": (
+        "%n elemento listo para mover: pega en la carpeta de destino.",
+        "%n elementos listos para mover: pega en la carpeta de destino."),
+    "%n elemento(s) copiado(s) al portapapeles.": (
+        "%n elemento copiado al portapapeles.", "%n elementos copiados al portapapeles."),
+    "¿Eliminar permanentemente %n elemento(s)?": (
+        "¿Eliminar permanentemente %n elemento?", "¿Eliminar permanentemente %n elementos?"),
+    "…y %n más": ("…y %n más", "…y %n más"),
+    " (%n operación(es) en curso)": (" (%n operación en curso)", " (%n operaciones en curso)"),
+    "Se copiaron %n elemento(s).": ("Se copió %n elemento.", "Se copiaron %n elementos."),
+    "Se movieron %n elemento(s).": ("Se movió %n elemento.", "Se movieron %n elementos."),
+    "%n elemento(s) enviado(s) a la papelera.": (
+        "%n elemento enviado a la papelera.", "%n elementos enviados a la papelera."),
+    "%n elemento(s) eliminado(s) permanentemente.": (
+        "%n elemento eliminado permanentemente.", "%n elementos eliminados permanentemente."),
+    " %n omitido(s) porque ya existía(n) en el destino.": (
+        " %n omitido porque ya existía en el destino.", " %n omitidos porque ya existían en el destino."),
+    "Hubo %n problema(s). El detalle está abajo.": (
+        "Hubo %n problema. El detalle está abajo.", "Hubo %n problemas. El detalle está abajo."),
 }
 
 path = Path(__file__).resolve().parent.parent / "translations" / "explorador-ultra_es.ts"

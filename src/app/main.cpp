@@ -4,12 +4,14 @@
 
 #include "eu/core/Log.h"
 #include "eu/core/Version.h"
+#include "eu/journal/Journal.h"
 #include "eu/tasks/Scheduler.h"
 #include "eu/ui/MainWindow.h"
 
 #include <QApplication>
 #include <QCommandLineParser>
 #include <QDir>
+#include <QFileInfo>
 #include <QIcon>
 #include <QLibraryInfo>
 #include <QLocale>
@@ -77,7 +79,20 @@ int main(int argc, char *argv[])
         // El planificador se declara antes que la ventana para destruirse
         // después: así ninguna tarea sobrevive a los objetos que usa.
         eu::tasks::Scheduler scheduler;
-        eu::ui::MainWindow window(scheduler);
+        // Historial de operaciones. Si no se puede abrir, la aplicación sirve
+        // para navegar pero no modifica archivos (SPEC §9: anotar antes de actuar).
+        std::shared_ptr<eu::journal::Journal> journal;
+        const QString journalPath = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation)
+            + QStringLiteral("/historial.db");
+        QDir().mkpath(QFileInfo(journalPath).absolutePath());
+        const auto opened = eu::journal::Journal::open(journalPath);
+        if (opened.ok()) {
+            journal = opened.value();
+        } else {
+            qWarning("No se pudo abrir el historial en %s: %s", qPrintable(journalPath),
+                     qPrintable(opened.error().message));
+        }
+        eu::ui::MainWindow window(scheduler, journal);
 
         const QStringList arguments = parser.positionalArguments();
         if (!arguments.isEmpty()) {
