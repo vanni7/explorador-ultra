@@ -346,6 +346,13 @@ private slots:
         QTest::newRow("regex sin cerrar") << "regex:/abc";
         QTest::newRow("regex inválida") << "regex:/(/";
         QTest::newRow("filtro sin valor") << "ext:";
+        // Consultas a medio escribir, como las ve el filtro tecla a tecla.
+        QTest::newRow("solo abre paréntesis") << "(";
+        QTest::newRow("palabra y abre paréntesis") << "informe (";
+        QTest::newRow("paréntesis y OR") << "informe (marzo OR";
+        QTest::newRow("NOT y paréntesis") << "NOT (";
+        QTest::newRow("guion y paréntesis") << "-(";
+        QTest::newRow("AND solo") << "AND";
     }
 
     void syntaxErrors()
@@ -355,6 +362,22 @@ private slots:
         QVERIFY2(!result.ok(), qPrintable(query));
         // El mensaje explica el problema: no es un texto vacío ni genérico.
         QVERIFY(result.error().message.size() > 10);
+    }
+
+    void everyPrefixOfAQueryIsHandled()
+    {
+        // Al escribir, el analizador recibe todos los prefijos de la consulta:
+        // cada uno debe dar una consulta válida o un error explicado, nunca un fallo.
+        const QString full = QStringLiteral(
+            "informe (marzo OR \"acta final\") AND NOT -borrador ext:pdf,docx size:>1,5MB "
+            "modified:2025-01..2025-06 type:documento hidden:no regex:/^a(b|c)\\/d/i tag:rojo");
+        for (qsizetype length = 0; length <= full.size(); ++length) {
+            const core::Result<Query> result = Query::parse(full.left(length));
+            if (!result.ok()) {
+                QVERIFY2(!result.error().message.isEmpty(), qPrintable(full.left(length)));
+            }
+        }
+        QVERIFY(Query::parse(full).ok());
     }
 
     void filteringManyNamesIsFast()

@@ -42,6 +42,18 @@ Herramientas nativas sobre la misma carpeta (`hyperfine`, 10 ejecuciones, media 
 
 El archivo de origen estaba en la caché de RAM, así que estas cifras miden sobre todo la escritura. Origen y destino en el mismo disco.
 
+## Fase 2 — Filtrado local (2026-11-12)
+Equipo de desarrollo (Ubuntu 26.04, SSD), compilación `release`, medido por las propias pruebas (`test_search_query` y `test_ui_directory_model`), que imprimen la cifra en cada ejecución.
+
+| Medida | Resultado | Meta |
+|---|---|---|
+| Evaluar una consulta con comodines, `OR`, `ext:` y `NOT` contra 100 000 nombres de ~45 caracteres | ~15 ms | < 50 ms |
+| Aplicar un filtro a una carpeta de 100 000 elementos en el modelo de la vista (10 resultados) | 5 ms | < 50 ms por tecla |
+| Ídem con 3691 resultados | 7 ms | < 50 ms por tecla |
+| Quitar el filtro (vuelven los 100 000) | < 1 ms | < 50 ms por tecla |
+
+Lo que **no** incluyen estas cifras: el tiempo que tarda la vista en repintar tras el cambio, que no se ha medido.
+
 ### No medido todavía (pendiente)
 - Tiempo de apertura real de una carpeta en Archivos de GNOME (no hay forma fiable de automatizarlo; `gio list` es una aproximación de su motor, no de su interfaz).
 - Caché fría, HDD, USB y unidades de red.

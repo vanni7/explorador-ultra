@@ -10,6 +10,7 @@
 #include <functional>
 
 class QLabel;
+class QLineEdit;
 class QPushButton;
 class QStackedLayout;
 class QTreeView;
@@ -55,6 +56,11 @@ public:
     /// "Nueva carpeta (2)"… Se calcula con lo que hay a la vista, sin tocar el disco.
     QString unusedName(const QString &wanted) const;
 
+    bool isFilterVisible() const;
+    QLineEdit *filterEdit() const { return m_filterEdit; }
+    /// Mensaje de la barra de filtro: recuento, error de sintaxis o aviso.
+    QString filterMessage() const;
+
     /// Regla para decidir qué hace soltar archivos sin pulsar ninguna tecla:
     /// la función recibe (origen, carpeta de destino) y devuelve true si debe
     /// moverse. Sin regla, se copia (lo que nunca quita nada del origen).
@@ -72,6 +78,10 @@ public slots:
     void openSelection();
     /// Empieza a renombrar el elemento actual escribiendo sobre su nombre.
     void startRename();
+    /// Muestra la barra de filtro de esta carpeta y pone el cursor en ella.
+    void showFilter();
+    /// Quita el filtro y oculta la barra.
+    void hideFilter();
 
 signals:
     void pathChanged(const QString &path);
@@ -95,6 +105,8 @@ private:
     void restoreSelection();
     bool applyPendingSelection();
     void onEditingFinished();
+    void applyFilterText(const QString &text);
+    void updateFilterInfo();
 
     DirectoryModel *m_model = nullptr;
     fs::DirectoryWatcher &m_watcher;
@@ -103,6 +115,12 @@ private:
     QWidget *m_messagePage = nullptr;
     QLabel *m_messageLabel = nullptr;
     QPushButton *m_retryButton = nullptr;
+
+    // Barra de filtro local (SPEC §6.6).
+    QWidget *m_filterBar = nullptr;
+    QLineEdit *m_filterEdit = nullptr;
+    QLabel *m_filterInfo = nullptr;
+    QString m_filterProblem;   ///< Error de sintaxis o aviso del filtro escrito.
 
     QStringList m_backHistory;
     QStringList m_forwardHistory;

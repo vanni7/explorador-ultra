@@ -660,6 +660,55 @@ private slots:
         }
     }
 
+    void filterBarFiltersWhileTyping()
+    {
+        QTemporaryDir directory;
+        QVERIFY(QDir(directory.path()).mkdir(QStringLiteral("Fotos")));
+        writeFile(directory.filePath(QStringLiteral("informe marzo.pdf")));
+        writeFile(directory.filePath(QStringLiteral("informe abril.pdf")));
+        writeFile(directory.filePath(QStringLiteral("notas.txt")));
+        MainWindow window(m_scheduler);
+        window.show();
+        BrowserPane *pane = window.openTab(directory.path());
+        QVERIFY(waitReady(pane));
+        QVERIFY(!pane->isFilterVisible());
+
+        pane->showFilter();
+        QVERIFY(pane->isFilterVisible());
+        QTest::keyClicks(pane->filterEdit(), QStringLiteral("informe"));
+        QCOMPARE(pane->model()->rowCount(), 2);
+        QCOMPARE(pane->filterMessage(), QStringLiteral("2 de 4"));
+        QVERIFY(pane->statusText().contains(QStringLiteral("2")));
+
+        // Una consulta a medio escribir explica el problema y no vacía la lista.
+        QTest::keyClicks(pane->filterEdit(), QStringLiteral(" (marzo OR"));
+        QCOMPARE(pane->model()->rowCount(), 2);
+        QVERIFY(pane->filterMessage().contains(QStringLiteral("OR")));
+        QTest::keyClicks(pane->filterEdit(), QStringLiteral(" mayo)"));
+        QCOMPARE(pane->model()->rowCount(), 1);
+
+        // Un filtro que aún no existe se dice, no se aparenta.
+        pane->filterEdit()->setText(QStringLiteral("tag:rojo"));
+        QCOMPARE(pane->model()->rowCount(), 0);
+        QVERIFY(pane->filterMessage().contains(QStringLiteral("tag")));
+
+        // Esc quita el filtro y vuelve todo.
+        QTest::keyClick(pane->filterEdit(), Qt::Key_Escape);
+        QVERIFY(!pane->isFilterVisible());
+        QCOMPARE(pane->model()->rowCount(), 4);
+
+        // Entrar en otra carpeta también lo quita.
+        pane->showFilter();
+        pane->filterEdit()->setText(QStringLiteral("type:carpeta"));
+        QCOMPARE(pane->model()->rowCount(), 1);
+        pane->navigateTo(directory.filePath(QStringLiteral("Fotos")));
+        QVERIFY(waitReady(pane));
+        QVERIFY(!pane->isFilterVisible());
+        pane->goBack();
+        QVERIFY(waitReady(pane));
+        QCOMPARE(pane->model()->rowCount(), 4);
+    }
+
     void withoutJournalTheWindowOnlyBrowses()
     {
         QTemporaryDir directory;

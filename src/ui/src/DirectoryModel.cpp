@@ -66,6 +66,7 @@ void DirectoryModel::retireCurrentTask()
 void DirectoryModel::setPath(const QString &path)
 {
     m_path = QDir::cleanPath(path);
+    m_filter = search::Query();   // el filtro era para la carpeta anterior
     // Los tamaños calculados eran de la carpeta anterior.
     stopMeasuringFolders();
     m_folderSizes.clear();
@@ -93,6 +94,7 @@ void DirectoryModel::startLoading(bool keepCurrentContent)
     if (!keepCurrentContent) {
         beginResetModel();
         m_entries.clear();
+        m_unfiltered.clear();
         m_hiddenCount = 0;
         endResetModel();
         m_revealTimer.start();
@@ -139,6 +141,11 @@ void DirectoryModel::onBatch(quint64 generation, std::vector<fs::Entry> batch)
     int hidden = 0;
     std::vector<fs::Entry> visible = withoutHidden(std::move(batch), m_showHidden, &hidden);
     m_hiddenCount += hidden;
+    if (!m_filter.isEmpty()) {
+        // Carga progresiva con filtro: se guarda todo y se enseña lo que lo cumple.
+        m_unfiltered.insert(m_unfiltered.end(), visible.begin(), visible.end());
+        visible = filtered(visible);
+    }
     if (visible.empty()) {
         return;
     }
@@ -323,7 +330,13 @@ void DirectoryModel::onFolderSize(quint64 generation, const QString &name, const
 void DirectoryModel::replaceEntries(std::vector<fs::Entry> &&entries)
 {
     beginResetModel();
-    m_entries = std::move(entries);
+    if (m_filter.isEmpty()) {
+        m_entries = std::move(entries);
+        m_unfiltered.clear();
+    } else {
+        m_unfiltered = std::move(entries);
+        m_entries = filtered(m_unfiltered);
+    }
     endResetModel();
     m_progressive = false;
     m_keepCurrentContent = false;
@@ -342,6 +355,29 @@ std::vector<fs::Entry> DirectoryModel::withoutHidden(std::vector<fs::Entry> entr
     *hiddenCount = int(entries.end() - firstHidden);
     entries.erase(firstHidden, entries.end());
     return entries;
+}
+
+std::vector<fs::Entry> DirectoryModel::filtered(const std::vector<fs::Entry> &entries) const
+{
+    std::vector<fs::Entry> result;
+    for (const fs::Entry &entry : entries) {
+        if (m_filter.matches(entry)) {
+            result.push_back(entry);
+        }
+    }
+    return result;
+}
+
+void DirectoryModel::setFilter(const search::Query &filter)
+{
+    if (filter.isEmpty() && m_filter.isEmpty()) {
+        return;
+    }
+    // Se parte siempre de la lista completa, que está en un sitio u otro
+    // según hubiera filtro o no.
+    std::vector<fs::Entry> all = m_filter.isEmpty() ? std::move(m_entries) : std::move(m_unfiltered);
+    m_filter = filter;
+    replaceEntries(std::move(all));
 }
 
 void DirectoryModel::setState(State state)
@@ -615,7 +651,7 @@ void DirectoryModel::sort(int column, Qt::SortOrder order)
     }
     if (m_entries.size() <= 5000) {
         // Carpetas normales: ordenar aquí cuesta pocos milisegundos.
-        std::vector<fs::Entry> sorted = m_entries;
+        std::vector<fs::Entry> sorted = allEntries();
         sortEntries(sorted, m_sortColumn, m_sortOrder);
         replaceEntries(std::move(sorted));
         return;
@@ -625,7 +661,7 @@ void DirectoryModel::sort(int column, Qt::SortOrder order)
     ++m_generation;
     const quint64 generation = m_generation;
     m_task = m_scheduler.submit(tasks::Category::Listing, tasks::Priority::UserInteraction,
-                                [this, generation, entries = m_entries, sortColumn = m_sortColumn,
+                                [this, generation, entries = allEntries(), sortColumn = m_sortColumn,
                                  sortOrder = m_sortOrder](const tasks::CancelToken &cancel) mutable {
         sortEntries(entries, sortColumn, sortOrder);
         if (cancel.isCancelled()) {

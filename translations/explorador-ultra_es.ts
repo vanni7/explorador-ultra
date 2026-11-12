@@ -18,6 +18,13 @@
         </translation>
     </message>
     <message numerus="yes">
+        <source>Filtro: %1 de %n elemento(s)</source>
+        <translation>
+            <numerusform>Filtro: %1 de %n elemento</numerusform>
+            <numerusform>Filtro: %1 de %n elementos</numerusform>
+        </translation>
+    </message>
+    <message numerus="yes">
         <source> (%n oculto(s))</source>
         <translation>
             <numerusform> (%n oculto)</numerusform>

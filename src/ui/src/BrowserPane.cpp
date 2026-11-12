@@ -7,7 +7,9 @@
 #include <QApplication>
 #include <QDesktopServices>
 #include <QDir>
+#include <QAction>
 #include <QDragEnterEvent>
+#include <QHBoxLayout>
 #include <QHeaderView>
 #include <QItemSelectionModel>
 #include <QLabel>
@@ -16,9 +18,11 @@
 #include <QPainter>
 #include <QPushButton>
 #include <QRubberBand>
+#include <QSignalBlocker>
 #include <QStackedLayout>
 #include <QStyledItemDelegate>
 #include <QTimer>
+#include <QToolButton>
 #include <QTreeView>
 #include <QUrl>
 #include <QVBoxLayout>
@@ -360,15 +364,56 @@ BrowserPane::BrowserPane(tasks::Scheduler &scheduler, fs::DirectoryWatcher &watc
     messageLayout->addWidget(m_retryButton, 0, Qt::AlignHCenter);
     messageLayout->addStretch();
 
-    m_stack = new QStackedLayout(this);
+    auto *stackHost = new QWidget(this);
+    m_stack = new QStackedLayout(stackHost);
     m_stack->setContentsMargins(0, 0, 0, 0);
     m_stack->addWidget(m_view);
     m_stack->addWidget(m_messagePage);
+
+    // Barra de filtro: aparece bajo la lista, con otro color de fondo, para
+    // que no se confunda con la búsqueda global de la barra superior.
+    m_filterBar = new QWidget(this);
+    m_filterBar->setAutoFillBackground(true);
+    m_filterBar->setBackgroundRole(QPalette::AlternateBase);
+    auto *filterLabel = new QLabel(tr("Filtrar esta carpeta:"), m_filterBar);
+    m_filterEdit = new QLineEdit(m_filterBar);
+    m_filterEdit->setClearButtonEnabled(true);
+    m_filterEdit->setPlaceholderText(tr("nombre, *.pdf, ext:jpg, size:>1MB, modified:2025…"));
+    m_filterEdit->setAccessibleName(tr("Filtro de la carpeta"));
+    filterLabel->setBuddy(m_filterEdit);
+    m_filterInfo = new QLabel(m_filterBar);
+    auto *closeFilter = new QToolButton(m_filterBar);
+    closeFilter->setText(tr("Quitar filtro"));
+    closeFilter->setToolTip(tr("Quitar el filtro (Esc)"));
+    auto *filterLayout = new QHBoxLayout(m_filterBar);
+    filterLayout->setContentsMargins(6, 3, 6, 3);
+    filterLayout->addWidget(filterLabel);
+    filterLayout->addWidget(m_filterEdit, 1);
+    filterLayout->addWidget(m_filterInfo);
+    filterLayout->addWidget(closeFilter);
+    m_filterBar->hide();
+
+    auto *outerLayout = new QVBoxLayout(this);
+    outerLayout->setContentsMargins(0, 0, 0, 0);
+    outerLayout->setSpacing(0);
+    outerLayout->addWidget(stackHost, 1);
+    outerLayout->addWidget(m_filterBar);
+
+    connect(m_filterEdit, &QLineEdit::textChanged, this, &BrowserPane::applyFilterText);
+    connect(closeFilter, &QToolButton::clicked, this, &BrowserPane::hideFilter);
+    // Intro o flecha abajo: pasar a la lista filtrada. Esc: quitar el filtro.
+    connect(m_filterEdit, &QLineEdit::returnPressed, this, [this] { m_view->setFocus(); });
+    auto *escape = new QAction(m_filterEdit);
+    escape->setShortcut(QKeySequence(Qt::Key_Escape));
+    escape->setShortcutContext(Qt::WidgetShortcut);
+    m_filterEdit->addAction(escape);
+    connect(escape, &QAction::triggered, this, &BrowserPane::hideFilter);
 
     connect(m_view, &QTreeView::activated, this, &BrowserPane::onActivated);
     connect(m_view->selectionModel(), &QItemSelectionModel::selectionChanged, this, &BrowserPane::statusChanged);
     connect(m_model, &DirectoryModel::stateChanged, this, &BrowserPane::onModelStateChanged);
     connect(m_model, &DirectoryModel::contentReplaced, this, &BrowserPane::restoreSelection);
+    connect(m_model, &DirectoryModel::contentReplaced, this, &BrowserPane::updateFilterInfo);
     connect(m_model, &DirectoryModel::renameRequested, this, &BrowserPane::renameRequested);
     connect(m_model, &DirectoryModel::folderSizesChanged, this, &BrowserPane::statusChanged);
     connect(m_model, &QAbstractItemModel::modelAboutToBeReset, this, &BrowserPane::rememberSelection);
@@ -452,6 +497,14 @@ void BrowserPane::changePath(const QString &path, const QString &nameToSelect)
     m_pendingNames.clear();
     m_editing = false;
     m_refreshDeferred = false;
+    // El filtro era de la carpeta anterior (el modelo ya lo quitó en setPath).
+    if (m_filterBar != nullptr && !m_filterBar->isHidden()) {
+        const QSignalBlocker blocker(m_filterEdit);
+        m_filterEdit->clear();
+        m_filterProblem.clear();
+        m_filterBar->hide();
+        updateFilterInfo();
+    }
 
     emit pathChanged(path);
     emit historyChanged();
@@ -465,6 +518,68 @@ void BrowserPane::refresh()
         return;
     }
     m_model->refresh();
+}
+
+void BrowserPane::showFilter()
+{
+    m_filterBar->show();
+    m_filterEdit->setFocus(Qt::ShortcutFocusReason);
+    m_filterEdit->selectAll();
+}
+
+void BrowserPane::hideFilter()
+{
+    const bool hadFocus = m_filterEdit->hasFocus();
+    m_filterEdit->clear();   // quita el filtro (applyFilterText con texto vacío)
+    m_filterBar->hide();
+    if (hadFocus) {
+        m_view->setFocus();
+    }
+}
+
+bool BrowserPane::isFilterVisible() const
+{
+    return !m_filterBar->isHidden();
+}
+
+QString BrowserPane::filterMessage() const
+{
+    return m_filterInfo->text();
+}
+
+void BrowserPane::applyFilterText(const QString &text)
+{
+    const core::Result<search::Query> parsedQuery = search::Query::parse(text);
+    if (!parsedQuery.ok()) {
+        // Consulta a medio escribir o mal escrita: se explica y la lista se
+        // queda como estaba, en vez de vaciarse a cada tecla.
+        m_filterProblem = parsedQuery.error().message;
+        updateFilterInfo();
+        return;
+    }
+    m_filterProblem.clear();
+    const QStringList unavailable = parsedQuery.value().unavailableFilters();
+    if (!unavailable.isEmpty()) {
+        m_filterProblem = tr("Aún no disponible: %1").arg(unavailable.join(QStringLiteral(":, ")) + QLatin1Char(':'));
+    }
+    m_model->setFilter(parsedQuery.value());
+    updateFilterInfo();
+    emit statusChanged();
+}
+
+void BrowserPane::updateFilterInfo()
+{
+    QPalette palette = m_filterInfo->palette();
+    if (!m_filterProblem.isEmpty()) {
+        palette.setColor(QPalette::WindowText, QColor(0xb0, 0x2a, 0x1e));
+        m_filterInfo->setText(m_filterProblem);
+    } else {
+        palette = QPalette();
+        m_filterInfo->setText(m_model->filter().isEmpty()
+                                  ? QString()
+                                  : tr("%1 de %2").arg(m_model->rowCount()).arg(m_model->unfilteredCount()));
+    }
+    m_filterInfo->setPalette(palette);
 }
 
 void BrowserPane::onEditingFinished()
@@ -682,7 +797,9 @@ QString BrowserPane::statusText() const
     case DirectoryModel::State::Failed:
         return tr("No se pudo leer la carpeta");
     default:
-        text = tr("%n elemento(s)", nullptr, m_model->rowCount());
+        text = m_model->filter().isEmpty()
+            ? tr("%n elemento(s)", nullptr, m_model->rowCount())
+            : tr("Filtro: %1 de %n elemento(s)", nullptr, m_model->unfilteredCount()).arg(m_model->rowCount());
         break;
     }
     if (m_model->hiddenCount() > 0) {

@@ -541,7 +541,16 @@ public:
 
 private:
     const Token &peek() const { return m_tokens[m_index]; }
-    Token take() { return m_tokens[m_index++]; }
+    /// Consume una pieza. La última (End) no se consume nunca: así mirar la
+    /// siguiente es siempre válido, también con consultas a medio escribir.
+    Token take()
+    {
+        const Token token = m_tokens[m_index];
+        if (token.type != Token::Type::End) {
+            ++m_index;
+        }
+        return token;
+    }
 
     void fail(const QString &message)
     {

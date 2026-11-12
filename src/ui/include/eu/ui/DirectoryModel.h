@@ -5,6 +5,7 @@
 #include "eu/core/SizeFormat.h"
 #include "eu/fs/Entry.h"
 #include "eu/fs/TreeSize.h"
+#include "eu/search/Query.h"
 #include "eu/tasks/Scheduler.h"
 #include "eu/ui/EntrySort.h"
 
@@ -59,6 +60,14 @@ public:
 
     void setSizeUnits(core::SizeUnits units);
     core::SizeUnits sizeUnits() const { return m_sizeUnits; }
+
+    /// Filtro local (SPEC §6.6): deja a la vista solo los elementos que
+    /// cumplen la consulta, sin volver a leer el disco. Una consulta vacía lo
+    /// quita. Cambiar de carpeta también lo quita.
+    void setFilter(const search::Query &filter);
+    const search::Query &filter() const { return m_filter; }
+    /// Elementos de la carpeta sin contar el filtro (pero sí los ocultos descartados).
+    int unfilteredCount() const { return int(allEntries().size()); }
 
     /// Calcular el tamaño de las carpetas (SPEC §5.4). Se hace en segundo
     /// plano, carpeta por carpeta; el tamaño aparece creciendo y se detiene al
@@ -133,6 +142,8 @@ private:
     void revealPending();
     void replaceEntries(std::vector<fs::Entry> &&entries);
     void setState(State state);
+    const std::vector<fs::Entry> &allEntries() const { return m_filter.isEmpty() ? m_entries : m_unfiltered; }
+    std::vector<fs::Entry> filtered(const std::vector<fs::Entry> &entries) const;
     void startMeasuringFolders();
     void stopMeasuringFolders();
     void onFolderSize(quint64 generation, const QString &name, const fs::TreeSize &size, bool finished);
@@ -148,6 +159,11 @@ private:
 
     QString m_path;
     std::vector<fs::Entry> m_entries;   ///< Lo que la vista está mostrando.
+    /// Con un filtro puesto, todos los elementos de la carpeta (m_entries es
+    /// entonces el subconjunto que lo cumple). Sin filtro está vacío, para no
+    /// guardar la lista dos veces.
+    std::vector<fs::Entry> m_unfiltered;
+    search::Query m_filter;
     std::vector<fs::Entry> m_pending;   ///< Lotes recibidos y aún no mostrados.
     bool m_progressive = false;         ///< La carga actual ya se está mostrando por partes.
     bool m_keepCurrentContent = false;  ///< Refresco: no vaciar la vista mientras carga.

@@ -192,6 +192,12 @@ void MainWindow::createActions()
         }
     });
 
+    m_filterAction = new QAction(themedIcon(QStringLiteral("view-filter"), QStyle::SP_FileDialogContentsView),
+                                 tr("Filtrar esta carpeta"), this);
+    m_filterAction->setShortcut(QKeySequence(Qt::CTRL | Qt::Key_I));
+    m_filterAction->setToolTip(tr("Deja a la vista solo los elementos cuyo nombre coincide con lo que escribas"));
+    connect(m_filterAction, &QAction::triggered, this, [this] { if (auto *pane = currentPane()) pane->showFilter(); });
+
     m_editPathAction = new QAction(tr("Escribir una ruta"), this);
     m_editPathAction->setShortcuts({QKeySequence(Qt::CTRL | Qt::Key_L), QKeySequence(Qt::ALT | Qt::Key_D)});
 
@@ -208,6 +214,7 @@ void MainWindow::createActions()
 
     QMenu *viewMenu = menuBar()->addMenu(tr("&Ver"));
     viewMenu->addAction(m_refreshAction);
+    viewMenu->addAction(m_filterAction);
     viewMenu->addSeparator();
     viewMenu->addAction(m_showHiddenAction);
     viewMenu->addAction(m_binaryUnitsAction);

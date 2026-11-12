@@ -21,5 +21,5 @@ add_library(eu_ui STATIC
 add_library(eu::ui ALIAS eu_ui)
 
 target_include_directories(eu_ui PUBLIC include)
-target_link_libraries(eu_ui PUBLIC eu::core eu::tasks eu::fs eu::journal eu::ops_engine Qt6::Widgets)
+target_link_libraries(eu_ui PUBLIC eu::core eu::tasks eu::fs eu::search eu::journal eu::ops_engine Qt6::Widgets)
 eu_target_defaults(eu_ui)
