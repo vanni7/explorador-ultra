@@ -43,6 +43,7 @@ public:
     /// Abre una pestaña nueva en `path` y la deja activa.
     BrowserPane *openTab(const QString &path);
     BrowserPane *currentPane() const;
+    Sidebar *sidebar() const { return m_sidebar; }
     int tabCount() const;
 
     /// Restaura pestañas y geometría de la sesión anterior. Si no hay sesión
@@ -110,6 +111,7 @@ private:
     void copyToClipboard(bool cut);
     /// Copia o mueve `paths` a `destination` (pegar y soltar acaban aquí).
     void transfer(const QStringList &paths, const QString &destination, bool move);
+    bool movesByDefault(const QString &source, const QString &destination) const;
     bool askPermanentDelete(const QStringList &paths, const QString &reason);
     void onInterruptedOperationsFound(const QList<journal::Operation> &operations);
     RecoveryChoice askRecovery(const QList<journal::Operation> &operations);

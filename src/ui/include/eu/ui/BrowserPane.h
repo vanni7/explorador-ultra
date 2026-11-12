@@ -2,6 +2,7 @@
 #pragma once
 
 #include "eu/ui/DirectoryModel.h"
+#include "eu/ui/FileClipboard.h"
 
 #include <QStringList>
 #include <QWidget>
@@ -57,7 +58,7 @@ public:
     /// Regla para decidir qué hace soltar archivos sin pulsar ninguna tecla:
     /// la función recibe (origen, carpeta de destino) y devuelve true si debe
     /// moverse. Sin regla, se copia (lo que nunca quita nada del origen).
-    void setMoveByDefaultRule(std::function<bool(const QString &, const QString &)> rule);
+    void setMoveByDefaultRule(MoveByDefaultRule rule);
 
 public slots:
     void navigateTo(const QString &path);

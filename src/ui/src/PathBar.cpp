@@ -1,10 +1,14 @@
 // Explorador Ultra — SPDX-License-Identifier: GPL-3.0-or-later
 #include "eu/ui/PathBar.h"
 
+#include "eu/ui/FileClipboard.h"
+
 #include <QAbstractItemView>
+#include <QClipboard>
 #include <QCompleter>
 #include <QDir>
 #include <QFileSystemModel>
+#include <QGuiApplication>
 #include <QHBoxLayout>
 #include <QKeyEvent>
 #include <QLabel>
@@ -190,6 +194,14 @@ void PathBar::mousePressEvent(QMouseEvent *event)
 {
     QWidget::mousePressEvent(event);
     startEditing();
+    // Al hacer clic la ruta queda seleccionada y, de paso, copiada: lo normal
+    // es querer pegarla en otro sitio. Si en el portapapeles hay archivos
+    // copiados o cortados se respetan: perderlos estropearía un "pegar" pendiente.
+    QClipboard *clipboard = QGuiApplication::clipboard();
+    if (fileSelectionFrom(clipboard->mimeData()).isEmpty()) {
+        clipboard->setText(m_edit->text());
+        emit pathCopied(m_edit->text());
+    }
 }
 
 bool PathBar::eventFilter(QObject *watched, QEvent *event)

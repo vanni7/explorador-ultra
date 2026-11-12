@@ -50,6 +50,7 @@ Fase 1 en la rama `fase-1/core` (repositorio: github.com/vanni7/explorador-ultra
 - El motor de operaciones se compila como `eu_ops_engine` dentro de `src/trash/CMakeLists.txt` (necesita `eu_ops` y `eu_trash`); su código está en `src/ops`.
 - Compilar y probar en la VM de Windows: arrancar `EU-Win11-Build` y ejecutar `tools/windows/build.cmd` con `VBoxManage guestcontrol` (ver `docs/ENVIRONMENT.md`); `tools/windows/run-test.cmd <prueba>` muestra la salida de una sola.
 - TSan no ejecuta las pruebas con ventana (avisos falsos dentro de Qt y libdbus).
+- Probar con ratón de verdad sin molestar al escritorio: `Xvfb :77 -screen 0 1280x800x24 &`, lanzar la aplicación con `DISPLAY=:77 QT_QPA_PLATFORM=xcb HOME=<carpeta de prueba>` y manejarla con `xdotool`; capturas con `import -display :77 -window root salida.png`. No usar `pkill -f` (mata también la propia terminal).
 - Toda operación de archivos pedida desde la interfaz pasa por `ui::FileActions`; la ventana nunca llama al motor ni toca el disco. Las pruebas de ventana contestan a los diálogos con `MainWindow::setDeleteConfirmation` y `setRecoveryChoice`.
 - No recorrer con `for` el `.value()` de un `Result` devuelto por una llamada (`for (x : f().value())`): el resultado ya está destruido. Guardarlo antes en una variable.
 - Tras un corte de luz, si git dice «archivo de objeto … está vacío»: `find .git/objects -type f -empty -delete && git fetch origin` (lo enviado a GitHub se recupera; por eso se envía tras cada paso).

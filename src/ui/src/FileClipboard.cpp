@@ -1,6 +1,8 @@
 // Explorador Ultra — SPDX-License-Identifier: GPL-3.0-or-later
 #include "eu/ui/FileClipboard.h"
 
+#include "eu/ui/BrowserPane.h"
+
 #include <QDir>
 #include <QMimeData>
 #include <QUrl>
@@ -67,6 +69,38 @@ FileSelection fileSelectionFrom(const QMimeData *data)
         selection.cut = !effect.isEmpty() && (effect.at(0) & 0x02) != 0;
     }
     return selection;
+}
+
+DropPlan planDrop(const QMimeData *data, const QString &target, Qt::KeyboardModifiers modifiers,
+                  const MoveByDefaultRule &rule)
+{
+    DropPlan plan;
+    plan.paths = fileSelectionFrom(data).paths;
+    plan.target = QDir::cleanPath(target);
+    if (plan.paths.isEmpty() || target.isEmpty()) {
+        return plan;
+    }
+    if (modifiers.testFlag(Qt::ControlModifier)) {
+        plan.move = false;
+    } else if (modifiers.testFlag(Qt::ShiftModifier)) {
+        plan.move = true;
+    } else {
+        plan.move = rule ? rule(plan.paths.first(), plan.target) : false;
+    }
+
+    bool somethingToDo = false;
+    for (const QString &path : std::as_const(plan.paths)) {
+        // Una carpeta no se puede soltar dentro de sí misma.
+        if (plan.target == path || plan.target.startsWith(path + QLatin1Char('/'))) {
+            return plan;
+        }
+        // Mover algo a la carpeta donde ya está no cambia nada.
+        if (!plan.move || parentPathOf(path) != plan.target) {
+            somethingToDo = true;
+        }
+    }
+    plan.valid = somethingToDo;
+    return plan;
 }
 
 } // namespace eu::ui

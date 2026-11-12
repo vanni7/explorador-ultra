@@ -89,6 +89,13 @@ MainWindow::MainWindow(tasks::Scheduler &scheduler, std::shared_ptr<journal::Jou
     connect(m_tabs, &QTabWidget::currentChanged, this, &MainWindow::onCurrentTabChanged);
     connect(m_tabs, &QTabWidget::tabCloseRequested, this, &MainWindow::closeTab);
     connect(m_sidebar, &Sidebar::placeActivated, this, &MainWindow::navigateCurrentTo);
+    connect(m_sidebar, &Sidebar::filesDropped, this, &MainWindow::transfer);
+    m_sidebar->setMoveByDefaultRule([this](const QString &source, const QString &destination) {
+        return movesByDefault(source, destination);
+    });
+    connect(m_pathBar, &PathBar::pathCopied, this, [this] {
+        statusBar()->showMessage(tr("Ruta copiada al portapapeles."), 4000);
+    });
     connect(m_pathBar, &PathBar::pathRequested, this, &MainWindow::navigateCurrentTo);
 }
 
@@ -348,6 +355,29 @@ void MainWindow::createProgressWidgets()
             m_progressBox->show();
         }
     });
+}
+
+bool MainWindow::movesByDefault(const QString &source, const QString &destination) const
+{
+    // Soltar sin teclas: dentro de la misma unidad se mueve y entre unidades
+    // se copia, como en los exploradores habituales. Se decide con la lista
+    // de unidades que ya está en memoria, sin consultar el disco.
+    const auto rootOf = [this](const QString &path) {
+        QString best;
+        const QList<fs::Volume> volumes = m_volumeMonitor.volumes();
+        for (const fs::Volume &volume : volumes) {
+            const QString root = volume.rootPath;
+            const bool inside = path == root
+                || path.startsWith(root.endsWith(QLatin1Char('/')) ? root : root + QLatin1Char('/'));
+            if (inside && root.size() > best.size()) {
+                best = root;
+            }
+        }
+        return best;
+    };
+    const QString sourceRoot = rootOf(source);
+    // Si no se sabe en qué unidad está, se copia: es lo que no quita nada.
+    return !sourceRoot.isEmpty() && sourceRoot == rootOf(destination);
 }
 
 void MainWindow::setDeleteConfirmation(std::function<bool(const QStringList &)> confirmation)
@@ -907,6 +937,7 @@ BrowserPane *MainWindow::openTab(const QString &path)
         updateTabTitle(pane);
         if (pane == currentPane()) {
             m_pathBar->setPath(pane->currentPath());
+            m_sidebar->setCurrentPath(pane->currentPath());
         }
     });
     connect(pane, &BrowserPane::historyChanged, this, &MainWindow::updateNavigationActions);
@@ -923,26 +954,8 @@ BrowserPane *MainWindow::openTab(const QString &path)
         showContextMenu(pane, globalPosition);
     });
     connect(pane, &BrowserPane::filesDropped, this, &MainWindow::transfer);
-    // Soltar sin teclas: dentro de la misma unidad se mueve y entre unidades
-    // se copia, como en los exploradores habituales. Se decide con la lista
-    // de unidades que ya está en memoria, sin consultar el disco.
     pane->setMoveByDefaultRule([this](const QString &source, const QString &destination) {
-        const auto rootOf = [this](const QString &path) {
-            QString best;
-            const QList<fs::Volume> volumes = m_volumeMonitor.volumes();
-            for (const fs::Volume &volume : volumes) {
-                const QString root = volume.rootPath;
-                const bool inside = path == root
-                    || path.startsWith(root.endsWith(QLatin1Char('/')) ? root : root + QLatin1Char('/'));
-                if (inside && root.size() > best.size()) {
-                    best = root;
-                }
-            }
-            return best;
-        };
-        const QString sourceRoot = rootOf(source);
-        // Si no se sabe en qué unidad está, se copia: es lo que no quita nada.
-        return !sourceRoot.isEmpty() && sourceRoot == rootOf(destination);
+        return movesByDefault(source, destination);
     });
     connect(pane, &BrowserPane::openFailed, this, [this](const QString &failedPath) {
         statusBar()->showMessage(tr("No se pudo abrir %1").arg(QDir::toNativeSeparators(failedPath)), 6000);
@@ -999,6 +1012,7 @@ void MainWindow::onCurrentTabChanged()
 {
     if (BrowserPane *pane = currentPane()) {
         m_pathBar->setPath(pane->currentPath());
+        m_sidebar->setCurrentPath(pane->currentPath());
     }
     updateNavigationActions();
     updateStatus();

@@ -4,11 +4,12 @@
 #include "eu/fs/DirectoryLister.h"
 #include "eu/ui/FileClipboard.h"
 
-#include <QAbstractFileIconProvider>
+#include <QApplication>
 #include <QDateTime>
 #include <QDir>
 #include <QLocale>
 #include <QMimeDatabase>
+#include <QStyle>
 
 #include <chrono>
 
@@ -410,26 +411,31 @@ const DirectoryModel::TypeInfo &DirectoryModel::typeInfoFor(const fs::Entry &ent
     }
 
     // Se deduce el tipo solo por el nombre (sin abrir el archivo): no hay E/S.
-    static const QAbstractFileIconProvider genericIcons;
+    // Icono: el del tema del escritorio si lo tiene; si no, el genérico del
+    // estilo de Qt, que existe siempre. Así ninguna fila queda sin icono.
+    const auto iconFor = [](const QStringList &themeNames, QStyle::StandardPixmap fallback) {
+        for (const QString &name : themeNames) {
+            if (!name.isEmpty() && QIcon::hasThemeIcon(name)) {
+                return QIcon::fromTheme(name);
+            }
+        }
+        return QApplication::style()->standardIcon(fallback);
+    };
     TypeInfo info;
     if (key == folderKey) {
         info.description = tr("Carpeta");
-        info.icon = QIcon::fromTheme(QStringLiteral("folder"),
-                                     genericIcons.icon(QAbstractFileIconProvider::Folder));
+        info.icon = iconFor({QStringLiteral("folder"), QStringLiteral("inode-directory")}, QStyle::SP_DirIcon);
     } else if (key == linkBrokenKey) {
         info.description = tr("Enlace roto");
-        info.icon = QIcon::fromTheme(QStringLiteral("emblem-unreadable"),
-                                     genericIcons.icon(QAbstractFileIconProvider::File));
+        info.icon = iconFor({QStringLiteral("emblem-unreadable"), QStringLiteral("dialog-warning")},
+                            QStyle::SP_MessageBoxWarning);
     } else {
         static const QMimeDatabase mimeDatabase;
         const QMimeType mime = mimeDatabase.mimeTypeForFile(entry.name, QMimeDatabase::MatchExtension);
         info.description = mime.isDefault() ? (key.isEmpty() ? tr("Archivo") : tr("Archivo %1").arg(key.toUpper()))
                                             : mime.comment();
-        QIcon icon = QIcon::fromTheme(mime.iconName());
-        if (icon.isNull()) {
-            icon = QIcon::fromTheme(mime.genericIconName(), genericIcons.icon(QAbstractFileIconProvider::File));
-        }
-        info.icon = icon;
+        info.icon = iconFor({mime.iconName(), mime.genericIconName(), QStringLiteral("text-x-generic")},
+                            QStyle::SP_FileIcon);
     }
     return m_typeCache.insert(key, info).value();
 }

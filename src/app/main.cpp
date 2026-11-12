@@ -34,6 +34,31 @@ int main(int argc, char *argv[])
     QSettings::setDefaultFormat(QSettings::IniFormat);
     QApplication::setWindowIcon(QIcon(QStringLiteral(":/icon/explorador-ultra.svg")));
 
+#ifdef Q_OS_LINUX
+    // Tema de iconos. Si Qt no consigue saber cuál usa el escritorio, se queda
+    // con "hicolor", que casi no trae iconos, y la lista saldría sin ellos.
+    // En ese caso se elige el primero instalado de los habituales.
+    if (QIcon::themeName().isEmpty() || QIcon::themeName() == QLatin1String("hicolor")) {
+        const QStringList candidates{QStringLiteral("Yaru"), QStringLiteral("Adwaita"), QStringLiteral("breeze"),
+                                     QStringLiteral("Papirus"), QStringLiteral("elementary"),
+                                     QStringLiteral("Mint-Y"), QStringLiteral("oxygen")};
+        bool chosen = false;
+        for (const QString &candidate : candidates) {
+            const QStringList searchPaths = QIcon::themeSearchPaths();
+            for (const QString &searchPath : searchPaths) {
+                if (QFileInfo::exists(searchPath + QLatin1Char('/') + candidate + QStringLiteral("/index.theme"))) {
+                    QIcon::setThemeName(candidate);
+                    chosen = true;
+                    break;
+                }
+            }
+            if (chosen) {
+                break;
+            }
+        }
+    }
+#endif
+
     // Traducciones: primero las de Qt (botones estándar, diálogos) y luego las
     // propias. Hoy solo existe el español; añadir un idioma es añadir un .ts.
     QTranslator qtTranslator;

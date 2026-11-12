@@ -7,6 +7,9 @@
 
 #include <QApplication>
 #include <QDir>
+#include <QDragEnterEvent>
+#include <QMimeData>
+#include <QPainter>
 #include <QPointer>
 #include <QStandardItemModel>
 #include <QStandardPaths>
@@ -78,19 +81,128 @@ Sidebar::Sidebar(tasks::Scheduler &scheduler, fs::VolumeMonitor &volumes, QWidge
     connect(this, &QTreeView::expanded, this, [this](const QModelIndex &index) {
         loadChildren(m_model->itemFromIndex(index));
     });
-    // Un solo clic basta para ir a un lugar, como en los exploradores habituales.
-    connect(this, &QTreeView::clicked, this, [this](const QModelIndex &index) {
-        const QString path = index.data(PathRole).toString();
-        if (!path.isEmpty()) {
-            emit placeActivated(path);
-        }
-    });
+    // Un solo clic va al lugar y despliega sus subcarpetas; otro clic sobre
+    // la misma carpeta las recoge. El doble clic no hace nada distinto (si lo
+    // hiciera, desplegaría y recogería seguido).
+    setExpandsOnDoubleClick(false);
+    connect(this, &QTreeView::clicked, this, &Sidebar::onClicked);
+    // Con el teclado: Intro va al lugar; las flechas despliegan y recogen.
     connect(this, &QTreeView::activated, this, [this](const QModelIndex &index) {
         const QString path = index.data(PathRole).toString();
-        if (!path.isEmpty()) {
+        if (!path.isEmpty() && !(QApplication::mouseButtons() & Qt::LeftButton)) {
             emit placeActivated(path);
         }
     });
+
+    setAcceptDrops(true);
+    setDragDropMode(QAbstractItemView::DropOnly);
+    setDropIndicatorShown(false);
+}
+
+void Sidebar::onClicked(const QModelIndex &index)
+{
+    const QString path = index.data(PathRole).toString();
+    if (path.isEmpty()) {
+        return;
+    }
+    // Un clic en la flecha de desplegar ya lo atiende la vista: solo despliega
+    // o recoge, sin ir a la carpeta.
+    const QPoint position = viewport()->mapFromGlobal(QCursor::pos());
+    const bool onArrow = viewport()->rect().contains(position) && position.x() < visualRect(index).left();
+    if (onArrow) {
+        return;
+    }
+    // Si ya se está viendo esa carpeta, el clic solo cambia desplegado/recogido.
+    if (path == m_currentPath) {
+        setExpanded(index, !isExpanded(index));
+    } else {
+        setExpanded(index, true);
+        emit placeActivated(path);
+    }
+}
+
+QString Sidebar::pathAt(const QPoint &position) const
+{
+    return indexAt(position).data(PathRole).toString();
+}
+
+QPoint Sidebar::positionOf(const QString &path) const
+{
+    const QModelIndexList found = m_model->match(m_model->index(0, 0), PathRole, path, 1,
+                                                 Qt::MatchExactly | Qt::MatchRecursive);
+    return found.isEmpty() ? QPoint() : visualRect(found.first()).center();
+}
+
+DropPlan Sidebar::planFor(const QDropEvent *event) const
+{
+    const QString target = pathAt(event->position().toPoint());
+    if (target.isEmpty()) {
+        return {};   // sobre un rótulo de sección o el espacio vacío
+    }
+    return planDrop(event->mimeData(), target, event->modifiers(), m_moveByDefault);
+}
+
+void Sidebar::setDropTarget(const QModelIndex &index)
+{
+    if (m_dropIndex != index) {
+        m_dropIndex = index;
+        viewport()->update();
+    }
+}
+
+void Sidebar::dragEnterEvent(QDragEnterEvent *event)
+{
+    if (fileSelectionFrom(event->mimeData()).isEmpty()) {
+        event->ignore();
+        return;
+    }
+    event->acceptProposedAction();
+}
+
+void Sidebar::dragMoveEvent(QDragMoveEvent *event)
+{
+    const DropPlan plan = planFor(event);
+    setDropTarget(plan.valid ? indexAt(event->position().toPoint()) : QModelIndex());
+    if (!plan.valid) {
+        event->ignore();
+        return;
+    }
+    event->setDropAction(plan.move ? Qt::MoveAction : Qt::CopyAction);
+    event->accept();
+}
+
+void Sidebar::dragLeaveEvent(QDragLeaveEvent *event)
+{
+    setDropTarget(QModelIndex());
+    event->accept();
+}
+
+void Sidebar::dropEvent(QDropEvent *event)
+{
+    const DropPlan plan = planFor(event);
+    setDropTarget(QModelIndex());
+    if (!plan.valid) {
+        event->ignore();
+        return;
+    }
+    // Igual que en la lista de archivos: al origen se le contesta "copiado"
+    // para que nunca borre el original por su cuenta.
+    event->setDropAction(Qt::CopyAction);
+    event->accept();
+    emit filesDropped(plan.paths, plan.target, plan.move);
+}
+
+void Sidebar::paintEvent(QPaintEvent *event)
+{
+    QTreeView::paintEvent(event);
+    if (!m_dropIndex.isValid()) {
+        return;
+    }
+    QRect frame = visualRect(m_dropIndex);
+    frame.setRight(viewport()->width() - 1);
+    QPainter painter(viewport());
+    painter.setPen(QPen(palette().color(QPalette::Highlight), 2));
+    painter.drawRect(frame.adjusted(1, 1, -2, -2));
 }
 
 QStandardItem *Sidebar::makeFolderItem(const QString &text, const QString &path, const QIcon &icon)

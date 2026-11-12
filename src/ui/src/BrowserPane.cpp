@@ -4,6 +4,7 @@
 #include "eu/fs/DirectoryWatcher.h"
 #include "eu/ui/FileClipboard.h"
 
+#include <QApplication>
 #include <QDesktopServices>
 #include <QDir>
 #include <QDragEnterEvent>
@@ -14,6 +15,7 @@
 #include <QMimeData>
 #include <QPainter>
 #include <QPushButton>
+#include <QRubberBand>
 #include <QStackedLayout>
 #include <QStyledItemDelegate>
 #include <QTimer>
@@ -75,11 +77,16 @@ private:
     DirectoryModel *m_model;
 };
 
-/// La lista de archivos, con arrastrar y soltar.
+/// La lista de archivos, con arrastrar y soltar y selección con recuadro.
 ///
 /// Soltar sobre una carpeta deja los archivos dentro de ella; soltar en
 /// cualquier otro punto, en la carpeta que se está viendo. Con Ctrl se copia,
 /// con Mayús se mueve, y sin teclas decide la regla que pone la ventana.
+///
+/// Arrastrar desde el nombre o el icono de un elemento lo arrastra. Arrastrar
+/// desde cualquier otro punto (a la derecha del nombre, las otras columnas o
+/// el espacio vacío) dibuja un recuadro que selecciona las filas que toca,
+/// como en los exploradores habituales.
 class FileView : public QTreeView
 {
 public:
@@ -91,10 +98,62 @@ public:
         setDropIndicatorShown(false);   // el destino se marca aquí, con un recuadro
     }
 
-    std::function<bool(const QString &, const QString &)> moveByDefault;
+    MoveByDefaultRule moveByDefault;
     std::function<void(const QStringList &, const QString &, bool)> onDrop;
 
 protected:
+    void mousePressEvent(QMouseEvent *event) override
+    {
+        m_bandCandidate = false;
+        m_bandActive = false;
+        if (event->button() == Qt::LeftButton && !isOverName(event->position().toPoint())) {
+            // Posible inicio de un recuadro: se recuerda dónde, en coordenadas
+            // del contenido (para que el desplazamiento no lo mueva).
+            m_bandCandidate = true;
+            m_bandOrigin = event->position().toPoint() + QPoint(horizontalOffset(), verticalOffset());
+            m_bandKeepsSelection = event->modifiers().testFlag(Qt::ControlModifier);
+            m_selectionBeforeBand = selectionModel()->selection();
+        }
+        QTreeView::mousePressEvent(event);
+    }
+
+    void mouseMoveEvent(QMouseEvent *event) override
+    {
+        if (!m_bandCandidate || !(event->buttons() & Qt::LeftButton)) {
+            QTreeView::mouseMoveEvent(event);
+            return;
+        }
+        const QPoint position = event->position().toPoint();
+        const QPoint origin = m_bandOrigin - QPoint(horizontalOffset(), verticalOffset());
+        if (!m_bandActive && (position - origin).manhattanLength() < QApplication::startDragDistance()) {
+            return;
+        }
+        m_bandActive = true;
+        if (m_band == nullptr) {
+            m_band = new QRubberBand(QRubberBand::Rectangle, viewport());
+        }
+        m_band->setGeometry(QRect(origin, position).normalized());
+        m_band->show();
+        selectRowsBetween(m_bandOrigin.y(), position.y() + verticalOffset());
+        // No se llama a la clase base: así no empieza un arrastre de archivos.
+    }
+
+    void mouseReleaseEvent(QMouseEvent *event) override
+    {
+        const bool wasBand = m_bandActive;
+        m_bandCandidate = false;
+        m_bandActive = false;
+        if (m_band != nullptr) {
+            m_band->hide();
+        }
+        if (wasBand) {
+            setState(QAbstractItemView::NoState);
+            event->accept();
+            return;   // la selección ya quedó hecha; no es un clic
+        }
+        QTreeView::mouseReleaseEvent(event);
+    }
+
     void dragEnterEvent(QDragEnterEvent *event) override
     {
         if (fileSelectionFrom(event->mimeData()).isEmpty()) {
@@ -106,8 +165,9 @@ protected:
 
     void dragMoveEvent(QDragMoveEvent *event) override
     {
-        const Plan plan = planFor(event);
-        setDropTarget(plan.valid, plan.targetRow);
+        int targetRow = -1;
+        const DropPlan plan = planFor(event, &targetRow);
+        setDropTarget(plan.valid, targetRow);
         if (!plan.valid) {
             event->ignore();
             return;
@@ -125,7 +185,8 @@ protected:
 
     void dropEvent(QDropEvent *event) override
     {
-        const Plan plan = planFor(event);
+        int targetRow = -1;
+        const DropPlan plan = planFor(event, &targetRow);
         setDropTarget(false, -1);
         if (!plan.valid) {
             event->ignore();
@@ -161,51 +222,48 @@ protected:
     }
 
 private:
-    struct Plan
+    /// true si el punto cae sobre el icono o el texto del nombre de una fila.
+    bool isOverName(const QPoint &position) const
     {
-        bool valid = false;
-        bool move = false;
-        int targetRow = -1;   ///< Fila de la carpeta de destino; -1 = la carpeta a la vista.
-        QString target;
-        QStringList paths;
-    };
-
-    Plan planFor(const QDropEvent *event) const
-    {
-        Plan plan;
-        plan.paths = fileSelectionFrom(event->mimeData()).paths;
-        if (plan.paths.isEmpty() || m_model->path().isEmpty() || m_model->state() != DirectoryModel::State::Ready) {
-            return plan;
+        const QModelIndex index = indexAt(position);
+        if (!index.isValid() || index.column() != int(Column::Name)) {
+            return false;
         }
-        plan.target = m_model->path();
+        const QRect cell = visualRect(index);
+        const int textWidth = fontMetrics().horizontalAdvance(m_model->entryAt(index.row()).name);
+        const int nameRight = cell.left() + iconSize().width() + textWidth + 16;   // icono, texto y márgenes
+        return position.x() <= qMin(nameRight, cell.right());
+    }
+
+    /// Selecciona las filas entre dos alturas (en coordenadas del contenido).
+    void selectRowsBetween(int contentY1, int contentY2)
+    {
+        const int rows = m_model->rowCount();
+        const int rowHeight = rows > 0 ? visualRect(m_model->index(0, 0)).height() : 0;
+        QItemSelection selection = m_bandKeepsSelection ? m_selectionBeforeBand : QItemSelection();
+        if (rowHeight > 0) {
+            const int first = qMax(0, qMin(contentY1, contentY2) / rowHeight);
+            const int last = qMin(rows - 1, qMax(contentY1, contentY2) / rowHeight);
+            if (first <= last) {
+                selection.merge(QItemSelection(m_model->index(first, 0), m_model->index(last, int(Column::Count) - 1)),
+                                QItemSelectionModel::Select);
+            }
+        }
+        selectionModel()->select(selection, QItemSelectionModel::ClearAndSelect);
+    }
+
+    DropPlan planFor(const QDropEvent *event, int *targetRow) const
+    {
+        if (m_model->path().isEmpty() || m_model->state() != DirectoryModel::State::Ready) {
+            return {};
+        }
+        QString target = m_model->path();
         const QModelIndex index = indexAt(event->position().toPoint());
         if (index.isValid() && m_model->entryAt(index.row()).isDirectory) {
-            plan.targetRow = index.row();
-            plan.target = m_model->filePath(index.row());
+            *targetRow = index.row();
+            target = m_model->filePath(index.row());
         }
-
-        const Qt::KeyboardModifiers modifiers = event->modifiers();
-        if (modifiers.testFlag(Qt::ControlModifier)) {
-            plan.move = false;
-        } else if (modifiers.testFlag(Qt::ShiftModifier)) {
-            plan.move = true;
-        } else {
-            plan.move = moveByDefault ? moveByDefault(plan.paths.first(), plan.target) : false;
-        }
-
-        bool somethingToDo = false;
-        for (const QString &path : std::as_const(plan.paths)) {
-            // Una carpeta no se puede soltar dentro de sí misma.
-            if (plan.target == path || plan.target.startsWith(path + QLatin1Char('/'))) {
-                return plan;
-            }
-            // Mover algo a la carpeta donde ya está no cambia nada.
-            if (!plan.move || parentPathOf(path) != plan.target) {
-                somethingToDo = true;
-            }
-        }
-        plan.valid = somethingToDo;
-        return plan;
+        return planDrop(event->mimeData(), target, event->modifiers(), moveByDefault);
     }
 
     void setDropTarget(bool active, int row)
@@ -220,6 +278,13 @@ private:
     DirectoryModel *m_model;
     bool m_dropActive = false;
     int m_dropRow = -1;
+
+    QRubberBand *m_band = nullptr;
+    bool m_bandCandidate = false;
+    bool m_bandActive = false;
+    bool m_bandKeepsSelection = false;
+    QPoint m_bandOrigin;
+    QItemSelection m_selectionBeforeBand;
 };
 
 } // namespace
@@ -316,7 +381,7 @@ BrowserPane::BrowserPane(tasks::Scheduler &scheduler, fs::DirectoryWatcher &watc
     });
 }
 
-void BrowserPane::setMoveByDefaultRule(std::function<bool(const QString &, const QString &)> rule)
+void BrowserPane::setMoveByDefaultRule(MoveByDefaultRule rule)
 {
     static_cast<FileView *>(m_view)->moveByDefault = std::move(rule);
 }

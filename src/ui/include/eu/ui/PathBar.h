@@ -34,6 +34,8 @@ public slots:
 signals:
     /// El usuario pidió ir a esta ruta.
     void pathRequested(const QString &path);
+    /// La ruta se copió al portapapeles al hacer clic sobre ella.
+    void pathCopied(const QString &nativePath);
 
 protected:
     void mousePressEvent(QMouseEvent *event) override;

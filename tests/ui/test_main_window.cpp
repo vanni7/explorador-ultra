@@ -595,6 +595,71 @@ private slots:
         QVERIFY(!QFileInfo::exists(drop));
     }
 
+    void dropPlanRules()
+    {
+        std::unique_ptr<QMimeData> files(makeFileMimeData({QStringLiteral("/a/uno.txt"), QStringLiteral("/a/dos.txt")}, false));
+        const MoveByDefaultRule sameDisk = [](const QString &, const QString &) { return true; };
+
+        // Sin teclas decide la regla; sin regla se copia.
+        QVERIFY(planDrop(files.get(), QStringLiteral("/b"), Qt::NoModifier, sameDisk).move);
+        QVERIFY(!planDrop(files.get(), QStringLiteral("/b"), Qt::NoModifier, {}).move);
+        QVERIFY(!planDrop(files.get(), QStringLiteral("/b"), Qt::ControlModifier, sameDisk).move);
+        QVERIFY(planDrop(files.get(), QStringLiteral("/b"), Qt::ShiftModifier, {}).move);
+        QCOMPARE(planDrop(files.get(), QStringLiteral("/b"), Qt::NoModifier, sameDisk).paths.size(), 2);
+
+        // Mover a la carpeta donde ya están no es nada; copiar ahí sí (duplica).
+        QVERIFY(!planDrop(files.get(), QStringLiteral("/a"), Qt::ShiftModifier, {}).valid);
+        QVERIFY(planDrop(files.get(), QStringLiteral("/a"), Qt::ControlModifier, {}).valid);
+        // Una carpeta dentro de sí misma, nunca.
+        std::unique_ptr<QMimeData> folder(makeFileMimeData({QStringLiteral("/a")}, false));
+        QVERIFY(!planDrop(folder.get(), QStringLiteral("/a/sub"), Qt::ControlModifier, {}).valid);
+        QVERIFY(!planDrop(folder.get(), QStringLiteral("/a"), Qt::ControlModifier, {}).valid);
+        QVERIFY(planDrop(folder.get(), QStringLiteral("/ab"), Qt::ControlModifier, {}).valid);
+    }
+
+    void clickingThePathCopiesIt()
+    {
+        QTemporaryDir directory;
+        MainWindow window(m_scheduler);
+        window.show();
+        BrowserPane *pane = window.openTab(directory.path());
+        QVERIFY(waitReady(pane));
+        auto *pathBar = window.findChild<PathBar *>();
+        QVERIFY(pathBar != nullptr);
+
+        QGuiApplication::clipboard()->clear();
+        QTest::mouseClick(pathBar, Qt::LeftButton, Qt::NoModifier, QPoint(pathBar->width() - 4, pathBar->height() / 2));
+        QCOMPARE(QGuiApplication::clipboard()->text(), QDir::toNativeSeparators(QDir::cleanPath(directory.path())));
+        auto *edit = pathBar->findChild<QLineEdit *>();
+        QVERIFY(edit != nullptr);
+        QCOMPARE(edit->selectedText(), edit->text());
+        QTest::keyClick(edit, Qt::Key_Escape);
+
+        // Si hay archivos copiados esperando a pegarse, no se pisan.
+        QGuiApplication::clipboard()->setMimeData(makeFileMimeData({directory.filePath(QStringLiteral("x"))}, true));
+        QTest::mouseClick(pathBar, Qt::LeftButton, Qt::NoModifier, QPoint(pathBar->width() - 4, pathBar->height() / 2));
+        QVERIFY(fileSelectionFrom(QGuiApplication::clipboard()->mimeData()).cut);
+        QGuiApplication::clipboard()->clear();
+    }
+
+    void everyRowHasAnIcon()
+    {
+        QTemporaryDir directory;
+        QVERIFY(QDir(directory.path()).mkdir(QStringLiteral("carpeta")));
+        writeFile(directory.filePath(QStringLiteral("a.txt")));
+        writeFile(directory.filePath(QStringLiteral("sin-extension")));
+        writeFile(directory.filePath(QStringLiteral("raro.zzzxq")));
+        MainWindow window(m_scheduler);
+        BrowserPane *pane = window.openTab(directory.path());
+        QVERIFY(waitReady(pane));
+        QCOMPARE(pane->model()->rowCount(), 4);
+        for (int row = 0; row < pane->model()->rowCount(); ++row) {
+            const QIcon icon = pane->model()->index(row, 0).data(Qt::DecorationRole).value<QIcon>();
+            QVERIFY2(!icon.isNull() && !icon.pixmap(16, 16).isNull(),
+                     qPrintable(pane->model()->entryAt(row).name));
+        }
+    }
+
     void withoutJournalTheWindowOnlyBrowses()
     {
         QTemporaryDir directory;
