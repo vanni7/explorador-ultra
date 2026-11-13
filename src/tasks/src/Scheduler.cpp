@@ -76,7 +76,9 @@ SchedulerConfig SchedulerConfig::defaults()
         {Category::Hashing, std::clamp(cores / 2, 1, 4)},
         {Category::Media, 2},
         {Category::Thumbnails, std::clamp(cores / 2, 2, 6)},
-        {Category::Indexing, 1},
+        // Tres: el índice usa uno como mucho (IndexService) y quedan dos para
+        // las búsquedas, que así nunca esperan a que termine de indexar.
+        {Category::Indexing, 3},
         {Category::Metadata, 2},
         {Category::Compression, 2},
         {Category::General, 2},

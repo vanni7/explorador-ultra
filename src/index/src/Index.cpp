@@ -438,6 +438,18 @@ core::Result<SyncProgress> Index::sync(const QString &folder, const SyncOptions 
         }
 
         qint64 id = folderId(folder.relative, nullptr);
+        if (folder.relative.isEmpty() && onDisk.empty() && id >= 0) {
+            // La raíz aparece vacía pero había cosas anotadas: lo más probable
+            // es que la unidad no esté montada. No se borra el índice por eso.
+            loadEntries.bindValue(0, id);
+            const bool hadEntries = loadEntries.exec() && loadEntries.next();
+            loadEntries.finish();
+            if (hadEntries) {
+                database.rollback();
+                return core::Error{core::ErrorCode::Disconnected,
+                                   QStringLiteral("La unidad no está conectada o está vacía"), m_root, 0};
+            }
+        }
         if (id < 0) {
             insertFolder.bindValue(0, pathValue(folder.relative));
             insertFolder.bindValue(1, folder.hidden ? 1 : 0);

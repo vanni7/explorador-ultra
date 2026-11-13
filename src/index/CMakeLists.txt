@@ -2,8 +2,10 @@
 # de cambios que lo mantiene al día. Sin interfaz gráfica.
 add_library(eu_index STATIC
     src/Index.cpp
+    src/IndexService.cpp
     src/TreeWatcher.cpp
     include/eu/index/Index.h
+    include/eu/index/IndexService.h
     include/eu/index/TreeWatcher.h)
 add_library(eu::index ALIAS eu_index)
 
