@@ -124,8 +124,8 @@ void DirectoryModel::startLoading(bool keepCurrentContent)
     const Column sortColumn = m_sortColumn;
     const Qt::SortOrder sortOrder = m_sortOrder;
 
-    m_task = m_scheduler.submit(tasks::Category::Listing, tasks::Priority::VisibleNavigation,
-                                [this, generation, path, sortColumn, sortOrder](const tasks::CancelToken &cancel) {
+    m_task = m_scheduler.submitForPaths(tasks::Category::Listing, tasks::Priority::VisibleNavigation, {path},
+                                        [this, generation, path, sortColumn, sortOrder](const tasks::CancelToken &cancel) {
         std::vector<fs::Entry> all;
         const core::Status status = fs::listDirectory(path, fs::ListOptions(), cancel,
                                                       [&](std::vector<fs::Entry> &&batch) {
@@ -290,8 +290,8 @@ void DirectoryModel::startMeasuringFolders()
     const QString path = m_path;
     // Una sola tarea las mide de una en una: varias a la vez harían ir y
     // venir el cabezal de un disco mecánico y todo iría más lento.
-    m_sizeTask = m_scheduler.submit(tasks::Category::Metadata, tasks::Priority::Background,
-                                    [this, generation, path, names](const tasks::CancelToken &cancel) {
+    m_sizeTask = m_scheduler.submitForPaths(tasks::Category::Metadata, tasks::Priority::Background, {path},
+                                            [this, generation, path, names](const tasks::CancelToken &cancel) {
         using Clock = std::chrono::steady_clock;
         for (const QString &name : names) {
             if (cancel.isCancelled()) {

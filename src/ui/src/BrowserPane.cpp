@@ -853,8 +853,8 @@ void BrowserPane::startSearch()
     // los resultados son de la búsqueda vigente.
     const QPointer<BrowserPane> self(this);
     const quint64 generation = m_searchGeneration;
-    m_searchTask = m_scheduler.submit(
-        tasks::Category::Indexing, tasks::Priority::UserInteraction,
+    m_searchTask = m_scheduler.submitForPaths(
+        tasks::Category::Indexing, tasks::Priority::UserInteraction, spec.roots,
         [self, generation, roots = spec.roots, query = parsedQuery.value(), options, indexes,
          gate = m_searchGate](const tasks::CancelToken &cancel) {
             const auto deliver = [&](std::vector<search::Hit> &&hits, const search::SearchProgress &progress) {

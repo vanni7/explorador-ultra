@@ -2,6 +2,7 @@
 #pragma once
 
 #include "eu/fs/DirectoryWatcher.h"
+#include "eu/fs/DeviceMap.h"
 #include "eu/fs/Volumes.h"
 #include "eu/index/IndexService.h"
 #include "eu/journal/Journal.h"
@@ -156,6 +157,7 @@ private:
     tasks::Scheduler &m_scheduler;
     fs::DirectoryWatcher m_watcher;
     fs::VolumeMonitor m_volumeMonitor;
+    fs::DeviceMap m_deviceMap;   ///< Dice al planificador en qué unidad está cada ruta.
 
     QTabWidget *m_tabs = nullptr;
     Sidebar *m_sidebar = nullptr;

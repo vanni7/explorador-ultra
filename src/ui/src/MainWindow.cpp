@@ -60,8 +60,13 @@ QIcon themedIcon(const QString &name, QStyle::StandardPixmap fallback)
 } // namespace
 
 MainWindow::MainWindow(tasks::Scheduler &scheduler, std::shared_ptr<journal::Journal> journal, QWidget *parent)
-    : QMainWindow(parent), m_scheduler(scheduler)
+    : QMainWindow(parent), m_scheduler(scheduler), m_deviceMap(scheduler)
 {
+    // Concurrencia adaptada a cada unidad (SPEC §3.3): el planificador sabe
+    // de qué clase es el disco de cada tarea.
+    m_deviceMap.setVolumes(m_volumeMonitor.volumes());
+    connect(&m_volumeMonitor, &fs::VolumeMonitor::volumesChanged, this,
+            [this](const QList<fs::Volume> &volumes) { m_deviceMap.setVolumes(volumes); });
     m_actions = new FileActions(m_scheduler, std::move(journal), this);
     // Índices de búsqueda: una base por unidad, junto a los demás datos de la
     // aplicación. La carpeta de la papelera no se indexa (SPEC §10).

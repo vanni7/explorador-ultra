@@ -352,8 +352,8 @@ void Sidebar::loadChildren(QStandardItem *item)
     // La tarea no toca `this` directamente: el resultado vuelve al hilo de
     // interfaz y allí se comprueba, con el QPointer, que el panel sigue vivo.
     const QPointer<Sidebar> self(this);
-    m_scheduler.submit(tasks::Category::Listing, tasks::Priority::VisibleNavigation,
-                       [self, path](const tasks::CancelToken &cancel) {
+    m_scheduler.submitForPaths(tasks::Category::Listing, tasks::Priority::VisibleNavigation, {path},
+                               [self, path](const tasks::CancelToken &cancel) {
         QStringList folders;
         const core::Status status = fs::listDirectory(path, fs::ListOptions(), cancel,
                                                       [&](std::vector<fs::Entry> &&batch) {

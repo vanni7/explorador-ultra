@@ -105,6 +105,25 @@ int main(int argc, char *argv[])
         // El planificador se declara antes que la ventana para destruirse
         // después: así ninguna tarea sobrevive a los objetos que usa.
         eu::tasks::Scheduler scheduler;
+        // Límites de tareas simultáneas por clase de unidad (SPEC §3.3: todo
+        // configurable). Se cambian en el archivo de configuración, sección
+        // [concurrencia]: hdd=1, ssd=6, extraible=1, red=2, optico=1, virtual=6, desconocido=2.
+        {
+            using eu::tasks::DeviceClass;
+            const QSettings settings;
+            const std::pair<const char *, DeviceClass> classes[] = {
+                {"hdd", DeviceClass::Hdd},         {"ssd", DeviceClass::Ssd},
+                {"extraible", DeviceClass::Removable}, {"red", DeviceClass::Network},
+                {"optico", DeviceClass::Optical},  {"virtual", DeviceClass::Virtual},
+                {"desconocido", DeviceClass::Unknown},
+            };
+            for (const auto &[name, deviceClass] : classes) {
+                const QVariant value = settings.value(QStringLiteral("concurrencia/") + QLatin1String(name));
+                if (value.isValid() && value.toInt() >= 1) {
+                    scheduler.setDeviceLimit(deviceClass, value.toInt());
+                }
+            }
+        }
         // Historial de operaciones. Si no se puede abrir, la aplicación sirve
         // para navegar pero no modifica archivos (SPEC §9: anotar antes de actuar).
         std::shared_ptr<eu::journal::Journal> journal;

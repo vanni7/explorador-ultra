@@ -279,8 +279,10 @@ void IndexService::startTask(Root &root)
     const quint64 generation = root.generation;
     const QString path = root.status.root;
     TreeWatcher *watcher = root.watcher.get();   // vive hasta que la tarea termina (ver stopTask)
-    root.task = m_scheduler.submit(
-        tasks::Category::Indexing, tasks::Priority::Background,
+    // De fondo y sobre su unidad: en un disco lento espera a que no haya
+    // nadie más trabajando en él.
+    root.task = m_scheduler.submitForPaths(
+        tasks::Category::Indexing, tasks::Priority::Background, {path},
         [self, generation, path, whole, folders, watcher, index = root.index, gate = m_gate,
          excluded = m_excludedNames](const tasks::CancelToken &cancel) {
             SyncOptions options;
