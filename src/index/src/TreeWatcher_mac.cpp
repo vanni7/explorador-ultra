@@ -24,8 +24,8 @@ public:
             return;
         }
         const CFStringRef path = m_canonicalRoot.toCFString();
-        const CFArrayRef paths = CFArrayCreate(nullptr, reinterpret_cast<const void **>(&path), 1,
-                                               &kCFTypeArrayCallBacks);
+        const void *values[] = {path};
+        const CFArrayRef paths = CFArrayCreate(nullptr, values, 1, &kCFTypeArrayCallBacks);
         FSEventStreamContext context{};
         context.info = this;
         m_stream = FSEventStreamCreate(nullptr, &FsEventsTreeWatcher::onEvents, &context, paths,

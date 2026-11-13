@@ -27,6 +27,25 @@ El botón **Opciones**, a la derecha del buscador, decide cómo se busca. El tex
 
 La búsqueda en subcarpetas no entra en carpetas ocultas salvo que esté activado «Mostrar ocultos», no sigue enlaces simbólicos a carpetas y no pasa a otras unidades montadas dentro de la carpeta. Se detiene al llegar a 200 000 resultados y lo avisa.
 
+## Índice de búsqueda (opcional)
+Sin índice, buscar es recorrer las carpetas una a una. Con índice, las búsquedas por nombre, tamaño, fecha o tipo en una unidad salen de una base de datos local y tardan décimas de segundo.
+
+- **Qué se indexa**: lo decides tú. La primera vez que se abre la aplicación un asistente propone las unidades fijas; se puede aceptar, elegir, dejar para luego o rechazar. Después se cambia en **Ver → Índice de búsqueda…** (también en el botón Opciones del buscador): marcar una unidad la indexa y desmarcarla borra su índice. Ahí mismo se puede **Actualizar ahora**, **Reconstruir** y **Pausar la indexación**.
+- **Qué guarda**: nombre, carpeta, tamaño, fechas y tipo. No guarda el contenido de los archivos. Las bases están en la carpeta de datos de la aplicación (`indice/`), solo en este equipo. La carpeta de la papelera no se indexa.
+- **Cuándo se usa**: cuando la carpeta donde se busca está dentro de una unidad con el índice completo y la consulta se puede contestar con él. No se usa para «Solo en esta carpeta», para el contenido (`content:`) ni para buscar dentro de una carpeta oculta sin «Mostrar ocultos»; en esos casos se recorre el disco como siempre.
+- **Cómo se distingue**: la columna **Origen** dice «Índice» o «Disco», y la franja sobre los resultados avisa: «Resultados del índice, sin comprobar en el disco». El botón **Verificar en disco** repite la búsqueda recorriendo las carpetas.
+- **Cómo se mantiene al día**: al arrancar se vuelve a recorrer cada unidad indexada en segundo plano (mientras tanto el índice ya sirve, con lo que sabía). Con la aplicación abierta, el sistema avisa de los cambios y el índice los recoge en menos de un segundo. La barra de estado muestra el avance.
+- **Si una unidad no está conectada**, su índice se conserva y se sigue pudiendo buscar en él (los resultados dirán dónde estaban los archivos).
+
+### Límite de vigilancia en Linux (inotify)
+Linux vigila carpeta a carpeta y limita cuántas puede vigilar cada usuario entre todos sus programas (`fs.inotify.max_user_watches`; a menudo 65 536). Explorador Ultra usa como mucho el 60 % de ese límite para no dejar sin avisos a otros programas. Si tus unidades tienen más carpetas, las que no caben **se repasan cada 30 minutos** (y al pulsar «Actualizar ahora»), y la ventana del índice lo indica como «vigilancia parcial». Para vigilarlas todas:
+
+```
+sudo sysctl fs.inotify.max_user_watches=1048576
+echo fs.inotify.max_user_watches=1048576 | sudo tee /etc/sysctl.d/60-inotify.conf
+```
+La primera línea lo cambia ya; la segunda lo conserva al reiniciar. Cada carpeta vigilada ocupa alrededor de 1 kB de memoria del sistema. Después hay que reiniciar Explorador Ultra. En Windows y macOS el sistema vigila la unidad entera y no hay este límite.
+
 ## Lo esencial
 | Escribes | Encuentra |
 |---|---|
