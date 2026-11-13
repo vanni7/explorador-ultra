@@ -4,6 +4,7 @@
 #include "eu/ui/Locations.h"
 #include "eu/ui/MainWindow.h"
 #include "eu/ui/PathBar.h"
+#include "eu/ui/SearchResultsModel.h"
 #include "eu/ui/Sidebar.h"
 #include "eu/ui/TrashDialog.h"
 #include "eu/ui/VolumesView.h"
@@ -836,6 +837,167 @@ private slots:
         QTRY_VERIFY(pane->volumesView()->topLevelItemCount() >= 1);
         pane->goBack();
         QCOMPARE(pane->currentPath(), QDir::cleanPath(QDir::rootPath()));
+    }
+
+    void searchFindsInSubfoldersAsALocation()
+    {
+        QTemporaryDir directory;
+        const QString root = QDir::cleanPath(directory.path());
+        QVERIFY(QDir(root).mkpath(QStringLiteral("fotos/2025")));
+        QVERIFY(QDir(root).mkpath(QStringLiteral("playa de documentos")));
+        writeFile(root + QStringLiteral("/fotos/playa.jpg"), 3000);
+        writeFile(root + QStringLiteral("/fotos/2025/playa 2.jpg"), 5000);
+        writeFile(root + QStringLiteral("/fotos/2025/monte.jpg"), 100);
+        writeFile(root + QStringLiteral("/informe.pdf"), 10);
+
+        MainWindow window(m_scheduler, openJournal(directory));
+        BrowserPane *pane = window.openTab(root);
+        QVERIFY(waitReady(pane));
+        window.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&window));
+        const auto waitSearch = [pane] {
+            return QTest::qWaitFor([pane] { return pane->searchState() == BrowserPane::SearchState::Finished; }, 20000);
+        };
+
+        // Una consulta mal escrita no saca de la carpeta.
+        QVERIFY(window.searchEdit()->isEnabled());
+        window.searchEdit()->setText(QStringLiteral("(playa"));
+        QTest::keyClick(window.searchEdit(), Qt::Key_Return);
+        QVERIFY(pane->showsFolder());
+
+        // Escribir y pulsar Intro: los resultados ocupan la pestaña.
+        window.searchEdit()->setText(QStringLiteral("playa"));
+        QTest::keyClick(window.searchEdit(), Qt::Key_Return);
+        QVERIFY(pane->showsSearch());
+        QCOMPARE(searchRootOf(pane->currentPath()), root);
+        QCOMPARE(searchQueryOf(pane->currentPath()), QStringLiteral("playa"));
+        QVERIFY(waitSearch());
+        SearchResultsModel *results = pane->resultsModel();
+        QCOMPARE(results->count(), 3);
+        QVERIFY(pane->resultsView()->isVisible());
+        QVERIFY(!pane->view()->isVisible());
+        // Primero lo más cercano: la carpeta que está en la raíz.
+        QCOMPARE(results->hitAt(0).entry.name, QStringLiteral("playa de documentos"));
+        QVERIFY(results->rowOfPath(root + QStringLiteral("/fotos/2025/playa 2.jpg")) >= 0);
+        QCOMPARE(pane->searchProgress().foldersScanned, 4);
+        QVERIFY(pane->searchInfo().contains(QStringLiteral("playa")));
+        QVERIFY(pane->statusText().contains(QStringLiteral("3 resultado")));
+
+        // La columna Carpeta es relativa a donde se buscó; todo tiene icono.
+        const int deep = results->rowOfPath(root + QStringLiteral("/fotos/2025/playa 2.jpg"));
+        QCOMPARE(results->index(deep, SearchResultsModel::FolderColumn).data().toString(),
+                 QDir::toNativeSeparators(QStringLiteral("fotos/2025")));
+        for (int row = 0; row < results->count(); ++row) {
+            QVERIFY(!results->index(row, 0).data(Qt::DecorationRole).value<QIcon>().isNull());
+        }
+
+        // La ruta enseña la carpeta y, al final, la búsqueda; la pestaña también.
+        const auto crumbs = PathBar::crumbsFor(pane->currentPath());
+        QVERIFY(crumbs.last().first.contains(QStringLiteral("playa")));
+        QCOMPARE(crumbs[crumbs.size() - 2].second, root);
+
+        // Ordenar por tamaño (en segundo plano): el mayor arriba.
+        pane->resultsView()->sortByColumn(SearchResultsModel::SizeColumn, Qt::DescendingOrder);
+        QTRY_COMPARE(results->hitAt(0).entry.name, QStringLiteral("playa 2.jpg"));
+
+        // En los resultados no se crea ni se pega, pero sí se copia y se borra.
+        window.newFolder();
+        QVERIFY(!window.fileActions()->isBusy());
+        const int victim = results->rowOfPath(root + QStringLiteral("/fotos/playa.jpg"));
+        pane->resultsView()->selectionModel()->select(
+            results->index(victim, 0), QItemSelectionModel::ClearAndSelect | QItemSelectionModel::Rows);
+        QCOMPARE(pane->selectedPaths(), QStringList{root + QStringLiteral("/fotos/playa.jpg")});
+        QCOMPARE(pane->selectedCount(), 1);
+        window.trashSelection();
+        QVERIFY(waitIdle(window));
+        QVERIFY(!QFileInfo::exists(root + QStringLiteral("/fotos/playa.jpg")));
+        // Lo que ya no existe desaparece de la lista sin volver a buscar.
+        QTRY_COMPARE(results->count(), 2);
+        QCOMPARE(results->rowOfPath(root + QStringLiteral("/fotos/playa.jpg")), -1);
+
+        // "Abrir la carpeta que lo contiene" lleva a la carpeta con el archivo seleccionado.
+        const int other = results->rowOfPath(root + QStringLiteral("/fotos/2025/playa 2.jpg"));
+        pane->resultsView()->selectionModel()->select(
+            results->index(other, 0), QItemSelectionModel::ClearAndSelect | QItemSelectionModel::Rows);
+        pane->openContainingFolder();
+        QCOMPARE(pane->currentPath(), root + QStringLiteral("/fotos/2025"));
+        QVERIFY(pane->showsFolder());
+        QVERIFY(waitReady(pane));
+        QTRY_COMPARE(pane->selectedPaths(), QStringList{root + QStringLiteral("/fotos/2025/playa 2.jpg")});
+        QCOMPARE(pane->searchState(), BrowserPane::SearchState::Idle);
+        QCOMPARE(results->count(), 0);
+
+        // Atrás vuelve a los resultados (se busca de nuevo); Subir, a la carpeta.
+        pane->goBack();
+        QVERIFY(pane->showsSearch());
+        QVERIFY(waitSearch());
+        QCOMPARE(results->count(), 2);
+        QVERIFY(pane->canGoUp());
+        pane->goUp();
+        QCOMPARE(pane->currentPath(), root);
+        QVERIFY(waitReady(pane));
+
+        // Los filtros valen igual que en el filtro local.
+        pane->search(QStringLiteral("ext:jpg size:<1kB"));
+        QVERIFY(waitSearch());
+        QCOMPARE(results->count(), 1);
+        QCOMPARE(results->hitAt(0).entry.name, QStringLiteral("monte.jpg"));
+        // Abrir una carpeta encontrada entra en ella.
+        pane->search(QStringLiteral("type:folder 2025"));
+        QVERIFY(waitSearch());
+        QCOMPARE(results->count(), 1);
+        emit pane->resultsView()->activated(results->index(0, 0));
+        QCOMPARE(pane->currentPath(), root + QStringLiteral("/fotos/2025"));
+        QVERIFY(waitReady(pane));
+
+        // Unos resultados no se guardan en la sesión: se guarda la carpeta.
+        pane->search(QStringLiteral("playa"));
+        QVERIFY(waitSearch());
+        QVERIFY(window.close());
+        MainWindow restored(m_scheduler);
+        restored.restoreSession();
+        QCOMPARE(restored.tabCount(), 1);
+        QCOMPARE(restored.currentPane()->currentPath(), root + QStringLiteral("/fotos/2025"));
+        QSettings().clear();
+    }
+
+    void searchCanBePausedAndStopped()
+    {
+        QTemporaryDir directory;
+        const QString root = QDir::cleanPath(directory.path());
+        for (int i = 0; i < 400; ++i) {
+            QVERIFY(QDir(root).mkpath(QStringLiteral("c%1").arg(i)));
+            writeFile(root + QStringLiteral("/c%1/dato.txt").arg(i));
+        }
+        MainWindow window(m_scheduler);
+        BrowserPane *pane = window.openTab(root);
+        QVERIFY(waitReady(pane));
+
+        pane->search(QStringLiteral("dato"));
+        QCOMPARE(pane->searchState(), BrowserPane::SearchState::Running);
+        pane->setSearchPaused(true);
+        QCOMPARE(pane->searchState(), BrowserPane::SearchState::Paused);
+        // En pausa deja de avanzar (tras lo que ya venía de camino).
+        QTest::qWait(200);
+        const qint64 scanned = pane->searchProgress().foldersScanned;
+        QTest::qWait(200);
+        QCOMPARE(pane->searchProgress().foldersScanned, scanned);
+        QVERIFY(scanned < 401);
+
+        pane->setSearchPaused(false);
+        QTRY_COMPARE_WITH_TIMEOUT(pane->searchState(), BrowserPane::SearchState::Finished, 20000);
+        QCOMPARE(pane->resultsModel()->count(), 400);
+
+        // Detener deja lo encontrado y lo marca como incompleto; salir de los
+        // resultados con una búsqueda en marcha no deja nada colgado.
+        pane->refresh();
+        pane->stopSearch();
+        QCOMPARE(pane->searchState(), BrowserPane::SearchState::Stopped);
+        QVERIFY(pane->statusText().contains(QStringLiteral("detenida")));
+        pane->refresh();
+        pane->goBack();
+        QVERIFY(pane->showsFolder());
+        QCOMPARE(pane->searchState(), BrowserPane::SearchState::Idle);
     }
 
     void pasteIntoAnotherFolder()

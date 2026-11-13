@@ -2,6 +2,7 @@
 #pragma once
 
 #include "eu/fs/Volumes.h"
+#include "eu/search/Searcher.h"
 #include "eu/ui/DirectoryModel.h"
 #include "eu/ui/FileClipboard.h"
 
@@ -22,6 +23,7 @@ class DirectoryWatcher;
 
 namespace eu::ui {
 
+class SearchResultsModel;
 class VolumesView;
 
 /// Carpeta superior de una ruta, o cadena vacía si ya es una raíz.
@@ -50,6 +52,29 @@ public:
     void setSizeUnits(core::SizeUnits units);
     /// Pone el foco del teclado en la lista que esté a la vista.
     void focusContent();
+
+    /// true si la pestaña muestra los resultados de una búsqueda.
+    bool showsSearch() const;
+    /// true si muestra una carpeta del disco (ni unidades ni resultados).
+    bool showsFolder() const { return !showsVolumes() && !showsSearch(); }
+    enum class SearchState {
+        Idle,       ///< No hay búsqueda.
+        Running,
+        Paused,
+        Finished,   ///< Recorrió todo (o llegó al tope de resultados).
+        Stopped,    ///< El usuario la detuvo: los resultados están incompletos.
+        Invalid,    ///< La consulta tiene un error de sintaxis.
+    };
+    SearchState searchState() const { return m_searchState; }
+    const search::SearchProgress &searchProgress() const { return m_searchProgress; }
+    SearchResultsModel *resultsModel() const { return m_resultsModel; }
+    QTreeView *resultsView() const { return m_resultsView; }
+    /// Texto de la franja que hay sobre los resultados.
+    QString searchInfo() const;
+
+    /// Cuántos elementos hay seleccionados en la lista que está a la vista.
+    int selectedCount() const;
+    void selectAll();
     DirectoryModel *model() const { return m_model; }
     QTreeView *view() const { return m_view; }
 
@@ -97,6 +122,16 @@ public slots:
     void showFilter();
     /// Quita el filtro y oculta la barra.
     void hideFilter();
+    /// Busca en la carpeta actual y sus subcarpetas; los resultados ocupan la
+    /// pestaña como una ubicación más (se vuelve con Atrás).
+    void search(const QString &queryText);
+    void setSearchPaused(bool paused);
+    void stopSearch();
+    /// Va a la carpeta del resultado seleccionado y lo deja seleccionado.
+    void openContainingFolder();
+    /// Una operación de archivos terminó: la carpeta se vuelve a leer; de los
+    /// resultados de una búsqueda se quitan los que ya no existen.
+    void contentMayHaveChanged();
 
 signals:
     void pathChanged(const QString &path);
@@ -123,6 +158,12 @@ private:
     void applyFilterText(const QString &text);
     void updateFilterInfo();
     void reloadVolumes();
+    void startSearch();
+    void cancelSearch();
+    void onSearchHits(quint64 generation, std::vector<search::Hit> hits, const search::SearchProgress &progress);
+    void onSearchFinished(quint64 generation, const search::SearchSummary &summary);
+    void onResultActivated(const QModelIndex &index);
+    void updateSearchInfo();
 
     tasks::Scheduler &m_scheduler;
     QString m_location;   ///< Lo que muestra la pestaña: una carpeta o volumesLocation().
@@ -140,6 +181,22 @@ private:
     QTimer m_volumesTimer;            ///< Mantiene al día el espacio libre mientras se ve la lista.
     bool m_volumesLoading = false;
     QString m_volumeToSelect;         ///< Unidad que se selecciona al llegar la lista.
+
+    // Resultados de búsqueda (ubicación "buscar:").
+    QWidget *m_searchPage = nullptr;
+    QTreeView *m_resultsView = nullptr;
+    SearchResultsModel *m_resultsModel = nullptr;
+    QLabel *m_searchInfo = nullptr;
+    QPushButton *m_searchPauseButton = nullptr;
+    QPushButton *m_searchStopButton = nullptr;
+    QPushButton *m_searchAgainButton = nullptr;
+    tasks::TaskHandle m_searchTask;
+    std::shared_ptr<search::PauseGate> m_searchGate;
+    quint64 m_searchGeneration = 0;   ///< Lo que llegue de una búsqueda anterior se descarta.
+    SearchState m_searchState = SearchState::Idle;
+    search::SearchProgress m_searchProgress;
+    bool m_searchTruncated = false;
+    QString m_searchError;
 
     // Barra de filtro local (SPEC §6.6).
     QWidget *m_filterBar = nullptr;

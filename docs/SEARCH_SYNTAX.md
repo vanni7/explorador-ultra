@@ -2,6 +2,14 @@
 
 Así se escriben las consultas en Explorador Ultra. La misma sintaxis sirve para filtrar la carpeta que se está viendo y para la búsqueda global. La implementa el módulo `search` (`src/search`), y cada regla de este documento tiene su prueba en `tests/search/test_query.cpp`.
 
+## Dónde se escribe
+| Dónde | Qué hace |
+|---|---|
+| **Filtro** (Ctrl+I, bajo la lista) | Deja a la vista solo lo que cumple, dentro de la carpeta abierta. Actúa a cada tecla |
+| **Buscador** (Ctrl+F, arriba a la derecha) | Al pulsar Intro busca en la carpeta abierta **y en todas sus subcarpetas**. Los resultados ocupan la pestaña; se vuelve con Atrás o Subir |
+
+La búsqueda en subcarpetas no entra en carpetas ocultas salvo que esté activado «Mostrar ocultos», no sigue enlaces simbólicos a carpetas y no pasa a otras unidades montadas dentro de la carpeta. Se detiene al llegar a 200 000 resultados y lo avisa.
+
 ## Lo esencial
 | Escribes | Encuentra |
 |---|---|

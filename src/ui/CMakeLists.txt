@@ -8,8 +8,10 @@ add_library(eu_ui STATIC
     src/FileClipboard.cpp
     src/MainWindow.cpp
     src/PathBar.cpp
+    src/SearchResultsModel.cpp
     src/Sidebar.cpp
     src/TrashDialog.cpp
+    src/TypeCatalog.cpp
     src/VolumesView.cpp
     include/eu/ui/BrowserPane.h
     include/eu/ui/DirectoryModel.h
@@ -18,8 +20,10 @@ add_library(eu_ui STATIC
     include/eu/ui/Locations.h
     include/eu/ui/MainWindow.h
     include/eu/ui/PathBar.h
+    include/eu/ui/SearchResultsModel.h
     include/eu/ui/Sidebar.h
     include/eu/ui/TrashDialog.h
+    include/eu/ui/TypeCatalog.h
     include/eu/ui/VolumesView.h)
 add_library(eu::ui ALIAS eu_ui)
 

@@ -11,6 +11,34 @@
         </translation>
     </message>
     <message numerus="yes">
+        <source>Buscando… %n resultado(s)</source>
+        <translation>
+            <numerusform>Buscando… %n resultado</numerusform>
+            <numerusform>Buscando… %n resultados</numerusform>
+        </translation>
+    </message>
+    <message numerus="yes">
+        <source>Búsqueda en pausa: %n resultado(s)</source>
+        <translation>
+            <numerusform>Búsqueda en pausa: %n resultado</numerusform>
+            <numerusform>Búsqueda en pausa: %n resultados</numerusform>
+        </translation>
+    </message>
+    <message numerus="yes">
+        <source>Búsqueda detenida: %n resultado(s)</source>
+        <translation>
+            <numerusform>Búsqueda detenida: %n resultado</numerusform>
+            <numerusform>Búsqueda detenida: %n resultados</numerusform>
+        </translation>
+    </message>
+    <message numerus="yes">
+        <source>%n resultado(s)</source>
+        <translation>
+            <numerusform>%n resultado</numerusform>
+            <numerusform>%n resultados</numerusform>
+        </translation>
+    </message>
+    <message numerus="yes">
         <source>Cargando… %n elemento(s)</source>
         <translation>
             <numerusform>Cargando… %n elemento</numerusform>

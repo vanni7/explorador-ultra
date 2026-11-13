@@ -16,6 +16,7 @@
 
 class QAction;
 class QLabel;
+class QLineEdit;
 class QProgressBar;
 class QToolButton;
 class QSplitter;
@@ -44,6 +45,8 @@ public:
     BrowserPane *openTab(const QString &path);
     BrowserPane *currentPane() const;
     Sidebar *sidebar() const { return m_sidebar; }
+    /// Buscador de la barra superior.
+    QLineEdit *searchEdit() const { return m_searchEdit; }
     int tabCount() const;
 
     /// Restaura pestañas y geometría de la sesión anterior. Si no hay sesión
@@ -105,6 +108,8 @@ private:
     void updateTabTitle(BrowserPane *pane);
     void saveSession();
     void navigateCurrentTo(const QString &path);
+    void runSearch();
+    void syncSearchBox();
 
     void createEditActions();
     void createProgressWidgets();
@@ -162,6 +167,8 @@ private:
     QAction *m_binaryUnitsAction = nullptr;
     QAction *m_folderSizesAction = nullptr;
     QAction *m_filterAction = nullptr;
+    QAction *m_searchAction = nullptr;
+    QLineEdit *m_searchEdit = nullptr;
     QAction *m_editPathAction = nullptr;
 
     QAction *m_openAction = nullptr;

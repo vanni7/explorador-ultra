@@ -201,6 +201,14 @@ void MainWindow::createActions()
     m_filterAction->setToolTip(tr("Deja a la vista solo los elementos cuyo nombre coincide con lo que escribas"));
     connect(m_filterAction, &QAction::triggered, this, [this] { if (auto *pane = currentPane()) pane->showFilter(); });
 
+    m_searchAction = new QAction(themedIcon(QStringLiteral("edit-find"), QStyle::SP_FileDialogContentsView),
+                                 tr("Buscar en esta carpeta y sus subcarpetas"), this);
+    m_searchAction->setShortcut(QKeySequence::Find);
+    connect(m_searchAction, &QAction::triggered, this, [this] {
+        m_searchEdit->setFocus(Qt::ShortcutFocusReason);
+        m_searchEdit->selectAll();
+    });
+
     m_editPathAction = new QAction(tr("Escribir una ruta"), this);
     m_editPathAction->setShortcuts({QKeySequence(Qt::CTRL | Qt::Key_L), QKeySequence(Qt::ALT | Qt::Key_D)});
 
@@ -218,6 +226,7 @@ void MainWindow::createActions()
     QMenu *viewMenu = menuBar()->addMenu(tr("&Ver"));
     viewMenu->addAction(m_refreshAction);
     viewMenu->addAction(m_filterAction);
+    viewMenu->addAction(m_searchAction);
     viewMenu->addSeparator();
     viewMenu->addAction(m_showHiddenAction);
     viewMenu->addAction(m_binaryUnitsAction);
@@ -293,7 +302,7 @@ void MainWindow::createEditActions()
                                     tr("Seleccionar todo"), this);
     m_selectAllAction->setShortcut(QKeySequence::SelectAll);
     connect(m_selectAllAction, &QAction::triggered, this, [this] {
-        if (auto *pane = currentPane()) pane->view()->selectAll();
+        if (auto *pane = currentPane()) pane->selectAll();
     });
 
     m_showTrashAction = new QAction(themedIcon(QStringLiteral("user-trash-full"), QStyle::SP_TrashIcon),
@@ -402,19 +411,26 @@ void MainWindow::updateEditActions()
     }
     const BrowserPane *pane = currentPane();
     // En la lista de unidades no hay carpeta donde crear, pegar ni filtrar.
-    const bool inFolder = pane != nullptr && !pane->showsVolumes();
+    // Tampoco en los resultados de una búsqueda, pero ahí sí se puede copiar,
+    // cortar o borrar lo encontrado.
+    const bool inFolder = pane != nullptr && pane->showsFolder();
     const bool canModify = inFolder && m_actions->isAvailable();
+    const bool canRemove = pane != nullptr && m_actions->isAvailable();
     m_filterAction->setEnabled(inFolder);
-    const qsizetype selected = pane ? pane->view()->selectionModel()->selectedRows().size() : 0;
+    m_searchAction->setEnabled(pane != nullptr && !pane->showsVolumes());
+    if (m_searchEdit != nullptr) {
+        m_searchEdit->setEnabled(m_searchAction->isEnabled());
+    }
+    const int selected = pane ? pane->selectedCount() : 0;
     const bool canPaste = !fileSelectionFrom(QGuiApplication::clipboard()->mimeData()).isEmpty();
 
     m_openAction->setEnabled(selected > 0);
     m_copyAction->setEnabled(selected > 0);
-    m_cutAction->setEnabled(canModify && selected > 0);
+    m_cutAction->setEnabled(canRemove && selected > 0);
     m_pasteAction->setEnabled(canModify && canPaste);
     m_renameAction->setEnabled(canModify && selected == 1);
-    m_trashAction->setEnabled(canModify && selected > 0);
-    m_deleteAction->setEnabled(canModify && selected > 0);
+    m_trashAction->setEnabled(canRemove && selected > 0);
+    m_deleteAction->setEnabled(canRemove && selected > 0);
     m_newFolderAction->setEnabled(canModify);
     m_newFileAction->setEnabled(canModify);
     m_undoAction->setEnabled(m_actions->isAvailable());
@@ -424,7 +440,24 @@ void MainWindow::updateEditActions()
 void MainWindow::showContextMenu(BrowserPane *pane, const QPoint &globalPosition)
 {
     QMenu menu(this);
-    if (!pane->view()->selectionModel()->selectedRows().isEmpty()) {
+    if (pane->showsSearch()) {
+        // Sobre los resultados: lo que tiene sentido hacer con lo encontrado.
+        if (pane->selectedCount() == 0) {
+            return;
+        }
+        menu.addAction(m_openAction);
+        QAction *openFolder = menu.addAction(tr("Abrir la carpeta que lo contiene"));
+        connect(openFolder, &QAction::triggered, pane, &BrowserPane::openContainingFolder);
+        menu.addSeparator();
+        menu.addAction(m_cutAction);
+        menu.addAction(m_copyAction);
+        menu.addSeparator();
+        menu.addAction(m_trashAction);
+        menu.addAction(m_deleteAction);
+        menu.exec(globalPosition);
+        return;
+    }
+    if (pane->selectedCount() > 0) {
         menu.addAction(m_openAction);
         menu.addSeparator();
         menu.addAction(m_cutAction);
@@ -449,7 +482,7 @@ void MainWindow::showContextMenu(BrowserPane *pane, const QPoint &globalPosition
 void MainWindow::newFolder()
 {
     BrowserPane *pane = currentPane();
-    if (pane == nullptr || pane->showsVolumes() || !m_actions->isAvailable()) {
+    if (pane == nullptr || !pane->showsFolder() || !m_actions->isAvailable()) {
         return;
     }
     // Se crea ya con un nombre libre y se deja listo para escribir el definitivo.
@@ -461,7 +494,7 @@ void MainWindow::newFolder()
 void MainWindow::newFile()
 {
     BrowserPane *pane = currentPane();
-    if (pane == nullptr || pane->showsVolumes() || !m_actions->isAvailable()) {
+    if (pane == nullptr || !pane->showsFolder() || !m_actions->isAvailable()) {
         return;
     }
     const quint64 id = m_actions->createFile(pane->currentPath(), pane->unusedName(tr("Nuevo archivo.txt")));
@@ -502,7 +535,7 @@ void MainWindow::cutSelection()
 void MainWindow::paste()
 {
     const BrowserPane *pane = currentPane();
-    if (pane != nullptr && !pane->showsVolumes()) {
+    if (pane != nullptr && pane->showsFolder()) {
         pasteInto(pane->currentPath());
     }
 }
@@ -822,7 +855,7 @@ void MainWindow::onActionFinished(const ActionResult &result)
         } else {
             // La vigilancia de carpetas suele avisar sola; esto cubre los
             // sistemas de archivos donde no avisa (red, algunos USB).
-            pane->refresh();
+            pane->contentMayHaveChanged();
         }
     }
     if (result.id == m_renameAfterCreateId) {
@@ -957,13 +990,25 @@ void MainWindow::createToolBar()
     toolBar->addWidget(m_pathBar);
     connect(m_editPathAction, &QAction::triggered, m_pathBar, &PathBar::startEditing);
 
-    // La búsqueda llega en la Fase 2. Se muestra deshabilitada y rotulada como
-    // tal: ningún control aparenta funcionar sin hacerlo (SPEC §25.1).
-    auto *search = new QLineEdit(toolBar);
-    search->setPlaceholderText(tr("Buscar (próximamente)"));
-    search->setEnabled(false);
-    search->setFixedWidth(220);
-    toolBar->addWidget(search);
+    // Buscador: busca en la carpeta de la pestaña y en sus subcarpetas, con
+    // la misma sintaxis que el filtro (docs/SEARCH_SYNTAX.md).
+    m_searchEdit = new QLineEdit(toolBar);
+    m_searchEdit->setPlaceholderText(tr("Buscar aquí y en subcarpetas (Ctrl+F)"));
+    m_searchEdit->setToolTip(tr("Escribe y pulsa Intro. Ejemplos: factura 2025 · *.pdf · ext:jpg size:>5MB"));
+    m_searchEdit->setAccessibleName(tr("Buscar"));
+    m_searchEdit->setClearButtonEnabled(true);
+    m_searchEdit->setFixedWidth(260);
+    m_searchEdit->addAction(m_searchAction->icon(), QLineEdit::LeadingPosition);
+    toolBar->addWidget(m_searchEdit);
+    connect(m_searchEdit, &QLineEdit::returnPressed, this, &MainWindow::runSearch);
+    // Esc devuelve el teclado a la lista.
+    auto *leaveSearch = new QAction(m_searchEdit);
+    leaveSearch->setShortcut(QKeySequence(Qt::Key_Escape));
+    leaveSearch->setShortcutContext(Qt::WidgetShortcut);
+    m_searchEdit->addAction(leaveSearch);
+    connect(leaveSearch, &QAction::triggered, this, [this] {
+        if (auto *pane = currentPane()) pane->focusContent();
+    });
 
     toolBar->addAction(m_newTabAction);
     toolBar->addAction(m_showTrashAction);
@@ -982,6 +1027,8 @@ BrowserPane *MainWindow::openTab(const QString &path)
         if (pane == currentPane()) {
             m_pathBar->setPath(pane->currentPath());
             m_sidebar->setCurrentPath(pane->currentPath());
+            syncSearchBox();
+            updateEditActions();
         }
     });
     connect(pane, &BrowserPane::historyChanged, this, &MainWindow::updateNavigationActions);
@@ -1052,12 +1099,41 @@ void MainWindow::navigateCurrentTo(const QString &path)
     }
 }
 
+void MainWindow::runSearch()
+{
+    BrowserPane *pane = currentPane();
+    const QString text = m_searchEdit->text().trimmed();
+    if (pane == nullptr || text.isEmpty() || pane->showsVolumes()) {
+        return;
+    }
+    // Una consulta mal escrita se explica aquí, sin salir de la carpeta.
+    const core::Result<search::Query> parsedQuery = search::Query::parse(text);
+    if (!parsedQuery.ok()) {
+        statusBar()->showMessage(tr("No se puede buscar: %1").arg(parsedQuery.error().message), 10000);
+        return;
+    }
+    pane->search(text);
+    pane->focusContent();
+}
+
+void MainWindow::syncSearchBox()
+{
+    // El buscador enseña la consulta de la pestaña que se está viendo; fuera
+    // de unos resultados queda vacío.
+    const BrowserPane *pane = currentPane();
+    if (m_searchEdit == nullptr || m_searchEdit->hasFocus()) {
+        return;
+    }
+    m_searchEdit->setText(pane != nullptr && pane->showsSearch() ? searchQueryOf(pane->currentPath()) : QString());
+}
+
 void MainWindow::onCurrentTabChanged()
 {
     if (BrowserPane *pane = currentPane()) {
         m_pathBar->setPath(pane->currentPath());
         m_sidebar->setCurrentPath(pane->currentPath());
     }
+    syncSearchBox();
     updateNavigationActions();
     updateStatus();
     updateEditActions();
@@ -1087,12 +1163,16 @@ void MainWindow::updateTabTitle(BrowserPane *pane)
         return;
     }
     const QString path = pane->currentPath();
-    QString title = pane->showsVolumes() ? tr("Unidades") : QDir(path).dirName();
+    QString title = pane->showsVolumes() ? tr("Unidades")
+        : pane->showsSearch() ? tr("Buscar: %1").arg(searchQueryOf(path)) : QDir(path).dirName();
     if (title.isEmpty()) {
         title = QDir::toNativeSeparators(path);   // raíces: "/" o "C:\"
     }
     m_tabs->setTabText(index, title);
-    m_tabs->setTabToolTip(index, pane->showsVolumes() ? title : QDir::toNativeSeparators(path));
+    m_tabs->setTabToolTip(index, pane->showsVolumes() ? title
+                                 : pane->showsSearch()
+                                     ? tr("%1 en %2").arg(title, QDir::toNativeSeparators(searchRootOf(path)))
+                                     : QDir::toNativeSeparators(path));
     if (pane == currentPane()) {
         setWindowTitle(QStringLiteral("%1 — %2").arg(title, core::applicationName()));
     }
@@ -1133,7 +1213,9 @@ void MainWindow::saveSession()
 
     QStringList paths;
     for (int i = 0; i < m_tabs->count(); ++i) {
-        paths.append(static_cast<BrowserPane *>(m_tabs->widget(i))->currentPath());
+        // Unos resultados no se guardan: al volver se abre la carpeta donde se buscó.
+        const QString path = static_cast<BrowserPane *>(m_tabs->widget(i))->currentPath();
+        paths.append(isSearchLocation(path) ? searchRootOf(path) : path);
     }
     settings.setValue(QStringLiteral("session/tabs"), paths);
     settings.setValue(QStringLiteral("session/currentTab"), m_tabs->currentIndex());

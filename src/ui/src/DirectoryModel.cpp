@@ -18,8 +18,6 @@ namespace eu::ui {
 namespace {
 
 /// Clave de la caché de tipos para lo que no es un archivo corriente.
-const QString folderKey = QStringLiteral("/carpeta");
-const QString linkBrokenKey = QStringLiteral("/enlace-roto");
 
 } // namespace
 
@@ -450,52 +448,6 @@ int DirectoryModel::columnCount(const QModelIndex &parent) const
     return parent.isValid() ? 0 : int(Column::Count);
 }
 
-const DirectoryModel::TypeInfo &DirectoryModel::typeInfoFor(const fs::Entry &entry) const
-{
-    QString key;
-    if (entry.isBrokenSymlink) {
-        key = linkBrokenKey;
-    } else if (entry.isDirectory) {
-        key = folderKey;
-    } else {
-        key = suffixOf(entry.name);
-    }
-
-    auto it = m_typeCache.find(key);
-    if (it != m_typeCache.end()) {
-        return it.value();
-    }
-
-    // Se deduce el tipo solo por el nombre (sin abrir el archivo): no hay E/S.
-    // Icono: el del tema del escritorio si lo tiene; si no, el genérico del
-    // estilo de Qt, que existe siempre. Así ninguna fila queda sin icono.
-    const auto iconFor = [](const QStringList &themeNames, QStyle::StandardPixmap fallback) {
-        for (const QString &name : themeNames) {
-            if (!name.isEmpty() && QIcon::hasThemeIcon(name)) {
-                return QIcon::fromTheme(name);
-            }
-        }
-        return QApplication::style()->standardIcon(fallback);
-    };
-    TypeInfo info;
-    if (key == folderKey) {
-        info.description = tr("Carpeta");
-        info.icon = iconFor({QStringLiteral("folder"), QStringLiteral("inode-directory")}, QStyle::SP_DirIcon);
-    } else if (key == linkBrokenKey) {
-        info.description = tr("Enlace roto");
-        info.icon = iconFor({QStringLiteral("emblem-unreadable"), QStringLiteral("dialog-warning")},
-                            QStyle::SP_MessageBoxWarning);
-    } else {
-        static const QMimeDatabase mimeDatabase;
-        const QMimeType mime = mimeDatabase.mimeTypeForFile(entry.name, QMimeDatabase::MatchExtension);
-        info.description = mime.isDefault() ? (key.isEmpty() ? tr("Archivo") : tr("Archivo %1").arg(key.toUpper()))
-                                            : mime.comment();
-        info.icon = iconFor({mime.iconName(), mime.genericIconName(), QStringLiteral("text-x-generic")},
-                            QStyle::SP_FileIcon);
-    }
-    return m_typeCache.insert(key, info).value();
-}
-
 QVariant DirectoryModel::data(const QModelIndex &index, int role) const
 {
     if (!index.isValid() || index.row() >= int(m_entries.size())) {
@@ -529,7 +481,7 @@ QVariant DirectoryModel::data(const QModelIndex &index, int role) const
             }
             return core::formatSize(entry.size, m_sizeUnits);
         case Column::Type:
-            return typeInfoFor(entry).description;
+            return m_types.infoFor(entry).description;
         case Column::Modified:
             if (entry.modifiedMs == 0) {
                 return QString();
@@ -541,7 +493,7 @@ QVariant DirectoryModel::data(const QModelIndex &index, int role) const
         break;
     case Qt::DecorationRole:
         if (column == Column::Name) {
-            return typeInfoFor(entry).icon;
+            return m_types.infoFor(entry).icon;
         }
         break;
     case Qt::TextAlignmentRole:

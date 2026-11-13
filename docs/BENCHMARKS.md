@@ -54,6 +54,16 @@ Equipo de desarrollo (Ubuntu 26.04, SSD), compilación `release`, medido por las
 
 Lo que **no** incluyen estas cifras: el tiempo que tarda la vista en repintar tras el cambio, que no se ha medido.
 
+### Búsqueda en subcarpetas (Fase 2, paso 3)
+Sin índice: recorre el disco cada vez. Cifras de este equipo (SSD NVMe, caché caliente), 12-nov.
+
+| Qué | Resultado | Meta |
+|---|---|---|
+| Buscar `ext:pdf` en la carpeta personal (12 418 carpetas) | terminó en menos de 1,5 s (observado en la ventana, no cronometrado con precisión) | — |
+| Cancelar una búsqueda en pausa (`test_search_searcher`) | < 500 ms (la prueba falla si tarda más) | < 500 ms |
+
+No medido: caché fría, discos mecánicos, unidades de red, bloqueo del hilo de interfaz con cientos de miles de resultados.
+
 ### No medido todavía (pendiente)
 - Tiempo de apertura real de una carpeta en Archivos de GNOME (no hay forma fiable de automatizarlo; `gio list` es una aproximación de su motor, no de su interfaz).
 - Caché fría, HDD, USB y unidades de red.

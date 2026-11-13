@@ -8,6 +8,7 @@
 #include "eu/search/Query.h"
 #include "eu/tasks/Scheduler.h"
 #include "eu/ui/EntrySort.h"
+#include "eu/ui/TypeCatalog.h"
 
 #include <QAbstractTableModel>
 #include <QHash>
@@ -130,12 +131,6 @@ signals:
     void folderSizesChanged();
 
 private:
-    struct TypeInfo
-    {
-        QString description;
-        QIcon icon;
-    };
-
     void startLoading(bool keepCurrentContent);
     void cancelRunningTask();
     void retireCurrentTask();
@@ -149,7 +144,6 @@ private:
     void startMeasuringFolders();
     void stopMeasuringFolders();
     void onFolderSize(quint64 generation, const QString &name, const fs::TreeSize &size, bool finished);
-    const TypeInfo &typeInfoFor(const fs::Entry &entry) const;
     static std::vector<fs::Entry> withoutHidden(std::vector<fs::Entry> entries, bool showHidden, int *hiddenCount);
 
     tasks::Scheduler &m_scheduler;
@@ -179,7 +173,7 @@ private:
     core::SizeUnits m_sizeUnits = core::SizeUnits::Decimal;
     QTimer m_revealTimer;
 
-    mutable QHash<QString, TypeInfo> m_typeCache;   ///< Por extensión; evita repetir consultas.
+    TypeCatalog m_types;   ///< Descripción e icono por tipo.
 
     bool m_folderSizesEnabled = false;
     QHash<QString, FolderSize> m_folderSizes;   ///< Por nombre de carpeta, de la carpeta actual.
