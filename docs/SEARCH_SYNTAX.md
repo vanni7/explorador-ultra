@@ -8,6 +8,8 @@ Así se escriben las consultas en Explorador Ultra. La misma sintaxis sirve para
 | **Filtro** (Ctrl+I, bajo la lista) | Deja a la vista solo lo que cumple, dentro de la carpeta abierta. Actúa a cada tecla |
 | **Buscador** (Ctrl+F, arriba a la derecha) | Al pulsar Intro busca en la carpeta abierta **y en todas sus subcarpetas** (o donde diga el botón «Opciones»). Los resultados ocupan la pestaña; se vuelve con Atrás o Subir |
 
+Lo escrito en el buscador se queda al cambiar de carpeta, para repetir la misma búsqueda en otro sitio (se borra con la X). La flecha del final del buscador, o la tecla Abajo, lista las 15 últimas búsquedas; al elegir una se lanza en la carpeta abierta con las opciones actuales. La lista se guarda al cerrar y se puede vaciar desde ella misma.
+
 ### Opciones del buscador
 El botón **Opciones**, a la derecha del buscador, decide cómo se busca. El texto gris del buscador dice en cada momento qué va a hacer, y el botón muestra un punto («Opciones •») cuando algo no está como de fábrica.
 

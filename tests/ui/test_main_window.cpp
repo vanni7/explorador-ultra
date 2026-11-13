@@ -1104,6 +1104,17 @@ private slots:
         pane->goUp();
         QCOMPARE(pane->currentPath(), books);
         QVERIFY(waitReady(pane));
+        // Lo que se buscaba sigue escrito al cambiar de carpeta, y las
+        // búsquedas hechas quedan en la lista de recientes, sin repetirse.
+        QCOMPARE(window.searchEdit()->text(), QStringLiteral("ext:dat"));
+        pane->navigateTo(diskA);
+        QVERIFY(waitReady(pane));
+        QCOMPARE(window.searchEdit()->text(), QStringLiteral("ext:dat"));
+        QCOMPARE(window.recentSearches(), (QStringList{QStringLiteral("ext:dat"), QStringLiteral("ext:pdf"),
+                                                       QStringLiteral("WALTER RISO*"),
+                                                       QStringLiteral("walter riso*")}));
+        pane->navigateTo(books);
+        QVERIFY(waitReady(pane));
 
         // En el contenido: la palabra está dentro del archivo, no en su nombre.
         window.setSearchScope(SearchScope::Subfolders);

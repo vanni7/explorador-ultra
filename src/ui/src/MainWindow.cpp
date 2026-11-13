@@ -1009,6 +1009,13 @@ void MainWindow::createToolBar()
     m_searchEdit->setClearButtonEnabled(true);
     m_searchEdit->setFixedWidth(260);
     m_searchEdit->addAction(m_searchAction->icon(), QLineEdit::LeadingPosition);
+    // Flecha al final del buscador (o tecla Abajo): las últimas búsquedas.
+    auto *recent = new QAction(themedIcon(QStringLiteral("go-down"), QStyle::SP_ArrowDown),
+                               tr("Búsquedas recientes (flecha abajo)"), m_searchEdit);
+    recent->setShortcut(QKeySequence(Qt::Key_Down));
+    recent->setShortcutContext(Qt::WidgetShortcut);
+    m_searchEdit->addAction(recent, QLineEdit::TrailingPosition);
+    connect(recent, &QAction::triggered, this, &MainWindow::showRecentSearches);
     toolBar->addWidget(m_searchEdit);
     connect(m_searchEdit, &QLineEdit::returnPressed, this, &MainWindow::runSearch);
     m_searchOptionsButton = new QToolButton(toolBar);
@@ -1168,6 +1175,37 @@ void MainWindow::buildSearchOptions()
     updateSearchHints();
 }
 
+void MainWindow::rememberSearch(const QString &text)
+{
+    m_recentSearches.removeAll(text);
+    m_recentSearches.prepend(text);
+    while (m_recentSearches.size() > 15) {
+        m_recentSearches.removeLast();
+    }
+}
+
+void MainWindow::showRecentSearches()
+{
+    QMenu menu(this);
+    if (m_recentSearches.isEmpty()) {
+        menu.addAction(tr("Aún no hay búsquedas recientes"))->setEnabled(false);
+    }
+    for (const QString &text : std::as_const(m_recentSearches)) {
+        QAction *action = menu.addAction(QString(text).replace(QLatin1Char('&'), QStringLiteral("&&")));
+        connect(action, &QAction::triggered, this, [this, text] {
+            m_searchEdit->setText(text);
+            runSearch();   // con las opciones y en la carpeta de ahora
+        });
+    }
+    if (!m_recentSearches.isEmpty()) {
+        menu.addSeparator();
+        connect(menu.addAction(tr("Borrar las búsquedas recientes")), &QAction::triggered, this,
+                [this] { m_recentSearches.clear(); });
+    }
+    menu.setMinimumWidth(m_searchEdit->width());
+    menu.exec(m_searchEdit->mapToGlobal(QPoint(0, m_searchEdit->height())));
+}
+
 void MainWindow::setSearchScope(SearchScope scope)
 {
     m_searchScope = scope;
@@ -1321,6 +1359,7 @@ void MainWindow::runSearch()
         statusBar()->showMessage(tr("No se puede buscar: %1").arg(parsedQuery.error().message), 10000);
         return;
     }
+    rememberSearch(text);
     pane->search(spec);
     pane->focusContent();
 }
@@ -1333,7 +1372,11 @@ void MainWindow::syncSearchBox()
     if (m_searchEdit == nullptr || m_searchEdit->hasFocus()) {
         return;
     }
-    m_searchEdit->setText(pane != nullptr && pane->showsSearch() ? searchQueryOf(pane->currentPath()) : QString());
+    // Al pasar a una carpeta el texto se queda: lo normal es querer repetir
+    // la misma búsqueda en otro sitio. Se borra con la X del buscador.
+    if (pane != nullptr && pane->showsSearch()) {
+        m_searchEdit->setText(searchQueryOf(pane->currentPath()));
+    }
 }
 
 void MainWindow::onCurrentTabChanged()
@@ -1398,6 +1441,7 @@ void MainWindow::restoreSession()
     // El alcance y "en el contenido" no se guardan: una búsqueda en todos los
     // discos no debe heredarse sin querer de la sesión anterior.
     m_searchCaseAction->setChecked(settings.value(QStringLiteral("search/caseSensitive"), false).toBool());
+    m_recentSearches = settings.value(QStringLiteral("search/recent")).toStringList();
 
     const QStringList paths = settings.value(QStringLiteral("session/tabs")).toStringList();
     for (const QString &path : paths) {
@@ -1423,6 +1467,7 @@ void MainWindow::saveSession()
     settings.setValue(QStringLiteral("view/binaryUnits"), m_binaryUnitsAction->isChecked());
     settings.setValue(QStringLiteral("view/folderSizes"), m_folderSizesAction->isChecked());
     settings.setValue(QStringLiteral("search/caseSensitive"), m_searchCaseAction->isChecked());
+    settings.setValue(QStringLiteral("search/recent"), m_recentSearches);
 
     QStringList paths;
     for (int i = 0; i < m_tabs->count(); ++i) {

@@ -56,6 +56,8 @@ public:
     void setSearchInContent(bool inContent);
     void setSearchCaseSensitive(bool caseSensitive);
     /// Unidades para el alcance "las unidades que elija" (puntos de montaje).
+    /// Últimas búsquedas lanzadas, la más reciente primero.
+    QStringList recentSearches() const { return m_recentSearches; }
     void setChosenSearchVolumes(const QStringList &roots) { m_chosenVolumes = roots; }
     /// Sustituye la lista de unidades que usa el buscador. Para las pruebas,
     /// que no deben recorrer los discos reales del equipo.
@@ -189,6 +191,9 @@ private:
     SearchScope m_searchScope = SearchScope::Subfolders;
     QStringList m_chosenVolumes;
     std::function<QList<fs::Volume>()> m_searchVolumeSource;
+    QStringList m_recentSearches;
+    void rememberSearch(const QString &text);
+    void showRecentSearches();
     void buildSearchOptions();
     void updateSearchHints();
     bool chooseSearchVolumes();
