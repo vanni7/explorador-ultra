@@ -2,6 +2,7 @@
 #pragma once
 
 #include "eu/fs/Volumes.h"
+#include "eu/index/Index.h"
 #include "eu/search/Searcher.h"
 #include "eu/ui/Locations.h"
 #include "eu/ui/DirectoryModel.h"
@@ -10,6 +11,7 @@
 #include <QStringList>
 #include <QWidget>
 
+#include <optional>
 #include <functional>
 
 class QLabel;
@@ -70,6 +72,14 @@ public:
     const search::SearchProgress &searchProgress() const { return m_searchProgress; }
     SearchResultsModel *resultsModel() const { return m_resultsModel; }
     QTreeView *resultsView() const { return m_resultsView; }
+    /// Da el índice completo que cubre una carpeta, si lo hay. Con esto las
+    /// búsquedas que el índice puede contestar salen de él, al instante.
+    using IndexResolver = std::function<std::optional<index::Index>(const QString &)>;
+    void setIndexResolver(IndexResolver resolver) { m_indexResolver = std::move(resolver); }
+    /// true si los resultados a la vista salieron del índice y no se han
+    /// comprobado en el disco.
+    bool searchFromIndex() const { return m_searchFromIndex; }
+
     /// Dónde busca la búsqueda a la vista, dicho para una persona
     /// ("/home/ana", "todas las unidades"…).
     QString searchWhere() const;
@@ -133,6 +143,8 @@ public slots:
     void search(const eu::ui::SearchSpec &spec);
     void setSearchPaused(bool paused);
     void stopSearch();
+    /// Repite la búsqueda a la vista recorriendo el disco, sin usar el índice.
+    void verifySearchOnDisk();
     /// Va a la carpeta del resultado seleccionado y lo deja seleccionado.
     void openContainingFolder();
     /// Una operación de archivos terminó: la carpeta se vuelve a leer; de los
@@ -167,6 +179,7 @@ private:
     void startSearch();
     void cancelSearch();
     void onSearchHits(quint64 generation, std::vector<search::Hit> hits, const search::SearchProgress &progress);
+    void onSearchSource(quint64 generation, bool fromIndex);
     void onSearchFinished(quint64 generation, const search::SearchSummary &summary);
     void onResultActivated(const QModelIndex &index);
     void updateSearchInfo();
@@ -196,6 +209,10 @@ private:
     QPushButton *m_searchPauseButton = nullptr;
     QPushButton *m_searchStopButton = nullptr;
     QPushButton *m_searchAgainButton = nullptr;
+    QPushButton *m_searchVerifyButton = nullptr;
+    IndexResolver m_indexResolver;
+    bool m_searchFromIndex = false;
+    bool m_searchForceDisk = false;   ///< La próxima búsqueda no usa el índice.
     tasks::TaskHandle m_searchTask;
     std::shared_ptr<search::PauseGate> m_searchGate;
     quint64 m_searchGeneration = 0;   ///< Lo que llegue de una búsqueda anterior se descarta.

@@ -5,6 +5,7 @@
 #include "eu/ui/MainWindow.h"
 #include "eu/ui/PathBar.h"
 #include "eu/ui/SearchResultsModel.h"
+#include "eu/ui/IndexDialog.h"
 #include "eu/ui/Sidebar.h"
 #include "eu/ui/TrashDialog.h"
 #include "eu/ui/VolumesView.h"
@@ -25,6 +26,7 @@
 #include <QStandardPaths>
 #include <QTemporaryDir>
 #include <QTest>
+#include <QTreeWidget>
 #include <QTreeView>
 #include <QUrl>
 
@@ -1136,6 +1138,89 @@ private slots:
         QCOMPARE(results->count(), 2);
         pane->goUp();
         QVERIFY(pane->showsVolumes());
+    }
+
+    void searchUsesTheIndexWhenThereIsOne()
+    {
+        QTemporaryDir directory;
+        const QString root = QDir::cleanPath(directory.path()) + QStringLiteral("/unidad");
+        QVERIFY(QDir().mkpath(root + QStringLiteral("/fotos/2025")));
+        writeFile(root + QStringLiteral("/fotos/playa.jpg"), 3000);
+        writeFile(root + QStringLiteral("/fotos/2025/playa 2.jpg"), 5000);
+        writeFile(root + QStringLiteral("/informe.pdf"), 10);
+
+        MainWindow window(m_scheduler, openJournal(directory));
+        BrowserPane *pane = window.openTab(root);
+        QVERIFY(waitReady(pane));
+        window.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&window));
+        index::IndexService *service = window.indexService();
+        const auto searchFor = [&](const QString &text) {
+            window.searchEdit()->setText(text);
+            QTest::keyClick(window.searchEdit(), Qt::Key_Return);
+            return pane->showsSearch()
+                && QTest::qWaitFor([pane] { return pane->searchState() == BrowserPane::SearchState::Finished; }, 20000);
+        };
+        SearchResultsModel *results = pane->resultsModel();
+        const auto origin = [&] {
+            return results->index(0, SearchResultsModel::OriginColumn).data().toString();
+        };
+
+        // Sin índice se recorre el disco.
+        QVERIFY(searchFor(QStringLiteral("playa")));
+        QCOMPARE(results->count(), 2);
+        QVERIFY(!pane->searchFromIndex());
+        QCOMPARE(origin(), QStringLiteral("Disco"));
+        QVERIFY(pane->searchProgress().foldersScanned > 0);
+
+        // La ventana "Índice de búsqueda" lista las unidades; marcar una la indexa.
+        fs::Volume volume;
+        volume.rootPath = root;
+        volume.displayName = QStringLiteral("Pruebas");
+        IndexDialog dialog(*service, [volume] { return QList<fs::Volume>{volume}; });
+        QCOMPARE(dialog.list()->topLevelItemCount(), 1);
+        QCOMPARE(dialog.list()->topLevelItem(0)->checkState(0), Qt::Unchecked);
+        QSignalSpy rootsChanged(&dialog, &IndexDialog::rootsChanged);
+        dialog.setIndexed(root, true);
+        QCOMPARE(rootsChanged.count(), 1);
+        QCOMPARE(service->roots(), QStringList{root});
+        QVERIFY(QTest::qWaitFor([&] {
+            const auto status = service->statusOf(root);
+            return status && status->state == index::RootStatus::State::Ready && !service->isBusy();
+        }, 30000));
+        QCOMPARE(dialog.list()->topLevelItem(0)->checkState(0), Qt::Checked);
+        QVERIFY(dialog.list()->topLevelItem(0)->text(2).startsWith(QStringLiteral("Al día")));
+
+        // Con índice, la misma búsqueda sale de él y lo dice.
+        QVERIFY(searchFor(QStringLiteral("playa")));
+        QCOMPARE(results->count(), 2);
+        QVERIFY(pane->searchFromIndex());
+        QCOMPARE(origin(), QStringLiteral("Índice"));
+        QCOMPARE(pane->searchProgress().foldersScanned, 0);
+        QVERIFY(pane->searchInfo().contains(QStringLiteral("índice")));
+        // También desde una subcarpeta.
+        pane->navigateTo(root + QStringLiteral("/fotos/2025"));
+        QVERIFY(waitReady(pane));
+        QVERIFY(searchFor(QStringLiteral("playa")));
+        QCOMPARE(results->count(), 1);
+        QVERIFY(pane->searchFromIndex());
+
+        // "Verificar en disco" repite la búsqueda recorriendo las carpetas.
+        pane->verifySearchOnDisk();
+        QVERIFY(QTest::qWaitFor([pane] { return pane->searchState() == BrowserPane::SearchState::Finished; }, 20000));
+        QVERIFY(!pane->searchFromIndex());
+        QCOMPARE(results->count(), 1);
+        QCOMPARE(origin(), QStringLiteral("Disco"));
+
+        // Lo que el índice no sabe (el contenido) se busca en el disco sin más.
+        QVERIFY(searchFor(QStringLiteral("content:x")));
+        QVERIFY(!pane->searchFromIndex());
+
+        // Desmarcar la unidad borra su índice.
+        dialog.setIndexed(root, false);
+        QVERIFY(service->roots().isEmpty());
+        QVERIFY(searchFor(QStringLiteral("playa")));
+        QVERIFY(!pane->searchFromIndex());
     }
 
     void searchCanBePausedAndStopped()

@@ -79,6 +79,17 @@ void SearchResultsModel::setRoot(const QString &root)
     m_root = QDir::cleanPath(root);
 }
 
+void SearchResultsModel::setFromIndex(bool fromIndex)
+{
+    if (m_fromIndex == fromIndex) {
+        return;
+    }
+    m_fromIndex = fromIndex;
+    if (count() > 0) {
+        emit dataChanged(index(0, OriginColumn), index(count() - 1, OriginColumn));
+    }
+}
+
 void SearchResultsModel::clear()
 {
     ++m_generation;
@@ -165,6 +176,8 @@ QVariant SearchResultsModel::data(const QModelIndex &index, int role) const
             return entry.modifiedMs == 0
                 ? QString()
                 : QLocale().toString(QDateTime::fromMSecsSinceEpoch(entry.modifiedMs), QLocale::ShortFormat);
+        case OriginColumn:
+            return m_fromIndex ? tr("Índice") : tr("Disco");
         default:
             break;
         }
@@ -182,6 +195,10 @@ QVariant SearchResultsModel::data(const QModelIndex &index, int role) const
     case Qt::ToolTipRole:
         if (index.column() == SizeColumn && !entry.isDirectory) {
             return tr("%1 bytes").arg(QLocale().toString(entry.size));
+        }
+        if (index.column() == OriginColumn) {
+            return m_fromIndex ? tr("Del índice: no se ha comprobado que siga en el disco")
+                               : tr("Encontrado recorriendo el disco");
         }
         return QDir::toNativeSeparators(hit.path());
     default:
@@ -201,6 +218,7 @@ QVariant SearchResultsModel::headerData(int section, Qt::Orientation orientation
     case SizeColumn:     return tr("Tamaño");
     case TypeColumn:     return tr("Tipo");
     case ModifiedColumn: return tr("Modificado");
+    case OriginColumn:   return tr("Origen");
     default:             return {};
     }
 }

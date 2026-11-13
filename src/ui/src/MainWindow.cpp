@@ -3,12 +3,16 @@
 
 #include "eu/ui/Locations.h"
 
+#include "eu/core/SizeFormat.h"
 #include "eu/core/Version.h"
 #include "eu/ui/BrowserPane.h"
+#include "eu/trash/Trash.h"
 #include "eu/ui/FileClipboard.h"
+#include "eu/ui/IndexDialog.h"
 #include "eu/ui/PathBar.h"
 #include "eu/ui/Sidebar.h"
 #include "eu/ui/TrashDialog.h"
+#include "eu/ui/VolumesView.h"
 
 #include <QAction>
 #include <QActionGroup>
@@ -34,6 +38,7 @@
 #include <QPushButton>
 #include <QSettings>
 #include <QSplitter>
+#include <QStandardPaths>
 #include <QStatusBar>
 #include <QStyle>
 #include <QTabBar>
@@ -58,6 +63,12 @@ MainWindow::MainWindow(tasks::Scheduler &scheduler, std::shared_ptr<journal::Jou
     : QMainWindow(parent), m_scheduler(scheduler)
 {
     m_actions = new FileActions(m_scheduler, std::move(journal), this);
+    // Índices de búsqueda: una base por unidad, junto a los demás datos de la
+    // aplicación. La carpeta de la papelera no se indexa (SPEC §10).
+    m_indexService = new index::IndexService(
+        m_scheduler, QStandardPaths::writableLocation(QStandardPaths::AppDataLocation) + QStringLiteral("/indice"),
+        this);
+    m_indexService->setExcludedNames({trash::trashFolderName()});
     setWindowTitle(core::applicationName());
     resize(1180, 720);
 
@@ -79,6 +90,10 @@ MainWindow::MainWindow(tasks::Scheduler &scheduler, std::shared_ptr<journal::Jou
     m_statusLabel = new QLabel(this);
     m_unitsLabel = new QLabel(this);
     statusBar()->addWidget(m_statusLabel, 1);
+    m_indexLabel = new QLabel(this);
+    m_indexLabel->hide();
+    statusBar()->addPermanentWidget(m_indexLabel);
+    connect(m_indexService, &index::IndexService::changed, this, &MainWindow::updateIndexLabel);
     statusBar()->addPermanentWidget(m_unitsLabel);
 
     createActions();
@@ -212,6 +227,10 @@ void MainWindow::createActions()
     m_filterAction->setToolTip(tr("Deja a la vista solo los elementos cuyo nombre coincide con lo que escribas"));
     connect(m_filterAction, &QAction::triggered, this, [this] { if (auto *pane = currentPane()) pane->showFilter(); });
 
+    m_indexAction = new QAction(tr("Índice de búsqueda…"), this);
+    m_indexAction->setToolTip(tr("Elegir qué unidades se indexan para buscar en ellas al instante"));
+    connect(m_indexAction, &QAction::triggered, this, &MainWindow::showIndexDialog);
+
     m_searchAction = new QAction(themedIcon(QStringLiteral("edit-find"), QStyle::SP_FileDialogContentsView),
                                  tr("Buscar archivos y carpetas"), this);
     m_searchAction->setShortcut(QKeySequence::Find);
@@ -238,6 +257,7 @@ void MainWindow::createActions()
     viewMenu->addAction(m_refreshAction);
     viewMenu->addAction(m_filterAction);
     viewMenu->addAction(m_searchAction);
+    viewMenu->addAction(m_indexAction);
     viewMenu->addSeparator();
     viewMenu->addAction(m_showHiddenAction);
     viewMenu->addAction(m_binaryUnitsAction);
@@ -1047,6 +1067,8 @@ BrowserPane *MainWindow::openTab(const QString &path)
     pane->setSizeUnits(m_binaryUnitsAction->isChecked() ? core::SizeUnits::Binary
                                                                 : core::SizeUnits::Decimal);
 
+    pane->setIndexResolver([this](const QString &folder) { return m_indexService->indexFor(folder); });
+
     connect(pane, &BrowserPane::pathChanged, this, [this, pane] {
         updateTabTitle(pane);
         if (pane == currentPane()) {
@@ -1169,10 +1191,115 @@ void MainWindow::buildSearchOptions()
 
     menu->addSeparator();
     m_searchCaseAction = menu->addAction(tr("Distinguir mayúsculas y minúsculas"));
+    menu->addSeparator();
+    menu->addAction(m_indexAction);
     m_searchCaseAction->setCheckable(true);
     connect(m_searchCaseAction, &QAction::toggled, this, &MainWindow::updateSearchHints);
     menu->setToolTipsVisible(true);
     updateSearchHints();
+}
+
+void MainWindow::startIndexing(bool mayAsk)
+{
+    QSettings settings;
+    const QStringList roots = settings.value(QStringLiteral("index/roots")).toStringList();
+    for (const QString &root : roots) {
+        m_indexService->addRoot(root);
+    }
+    if (mayAsk && !settings.value(QStringLiteral("index/asked"), false).toBool()) {
+        // Con la ventana ya a la vista, no antes.
+        QTimer::singleShot(0, this, &MainWindow::runIndexWizard);
+    }
+}
+
+void MainWindow::saveIndexRoots()
+{
+    QSettings().setValue(QStringLiteral("index/roots"), m_indexService->roots());
+}
+
+void MainWindow::runIndexWizard()
+{
+    QDialog dialog(this);
+    dialog.setWindowTitle(tr("¿Crear un índice para buscar al instante?"));
+    auto *layout = new QVBoxLayout(&dialog);
+    auto *intro = new QLabel(
+        tr("Explorador Ultra puede anotar los nombres de los archivos de tus unidades para que las búsquedas "
+           "en una unidad entera tarden décimas de segundo en vez de minutos.\n\n"
+           "El índice se crea en segundo plano, se puede pausar, se guarda solo en este equipo y no incluye el "
+           "contenido de los archivos. Es opcional: sin él todo funciona igual, solo que más despacio.\n\n"
+           "Marca las unidades que quieras indexar:"), &dialog);
+    intro->setWordWrap(true);
+    layout->addWidget(intro);
+    auto *list = new QListWidget(&dialog);
+    for (const fs::Volume &volume : searchVolumes()) {
+        auto *item = new QListWidgetItem(
+            iconForVolume(volume),
+            tr("%1 — %2 (%3)").arg(volume.displayName, QDir::toNativeSeparators(volume.rootPath),
+                                   core::formatSize(volume.totalBytes)), list);
+        item->setData(Qt::UserRole, volume.rootPath);
+        item->setFlags(item->flags() | Qt::ItemIsUserCheckable);
+        // De fábrica, los discos fijos. Lo extraíble, de red u óptico, solo si se pide.
+        const bool fixedDisk = volume.kind == fs::DeviceKind::Ssd || volume.kind == fs::DeviceKind::Hdd
+            || volume.kind == fs::DeviceKind::Unknown;
+        item->setCheckState(fixedDisk ? Qt::Checked : Qt::Unchecked);
+    }
+    layout->addWidget(list);
+    auto *later = new QLabel(tr("Puedes cambiarlo cuando quieras en Ver → Índice de búsqueda."), &dialog);
+    later->setWordWrap(true);
+    layout->addWidget(later);
+    auto *buttons = new QDialogButtonBox(&dialog);
+    QPushButton *accept = buttons->addButton(tr("Indexar las marcadas"), QDialogButtonBox::AcceptRole);
+    QPushButton *postpone = buttons->addButton(tr("Ahora no"), QDialogButtonBox::RejectRole);
+    QPushButton *never = buttons->addButton(tr("No, y no volver a preguntar"), QDialogButtonBox::DestructiveRole);
+    accept->setDefault(true);
+    layout->addWidget(buttons);
+    enum Answer { Postpone, Accept, Never };
+    Answer answer = Postpone;
+    connect(accept, &QPushButton::clicked, &dialog, [&] { answer = Accept; dialog.accept(); });
+    connect(postpone, &QPushButton::clicked, &dialog, [&] { answer = Postpone; dialog.reject(); });
+    connect(never, &QPushButton::clicked, &dialog, [&] { answer = Never; dialog.reject(); });
+    dialog.resize(560, 420);
+    dialog.exec();
+
+    if (answer == Postpone) {
+        return;   // se volverá a proponer en el próximo arranque
+    }
+    QSettings().setValue(QStringLiteral("index/asked"), true);
+    if (answer == Accept) {
+        for (int row = 0; row < list->count(); ++row) {
+            if (list->item(row)->checkState() == Qt::Checked) {
+                m_indexService->addRoot(list->item(row)->data(Qt::UserRole).toString());
+            }
+        }
+        saveIndexRoots();
+    }
+}
+
+void MainWindow::showIndexDialog()
+{
+    IndexDialog dialog(*m_indexService, [this] { return searchVolumes(); }, this);
+    connect(&dialog, &IndexDialog::rootsChanged, this, &MainWindow::saveIndexRoots);
+    dialog.exec();
+    // Quien abre esta ventana ya ha decidido: el asistente no hace falta.
+    QSettings().setValue(QStringLiteral("index/asked"), true);
+}
+
+void MainWindow::updateIndexLabel()
+{
+    QStringList working;
+    for (const index::RootStatus &status : m_indexService->status()) {
+        if (status.state == index::RootStatus::State::Building
+            || status.state == index::RootStatus::State::Updating) {
+            working.append(tr("%1: %2").arg(QDir::toNativeSeparators(status.root), indexStateText(status)));
+        }
+    }
+    if (m_indexService->isPaused() && m_indexService->isBusy()) {
+        m_indexLabel->setText(tr("Índice en pausa"));
+    } else {
+        m_indexLabel->setText(working.isEmpty() ? QString() : tr("Índice — %1").arg(working.first()));
+    }
+    m_indexLabel->setToolTip(working.join(QLatin1Char('\n')));
+    m_indexLabel->setVisible(!m_indexLabel->text().isEmpty());
 }
 
 void MainWindow::rememberSearch(const QString &text)

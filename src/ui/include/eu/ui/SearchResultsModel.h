@@ -30,6 +30,7 @@ public:
         SizeColumn,
         TypeColumn,
         ModifiedColumn,
+        OriginColumn,   ///< "Índice" o "Disco": de dónde sale el resultado.
         ColumnCount,
     };
 
@@ -37,6 +38,10 @@ public:
 
     /// Carpeta de partida: la columna "Carpeta" se muestra relativa a ella.
     void setRoot(const QString &root);
+    /// Los resultados vienen del índice (no se han comprobado en el disco) o
+    /// de recorrer el disco. Vale para todos los de la búsqueda.
+    void setFromIndex(bool fromIndex);
+    bool isFromIndex() const { return m_fromIndex; }
     void clear();
     void append(std::vector<search::Hit> &&hits);
     /// Vuelve a aplicar el orden elegido (tras añadir resultados).
@@ -75,6 +80,7 @@ private:
     tasks::Scheduler &m_scheduler;
     std::vector<search::Hit> m_hits;
     QString m_root;
+    bool m_fromIndex = false;
     core::SizeUnits m_units = core::SizeUnits::Decimal;
     TypeCatalog m_types;
     int m_sortColumn = -1;

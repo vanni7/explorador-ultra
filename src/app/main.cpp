@@ -137,6 +137,12 @@ int main(int argc, char *argv[])
             window.restoreSession();
         }
         window.show();
+        // Los índices de búsqueda; en un arranque normal, la primera vez se
+        // propone qué unidades indexar.
+        const bool unattended = smokeTest || parser.isSet(screenshotOption);
+        if (!unattended) {
+            window.startIndexing(true);
+        }
         if (ownsJournal && !smokeTest && !parser.isSet(screenshotOption)) {
             window.checkInterruptedOperations();
         }

@@ -1,6 +1,8 @@
 // Explorador Ultra — SPDX-License-Identifier: GPL-3.0-or-later
 #include "eu/ui/BrowserPane.h"
 
+#include <utility>
+
 #include "eu/fs/DirectoryWatcher.h"
 #include "eu/ui/FileClipboard.h"
 #include "eu/ui/Locations.h"
@@ -401,11 +403,15 @@ BrowserPane::BrowserPane(tasks::Scheduler &scheduler, fs::DirectoryWatcher &watc
     m_searchPauseButton = new QPushButton(tr("Pausar"), searchBar);
     m_searchStopButton = new QPushButton(tr("Detener"), searchBar);
     m_searchAgainButton = new QPushButton(tr("Buscar de nuevo"), searchBar);
+    m_searchVerifyButton = new QPushButton(tr("Verificar en disco"), searchBar);
+    m_searchVerifyButton->setToolTip(tr("Estos resultados salen del índice. Verificar los busca de nuevo "
+                                        "recorriendo las carpetas, que es más lento pero seguro."));
     auto *searchBarLayout = new QHBoxLayout(searchBar);
     searchBarLayout->setContentsMargins(6, 3, 6, 3);
     searchBarLayout->addWidget(m_searchInfo, 1);
     searchBarLayout->addWidget(m_searchPauseButton);
     searchBarLayout->addWidget(m_searchStopButton);
+    searchBarLayout->addWidget(m_searchVerifyButton);
     searchBarLayout->addWidget(m_searchAgainButton);
 
     m_resultsView = new QTreeView(m_searchPage);
@@ -432,6 +438,7 @@ BrowserPane::BrowserPane(tasks::Scheduler &scheduler, fs::DirectoryWatcher &watc
     m_resultsView->header()->resizeSection(SearchResultsModel::SizeColumn, 100);
     m_resultsView->header()->resizeSection(SearchResultsModel::TypeColumn, 170);
     m_resultsView->header()->resizeSection(SearchResultsModel::ModifiedColumn, 150);
+    m_resultsView->header()->resizeSection(SearchResultsModel::OriginColumn, 70);
 
     auto *searchLayout = new QVBoxLayout(m_searchPage);
     searchLayout->setContentsMargins(0, 0, 0, 0);
@@ -452,6 +459,7 @@ BrowserPane::BrowserPane(tasks::Scheduler &scheduler, fs::DirectoryWatcher &watc
     });
     connect(m_searchStopButton, &QPushButton::clicked, this, &BrowserPane::stopSearch);
     connect(m_searchAgainButton, &QPushButton::clicked, this, &BrowserPane::refresh);
+    connect(m_searchVerifyButton, &QPushButton::clicked, this, &BrowserPane::verifySearchOnDisk);
 
     // Barra de filtro: aparece bajo la lista, con otro color de fondo, para
     // que no se confunda con la búsqueda global de la barra superior.
@@ -828,6 +836,18 @@ void BrowserPane::startSearch()
     options.recursive = spec.scope != SearchScope::Folder;
     m_searchReadsContent = parsedQuery.value().usesContent();
 
+    // El índice de cada carpeta de partida, si lo tiene. Si alguna no lo
+    // tiene, o el índice no puede contestar esta consulta, se recorre el disco.
+    std::vector<std::optional<index::Index>> indexes;
+    const bool forceDisk = std::exchange(m_searchForceDisk, false);
+    if (m_indexResolver && !forceDisk) {
+        for (const QString &root : spec.roots) {
+            indexes.push_back(m_indexResolver(root));
+        }
+    }
+    m_searchFromIndex = false;
+    m_resultsModel->setFromIndex(false);
+
     // La tarea no toca este objeto: trabaja con copias y devuelve los lotes al
     // hilo de interfaz, donde se comprueba que la pestaña sigue viva y que
     // los resultados son de la búsqueda vigente.
@@ -835,17 +855,48 @@ void BrowserPane::startSearch()
     const quint64 generation = m_searchGeneration;
     m_searchTask = m_scheduler.submit(
         tasks::Category::Indexing, tasks::Priority::UserInteraction,
-        [self, generation, roots = spec.roots, query = parsedQuery.value(), options,
+        [self, generation, roots = spec.roots, query = parsedQuery.value(), options, indexes,
          gate = m_searchGate](const tasks::CancelToken &cancel) {
-            const search::SearchSummary summary = search::searchTree(
-                roots, query, options, cancel, gate.get(),
-                [&](std::vector<search::Hit> &&hits, const search::SearchProgress &progress) {
-                    QMetaObject::invokeMethod(qApp, [self, generation, hits = std::move(hits), progress]() mutable {
-                        if (self) {
-                            self->onSearchHits(generation, std::move(hits), progress);
-                        }
-                    }, Qt::QueuedConnection);
-                });
+            const auto deliver = [&](std::vector<search::Hit> &&hits, const search::SearchProgress &progress) {
+                QMetaObject::invokeMethod(qApp, [self, generation, hits = std::move(hits), progress]() mutable {
+                    if (self) {
+                        self->onSearchHits(generation, std::move(hits), progress);
+                    }
+                }, Qt::QueuedConnection);
+            };
+            bool fromIndex = !indexes.empty();
+            for (size_t i = 0; i < indexes.size() && fromIndex; ++i) {
+                fromIndex = indexes[i].has_value() && indexes[i]->canAnswer({roots[qsizetype(i)]}, query, options);
+            }
+            QMetaObject::invokeMethod(qApp, [self, generation, fromIndex] {
+                if (self) {
+                    self->onSearchSource(generation, fromIndex);
+                }
+            }, Qt::QueuedConnection);
+
+            search::SearchSummary summary;
+            if (fromIndex) {
+                // Cada carpeta en su índice; los contadores se van sumando.
+                for (size_t i = 0; i < indexes.size() && !summary.truncated && !cancel.isCancelled(); ++i) {
+                    const search::SearchProgress before = summary.progress;
+                    search::SearchOptions remaining = options;
+                    remaining.maxHits = options.maxHits - before.hits;
+                    const search::SearchSummary part = indexes[i]->search(
+                        {roots[qsizetype(i)]}, query, remaining, cancel,
+                        [&](std::vector<search::Hit> &&hits, const search::SearchProgress &progress) {
+                            search::SearchProgress total = progress;
+                            total.itemsExamined += before.itemsExamined;
+                            total.hits += before.hits;
+                            deliver(std::move(hits), total);
+                        });
+                    summary.progress.itemsExamined += part.progress.itemsExamined;
+                    summary.progress.hits += part.progress.hits;
+                    summary.truncated = part.truncated;
+                }
+                summary.cancelled = cancel.isCancelled();
+            } else {
+                summary = search::searchTree(roots, query, options, cancel, gate.get(), deliver);
+            }
             QMetaObject::invokeMethod(qApp, [self, generation, summary] {
                 if (self) {
                     self->onSearchFinished(generation, summary);
@@ -866,6 +917,25 @@ void BrowserPane::onSearchHits(quint64 generation, std::vector<search::Hit> hits
     m_resultsModel->append(std::move(hits));
     updateSearchInfo();
     emit statusChanged();
+}
+
+void BrowserPane::onSearchSource(quint64 generation, bool fromIndex)
+{
+    if (generation != m_searchGeneration) {
+        return;
+    }
+    m_searchFromIndex = fromIndex;
+    m_resultsModel->setFromIndex(fromIndex);
+    updateSearchInfo();
+}
+
+void BrowserPane::verifySearchOnDisk()
+{
+    if (!showsSearch()) {
+        return;
+    }
+    m_searchForceDisk = true;
+    startSearch();
 }
 
 void BrowserPane::onSearchFinished(quint64 generation, const search::SearchSummary &summary)
@@ -919,6 +989,7 @@ void BrowserPane::updateSearchInfo()
     m_searchPauseButton->setText(m_searchState == SearchState::Paused ? tr("Reanudar") : tr("Pausar"));
     m_searchStopButton->setVisible(active);
     m_searchAgainButton->setVisible(m_searchState == SearchState::Finished || m_searchState == SearchState::Stopped);
+    m_searchVerifyButton->setVisible(m_searchFromIndex && m_searchAgainButton->isVisibleTo(m_searchPage));
 
     QPalette palette;
     if (m_searchState == SearchState::Invalid) {
@@ -938,6 +1009,14 @@ void BrowserPane::updateSearchInfo()
     }
     const SearchSpec spec = searchSpecOf(m_location);
     QString text = pattern.arg(spec.query, searchWhere(), QLocale().toString(m_searchProgress.foldersScanned));
+    if (m_searchFromIndex) {
+        // Del índice no se lee ninguna carpeta: se dice de dónde sale y que
+        // puede no estar al día.
+        const QString where = tr("«%1» en %2").arg(spec.query, searchWhere());
+        text = (m_searchState == SearchState::Running || m_searchState == SearchState::Paused)
+            ? tr("Buscando en el índice %1").arg(where)
+            : tr("Resultados del índice, sin comprobar en el disco: %1").arg(where);
+    }
     if (m_searchReadsContent) {
         text += tr(" · archivos leídos: %1 (solo texto, hasta 20 MB)")
                     .arg(QLocale().toString(m_searchProgress.filesRead));

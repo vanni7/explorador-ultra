@@ -3,6 +3,7 @@
 
 #include "eu/fs/DirectoryWatcher.h"
 #include "eu/fs/Volumes.h"
+#include "eu/index/IndexService.h"
 #include "eu/journal/Journal.h"
 #include "eu/tasks/Scheduler.h"
 #include "eu/ui/FileActions.h"
@@ -49,6 +50,15 @@ public:
     /// Buscador de la barra superior.
     QLineEdit *searchEdit() const { return m_searchEdit; }
     int tabCount() const;
+
+    /// Los índices de búsqueda de esta ventana.
+    index::IndexService *indexService() const { return m_indexService; }
+    /// Empieza a mantener los índices guardados en la configuración. Si
+    /// `mayAsk` y aún no se ha preguntado, muestra el asistente que propone
+    /// qué unidades indexar (SPEC §1).
+    void startIndexing(bool mayAsk);
+    /// Abre la ventana "Índice de búsqueda".
+    void showIndexDialog();
 
     /// Opciones del buscador; son las del botón "Opciones" que tiene al lado.
     void setSearchScope(SearchScope scope);
@@ -183,6 +193,12 @@ private:
     QAction *m_filterAction = nullptr;
     QAction *m_searchAction = nullptr;
     QLineEdit *m_searchEdit = nullptr;
+    index::IndexService *m_indexService = nullptr;
+    QLabel *m_indexLabel = nullptr;   ///< "Indexando…" en la barra de estado.
+    QAction *m_indexAction = nullptr;
+    void runIndexWizard();
+    void saveIndexRoots();
+    void updateIndexLabel();
     QToolButton *m_searchOptionsButton = nullptr;
     QHash<int, QAction *> m_scopeActions;   ///< Por SearchScope.
     QAction *m_searchInNameAction = nullptr;

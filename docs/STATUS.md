@@ -20,7 +20,7 @@ Fase 2 — Búsqueda y rendimiento, rama `fase-2/busqueda` (sale de `main` con l
 | 5a | Módulo `index`: `Index` (abrir, `sync` por diferencias —árbol entero o una carpeta—, `canAnswer`, `search`), `Query::nameHint`, `eu-bench index` | **Hecho**: 10 pruebas en `test_index` (Ubuntu release); compara cada búsqueda con la directa. Falta: CI, medición con 1 000 000 de entradas |
 | 5b | Vigilancia de cambios del árbol entero (`TreeWatcher`: inotify, ReadDirectoryChangesW, FSEvents) | **Hecho** en Linux (prueba `test_index_tree_watcher`). Windows y macOS: escrito, pendiente de ver la CI |
 | 5c | `IndexService`: tareas en segundo plano (una a la vez, prioridad baja) con pausa, puesta al día al arrancar, sigue los avisos del vigilante, conserva el índice si la unidad no está | **Hecho** en Linux (`test_index_service`). Falta CI. La categoría Indexing pasa de 1 a 3 hilos para que buscar no espere a indexar |
-| 5d | Interfaz: asistente de primer arranque, diálogo «Índice de búsqueda», resultados marcados «del índice» y «Verificar en disco»; tope de vigilancias inotify y repaso periódico | Siguiente |
+| 5d | Interfaz: asistente de primer arranque, diálogo «Índice de búsqueda» (Ver y botón Opciones), columna «Origen» (Índice/Disco), «Verificar en disco», aviso en la barra de estado; tope de vigilancias inotify (60 %) y repaso cada 30 min | **Hecho** en Ubuntu release (prueba `searchUsesTheIndexWhenThereIsOne`). Falta: ASan/TSan, CI, verlo en pantalla, documentación y mediciones |
 | 6 | Concurrencia adaptativa por dispositivo en `tasks` | Pendiente |
 | 7 | Mediciones (`BENCHMARKS.md`), verificación manual, CI, fusionar a `main`, informe | Pendiente |
 
