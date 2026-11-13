@@ -64,9 +64,28 @@ Sin índice: recorre el disco cada vez. Cifras de este equipo (SSD NVMe, caché 
 
 No medido: caché fría, discos mecánicos, unidades de red, bloqueo del hilo de interfaz con cientos de miles de resultados.
 
+### Índice de búsqueda (Fase 2, paso 5)
+`eu-bench index <carpeta> <archivo.db> [consultas…]`, compilación release, este equipo, caché caliente, 13-nov. Las consultas se miden dentro del proceso (sin interfaz): tiempo total y tiempo hasta el primer resultado.
+
+| Qué | `/media/merwin/RESPALDO` (199 512 entradas, 135 517 carpetas) | `/` (572 947 entradas, 70 501 carpetas) |
+|---|---|---|
+| Construir el índice | 3,3 s · base de 29 MB | 10,4 s · base de 42,5 MB |
+| Ponerlo al día sin cambios (recorrido completo) | 2,6 s | 3,0 s |
+| `walter` | 20 ms (primero a 1,5 ms) | 60 ms (primero a 4 ms) |
+| `walter riso*` | 32 ms (primero a 4 ms) · 102 resultados | — |
+| `*.pdf` | 40 ms · 16 186 resultados | 70 ms · 4 363 resultados |
+| `ext:jpg size:>5MB` | 30 ms (primero a 20 ms) | 65 ms (primero a 3 ms) |
+| `size:>1GB` (sin pista de nombre: lee todas las filas) | 160 ms | 380 ms (primero a 0,3 ms) |
+| `regex:/^IMG_\d+/` (sin pista de nombre) | 214 ms | 476 ms (0 resultados) |
+| Algo que no existe (`zzzznoexiste`) | 20 ms | 62 ms |
+
+Lectura: con una pista de nombre (palabra, comodín o extensión) la base descarta las filas y la consulta tarda decenas de milisegundos. Sin pista (solo tamaño, fecha, expresión regular o letras no ASCII) hay que leer todas las filas: unos 0,8 µs por fila.
+
+**Meta de SPEC §4 (1 000 000 de entradas, primeros resultados < 200 ms): no medida con un millón.** La unidad mayor medida tiene 573 000. Extrapolando, las consultas con pista quedarían holgadamente por debajo; una consulta sin pista y sin ningún resultado tardaría unos 0,8 s en terminar. Falta medirlo de verdad, y también: caché fría, discos mecánicos, tiempo visto en la ventana, Windows y macOS.
+
 ### No medido todavía (pendiente)
 - Tiempo de apertura real de una carpeta en Archivos de GNOME (no hay forma fiable de automatizarlo; `gio list` es una aproximación de su motor, no de su interfaz).
 - Caché fría, HDD, USB y unidades de red.
 - Memoria por elemento: la cifra de RSS que imprime `eu-bench listing` no es fiable porque las cuatro pruebas comparten proceso y el asignador reutiliza memoria; se medirá con el modelo real en la Fase 1.
 - Windows (VM y CI) y macOS (CI).
-- Bloqueo del hilo de interfaz, búsqueda con índice, miniaturas y cancelación: requieren código de las Fases 1 a 3.
+- Bloqueo del hilo de interfaz, miniaturas y cancelación: requieren código de las Fases 1 a 3.
