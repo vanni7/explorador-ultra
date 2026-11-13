@@ -401,6 +401,11 @@ core::Result<SyncProgress> Index::sync(const QString &folder, const SyncOptions 
         const QString absolute = absolutePath(folder.relative);
         progress.currentFolder = absolute;
 
+        // Primero se pide vigilarla y luego se lee: lo que cambie entre medias
+        // producirá un aviso, en vez de perderse.
+        if (options.onFolder) {
+            options.onFolder(absolute);
+        }
         std::vector<fs::Entry> onDisk;
         const core::Status listed = fs::listDirectory(absolute, listOptions, cancel,
                                                       [&](std::vector<fs::Entry> &&batch) {
@@ -502,10 +507,6 @@ core::Result<SyncProgress> Index::sync(const QString &folder, const SyncOptions 
                 purgeSubtree(joinRelative(folder.relative, gone.key()));
             }
         }
-        if (options.onFolder) {
-            options.onFolder(absolute);
-        }
-
         ++foldersSinceCommit;
         const qint64 now = steadyNowMs();
         if (foldersSinceCommit >= 2000 || now - lastCommitMs >= 1000) {

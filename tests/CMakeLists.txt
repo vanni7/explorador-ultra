@@ -24,6 +24,7 @@ eu_add_test(test_fs_volumes_watcher fs/test_volumes_watcher.cpp)
 eu_add_test(test_search_query search/test_query.cpp)
 eu_add_test(test_search_searcher search/test_searcher.cpp)
 eu_add_test(test_index index/test_index.cpp)
+eu_add_test(test_index_tree_watcher index/test_tree_watcher.cpp)
 eu_add_test(test_ui_entry_sort ui/test_entry_sort.cpp)
 eu_add_test(test_ui_file_actions ui/test_file_actions.cpp)
 
