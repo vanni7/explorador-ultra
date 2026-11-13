@@ -81,7 +81,20 @@ No medido: caché fría, discos mecánicos, unidades de red, bloqueo del hilo de
 
 Lectura: con una pista de nombre (palabra, comodín o extensión) la base descarta las filas y la consulta tarda decenas de milisegundos. Sin pista (solo tamaño, fecha, expresión regular o letras no ASCII) hay que leer todas las filas: unos 0,8 µs por fila.
 
-**Meta de SPEC §4 (1 000 000 de entradas, primeros resultados < 200 ms): no medida con un millón.** La unidad mayor medida tiene 573 000. Extrapolando, las consultas con pista quedarían holgadamente por debajo; una consulta sin pista y sin ningún resultado tardaría unos 0,8 s en terminar. Falta medirlo de verdad, y también: caché fría, discos mecánicos, tiempo visto en la ventana, Windows y macOS.
+**Con 1 000 000 de entradas** (árbol sintético de `eu-bench mktree`: 10 carpetas de 100 000 archivos vacíos en memoria, 13-nov; base de 73 MB, construida en 6,0 s, repaso sin cambios en 3,0 s):
+
+| Consulta | Primer resultado | Total | Resultados |
+|---|---|---|---|
+| `archivo4242` | 4,8 ms | 139 ms | 100 |
+| `archivo99*` | 12 ms | 147 ms | 10 000 |
+| `*.jpg` | 12 ms | 244 ms | 100 000 |
+| `ñandú` (letra no ASCII: sin pista, lee todo) | 76 ms | 887 ms | 100 000 |
+| `zzzznoexiste` | — | 117 ms | 0 |
+| `size:>1GB` (sin pista) | — | 793 ms | 0 |
+| `ext:txt size:>1MB` (la pista `.txt` deja 900 000 filas) | — | 926 ms | 0 |
+| `regex:/^IMG_\d+/` (sin pista) | — | 1 157 ms | 0 |
+
+**Meta de SPEC §4 (1 000 000 de entradas, primeros resultados < 200 ms): cumplida en este equipo cuando hay resultados** (5–76 ms hasta el primero). Cuando la consulta no tiene pista de nombre y no hay nada que encontrar, saberlo cuesta entre 0,8 y 1,2 s: es lo que tarda en leer el millón de filas. Límites de la medición: árbol sintético (nombres cortos, pocas carpetas), caché caliente, medido dentro del proceso y no en la ventana. Falta: caché fría, discos mecánicos, Windows y macOS.
 
 ### No medido todavía (pendiente)
 - Tiempo de apertura real de una carpeta en Archivos de GNOME (no hay forma fiable de automatizarlo; `gio list` es una aproximación de su motor, no de su interfaz).
