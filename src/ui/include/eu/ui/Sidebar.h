@@ -6,6 +6,7 @@
 #include "eu/ui/FileClipboard.h"
 
 #include <QPersistentModelIndex>
+#include <QTimer>
 #include <QTreeView>
 
 class QStandardItem;
@@ -29,6 +30,10 @@ public:
     /// Carpeta que se está viendo en la pestaña activa: un clic sobre su nodo
     /// ya no navega, solo despliega o recoge.
     void setCurrentPath(const QString &path) { m_currentPath = path; }
+    /// Añade un lugar a "Favoritos".
+    void addPlace(const QString &name, const QString &path);
+    /// Ruta del nodo que tiene el cursor del teclado, o vacía.
+    QString currentPlace() const;
     /// Ruta del nodo que hay en un punto del panel, o vacía (para las pruebas).
     QString pathAt(const QPoint &position) const;
     /// Posición del nodo de una ruta ya cargada, o un punto nulo si no está.
@@ -48,6 +53,7 @@ protected:
     void dragLeaveEvent(QDragLeaveEvent *event) override;
     void dropEvent(QDropEvent *event) override;
     void paintEvent(QPaintEvent *event) override;
+    void keyPressEvent(QKeyEvent *event) override;
 
 private:
     void buildFavorites();
@@ -69,6 +75,7 @@ private:
     MoveByDefaultRule m_moveByDefault;
     QPersistentModelIndex m_dropIndex;   ///< Carpeta sobre la que se está arrastrando.
     QString m_currentPath;   ///< Carpeta que muestra la pestaña activa.
+    QTimer m_followTimer;    ///< Espera breve antes de abrir la carpeta a la que se llegó con las flechas.
 };
 
 } // namespace eu::ui

@@ -90,7 +90,13 @@ MainWindow::MainWindow(tasks::Scheduler &scheduler, std::shared_ptr<journal::Jou
 
     connect(m_tabs, &QTabWidget::currentChanged, this, &MainWindow::onCurrentTabChanged);
     connect(m_tabs, &QTabWidget::tabCloseRequested, this, &MainWindow::closeTab);
-    connect(m_sidebar, &Sidebar::placeActivated, this, &MainWindow::navigateCurrentTo);
+    // Elegir un lugar en el árbol no le quita el teclado: las flechas siguen
+    // moviéndose por el árbol, no por la lista de archivos.
+    connect(m_sidebar, &Sidebar::placeActivated, this, [this](const QString &path) {
+        if (BrowserPane *pane = currentPane()) {
+            pane->navigateTo(path);
+        }
+    });
     connect(m_sidebar, &Sidebar::filesDropped, this, &MainWindow::transfer);
     connect(m_sidebar, &Sidebar::contextMenuRequested, this, &MainWindow::showSidebarMenu);
     m_sidebar->setMoveByDefaultRule([this](const QString &source, const QString &destination) {

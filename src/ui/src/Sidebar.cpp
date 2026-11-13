@@ -10,6 +10,7 @@
 #include <QApplication>
 #include <QDir>
 #include <QDragEnterEvent>
+#include <QKeyEvent>
 #include <QMimeData>
 #include <QPainter>
 #include <QPointer>
@@ -95,6 +96,62 @@ Sidebar::Sidebar(tasks::Scheduler &scheduler, fs::VolumeMonitor &volumes, QWidge
     setAcceptDrops(true);
     setDragDropMode(QAbstractItemView::DropOnly);
     setDropIndicatorShown(false);
+
+    // Al recorrer el árbol con las flechas, la carpeta se abre tras una pausa
+    // corta: así se puede pasar deprisa por encima de muchas sin leerlas todas.
+    m_followTimer.setSingleShot(true);
+    m_followTimer.setInterval(300);
+    connect(&m_followTimer, &QTimer::timeout, this, [this] {
+        const QString path = currentPlace();
+        if (!path.isEmpty() && path != m_currentPath) {
+            emit placeActivated(path);
+        }
+    });
+}
+
+void Sidebar::addPlace(const QString &name, const QString &path)
+{
+    m_favoritesSection->appendRow(
+        makeFolderItem(name, QDir::cleanPath(path), themedIcon(QStringLiteral("folder"), QStyle::SP_DirIcon)));
+}
+
+QString Sidebar::currentPlace() const
+{
+    const QModelIndex index = currentIndex();
+    return index == m_volumesSection->index() ? volumesLocation() : index.data(PathRole).toString();
+}
+
+void Sidebar::keyPressEvent(QKeyEvent *event)
+{
+    const QModelIndex before = currentIndex();
+    const int key = event->key();
+    const bool plain = (event->modifiers() & ~Qt::KeypadModifier) == Qt::NoModifier;
+    if (plain && before.isValid() && (key == Qt::Key_Left || key == Qt::Key_Right)) {
+        // Derecha: despliega la rama; si ya lo está, baja a la primera
+        // subcarpeta. Izquierda: recoge la rama; si ya lo está, sube a la
+        // carpeta padre. No depende del estilo del sistema.
+        if (key == Qt::Key_Right) {
+            if (m_model->hasChildren(before) && !isExpanded(before)) {
+                expand(before);
+            } else {
+                const QModelIndex child = m_model->index(0, 0, before);
+                if (child.isValid() && (child.flags() & Qt::ItemIsEnabled)) {
+                    setCurrentIndex(child);
+                }
+            }
+        } else if (m_model->hasChildren(before) && isExpanded(before)) {
+            collapse(before);
+        } else if (before.parent().isValid()) {
+            setCurrentIndex(before.parent());
+        }
+        event->accept();
+    } else {
+        QTreeView::keyPressEvent(event);
+    }
+    if (currentIndex() != before) {
+        scrollTo(currentIndex());
+        m_followTimer.start();
+    }
 }
 
 void Sidebar::onClicked(const QModelIndex &index)

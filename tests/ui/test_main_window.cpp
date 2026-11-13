@@ -839,6 +839,60 @@ private slots:
         QCOMPARE(pane->currentPath(), QDir::cleanPath(QDir::rootPath()));
     }
 
+    void arrowKeysWorkInsideTheTree()
+    {
+        QTemporaryDir directory;
+        QVERIFY(QDir(directory.path()).mkpath(QStringLiteral("raiz/alfa/dentro")));
+        QVERIFY(QDir(directory.path()).mkpath(QStringLiteral("raiz/beta")));
+        const QString root = QDir::cleanPath(directory.filePath(QStringLiteral("raiz")));
+
+        MainWindow window(m_scheduler, openJournal(directory));
+        BrowserPane *pane = window.openTab(directory.path());
+        QVERIFY(waitReady(pane));
+        window.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&window));
+
+        Sidebar *sidebar = window.sidebar();
+        sidebar->addPlace(QStringLiteral("Raíz"), root);
+        const QPoint rootPosition = sidebar->positionOf(root);
+        QVERIFY(!rootPosition.isNull());
+
+        // Un clic en el árbol abre la carpeta y deja el teclado en el árbol.
+        QTest::mouseClick(sidebar->viewport(), Qt::LeftButton, Qt::NoModifier, rootPosition);
+        QTRY_COMPARE(pane->currentPath(), root);
+        QCOMPARE(window.focusWidget(), sidebar);
+        QCOMPARE(sidebar->currentPlace(), root);
+
+        // El clic ya desplegó la rama; Izquierda la recoge y Derecha la despliega.
+        const QModelIndex rootIndex = sidebar->currentIndex();
+        QTRY_VERIFY(!sidebar->positionOf(root + QStringLiteral("/alfa")).isNull());
+        QVERIFY(sidebar->isExpanded(rootIndex));
+        QTest::keyClick(sidebar, Qt::Key_Left);
+        QVERIFY(!sidebar->isExpanded(rootIndex));
+        QCOMPARE(sidebar->currentPlace(), root);
+        QTest::keyClick(sidebar, Qt::Key_Right);
+        QVERIFY(sidebar->isExpanded(rootIndex));
+
+        // Derecha otra vez baja a la primera subcarpeta, y la lista la sigue.
+        QTest::keyClick(sidebar, Qt::Key_Right);
+        QCOMPARE(sidebar->currentPlace(), root + QStringLiteral("/alfa"));
+        QTRY_COMPARE(pane->currentPath(), root + QStringLiteral("/alfa"));
+        QCOMPARE(window.focusWidget(), sidebar);
+
+        // Abajo y arriba se mueven por el árbol, no por la lista de archivos.
+        QTest::keyClick(sidebar, Qt::Key_Down);
+        QCOMPARE(sidebar->currentPlace(), root + QStringLiteral("/beta"));
+        QTRY_COMPARE(pane->currentPath(), root + QStringLiteral("/beta"));
+        QTest::keyClick(sidebar, Qt::Key_Up);
+        QCOMPARE(sidebar->currentPlace(), root + QStringLiteral("/alfa"));
+
+        // Izquierda en una rama recogida sube a la carpeta padre.
+        QTest::keyClick(sidebar, Qt::Key_Left);
+        QCOMPARE(sidebar->currentPlace(), root);
+        QTRY_COMPARE(pane->currentPath(), root);
+        QCOMPARE(window.focusWidget(), sidebar);
+    }
+
     void searchFindsInSubfoldersAsALocation()
     {
         QTemporaryDir directory;
