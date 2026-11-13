@@ -5,6 +5,8 @@
 
 #include <QDir>
 #include <QFile>
+#include <QFileInfo>
+#include <QStringDecoder>
 
 #include <chrono>
 #include <deque>
@@ -42,6 +44,66 @@ QString childPath(const QString &directory, const QString &name)
 {
     return directory.endsWith(QLatin1Char('/')) ? directory + name : directory + QLatin1Char('/') + name;
 }
+
+/// Lee un archivo como texto la primera vez que la consulta lo pide.
+class FileContent : public ContentSource
+{
+public:
+    FileContent(QString path, qint64 maxBytes) : m_path(std::move(path)), m_maxBytes(maxBytes) {}
+
+    const QString *text() override
+    {
+        if (!m_loaded) {
+            m_loaded = true;
+            m_ok = load();
+        }
+        return m_ok ? &m_text : nullptr;
+    }
+
+    bool wasOpened() const { return m_opened; }
+
+private:
+    bool load()
+    {
+        // Solo archivos corrientes: abrir una tubería o un dispositivo
+        // podría dejar la búsqueda esperando para siempre.
+        const QFileInfo info(m_path);
+        if (!info.isFile() || info.size() > m_maxBytes) {
+            return false;
+        }
+        QFile file(m_path);
+        if (!file.open(QIODevice::ReadOnly)) {
+            return false;
+        }
+        m_opened = true;
+        const QByteArray data = file.read(m_maxBytes + 1);
+        if (data.size() > m_maxBytes) {
+            return false;   // creció mientras se leía
+        }
+        const bool utf16 = data.startsWith("\xff\xfe") || data.startsWith("\xfe\xff");
+        if (utf16) {
+            m_text = QStringDecoder(QStringDecoder::Utf16).decode(data);
+            return true;
+        }
+        // Un byte nulo al principio delata un binario (PDF, imagen, ZIP…).
+        if (data.left(8192).contains('\0')) {
+            return false;
+        }
+        QStringDecoder utf8(QStringDecoder::Utf8);
+        m_text = utf8.decode(data);
+        if (utf8.hasError()) {
+            m_text = QString::fromLatin1(data);   // texto antiguo de Windows
+        }
+        return true;
+    }
+
+    QString m_path;
+    qint64 m_maxBytes;
+    QString m_text;
+    bool m_loaded = false;
+    bool m_ok = false;
+    bool m_opened = false;
+};
 
 struct PendingFolder
 {
@@ -112,6 +174,8 @@ SearchSummary searchTree(const QStringList &roots, const Query &query, const Sea
     listOptions.firstBatchSize = 2000;
     listOptions.batchSize = 2000;
 
+    const bool readsContent = query.usesContent();
+
     while (!pending.empty() && !summary.truncated) {
         if (pause != nullptr) {
             pause->waitWhilePaused(cancel);
@@ -134,7 +198,7 @@ SearchSummary searchTree(const QStringList &roots, const Query &query, const Sea
                 }
                 ++progress.itemsExamined;
                 // Se baja a las subcarpetas reales; nunca a través de un enlace.
-                if (entry.isDirectory && !entry.isSymlink) {
+                if (options.recursive && entry.isDirectory && !entry.isSymlink) {
                     const bool otherDevice = folder.device != 0 && entry.deviceId != 0
                         && entry.deviceId != folder.device;
                     if (options.crossDevices || !otherDevice) {
@@ -142,7 +206,26 @@ SearchSummary searchTree(const QStringList &roots, const Query &query, const Sea
                                            entry.deviceId != 0 ? entry.deviceId : folder.device});
                     }
                 }
-                if (query.matches(entry)) {
+                bool matched = false;
+                if (readsContent) {
+                    // Leer archivos es lento: se atiende la pausa y la
+                    // cancelación en cada uno, y el avance sigue saliendo.
+                    if (pause != nullptr) {
+                        pause->waitWhilePaused(cancel);
+                    }
+                    if (cancel.isCancelled()) {
+                        return;
+                    }
+                    FileContent content(childPath(folder.path, entry.name), options.maxContentBytes);
+                    matched = query.matches(itemFrom(entry), &content);
+                    if (content.wasOpened()) {
+                        ++progress.filesRead;
+                        deliver(false);
+                    }
+                } else {
+                    matched = query.matches(entry);
+                }
+                if (matched) {
                     ++progress.hits;
                     batch.push_back({folder.path, std::move(entry)});
                     if (progress.hits >= options.maxHits) {

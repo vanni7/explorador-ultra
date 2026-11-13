@@ -317,11 +317,89 @@ private slots:
 
     void unavailableFiltersAreReported()
     {
-        const Query query = parsed(QStringLiteral("informe tag:rojo content:\"presupuesto anual\""));
-        QCOMPARE(query.unavailableFilters(), (QStringList{QStringLiteral("tag"), QStringLiteral("content")}));
+        const Query query = parsed(QStringLiteral("informe tag:rojo"));
+        QCOMPARE(query.unavailableFilters(), QStringList{QStringLiteral("tag")});
         // No aparentan funcionar: nada los cumple.
         QVERIFY(!query.matches(file(QStringLiteral("informe.txt"))));
         QVERIFY(parsed(QStringLiteral("informe")).unavailableFilters().isEmpty());
+    }
+
+    void severalWordsWithWildcardsAlsoMatchAsAPhrase()
+    {
+        // El caso que falló al dueño: la carpeta y sus libros.
+        QVERIFY(match(QStringLiteral("walter riso*"), QStringLiteral("WALTER RISO")));
+        QVERIFY(match(QStringLiteral("WALTER RISO*"), QStringLiteral("Walter Riso - Amar o depender.pdf")));
+        QVERIFY(match(QStringLiteral("walter   riso*"), QStringLiteral("Walter Riso.pdf")));
+        QVERIFY(!match(QStringLiteral("walter riso*"), QStringLiteral("Walter y Riso.pdf")));
+        QVERIFY(!match(QStringLiteral("walter riso*"), QStringLiteral("walter.pdf")));
+        // Sin comodines sigue siendo "están las dos palabras", en cualquier orden.
+        QVERIFY(match(QStringLiteral("walter riso"), QStringLiteral("Riso, Walter.pdf")));
+        // La lectura palabra por palabra sigue valiendo: contiene "factura" y es PDF.
+        QVERIFY(match(QStringLiteral("factura *.pdf"), QStringLiteral("mi factura de mayo.pdf")));
+        QVERIFY(match(QStringLiteral("*.pdf factura"), QStringLiteral("mi factura de mayo.pdf")));
+        QVERIFY(!match(QStringLiteral("factura *.pdf"), QStringLiteral("factura.txt")));
+        // Entre comillas es texto literal: el asterisco no es comodín.
+        QVERIFY(!match(QStringLiteral("\"walter riso*\""), QStringLiteral("Walter Riso.pdf")));
+        // NOT se aplica solo a la palabra que le sigue.
+        QVERIFY(match(QStringLiteral("walter -riso*"), QStringLiteral("walter otro.pdf")));
+        QVERIFY(match(QStringLiteral("walter -riso*"), QStringLiteral("Walter Riso.pdf")));
+        QVERIFY(!match(QStringLiteral("walter -*riso*"), QStringLiteral("Walter Riso.pdf")));
+    }
+
+    void caseSensitivityIsAnOption()
+    {
+        const QString name = QStringLiteral("Walter Riso.pdf");
+        QVERIFY(parsed(QStringLiteral("WALTER"), false).matches(file(name)));
+        QVERIFY(!parsed(QStringLiteral("WALTER"), true).matches(file(name)));
+        QVERIFY(parsed(QStringLiteral("Walter"), true).matches(file(name)));
+        QVERIFY(!parsed(QStringLiteral("walter riso*"), true).matches(file(name)));
+        QVERIFY(parsed(QStringLiteral("Walter Riso*"), true).matches(file(name)));
+    }
+
+    void contentIsAskedOnlyWhenTheRestMatches()
+    {
+        struct Text : ContentSource
+        {
+            QString value;
+            int asked = 0;
+            const QString *text() override
+            {
+                ++asked;
+                return &value;
+            }
+        };
+        Text text;
+        text.value = QStringLiteral("Presupuesto anual de 2026\nTotal: 1500");
+
+        const Query byFilter = parsed(QStringLiteral("content:\"presupuesto anual\" ext:txt"));
+        QVERIFY(byFilter.usesContent());
+        QVERIFY(byFilter.unavailableFilters().isEmpty());
+        const QString pdf = QStringLiteral("cuentas.pdf");
+        const QString txt = QStringLiteral("cuentas.txt");
+        QVERIFY(!byFilter.matches(file(pdf), &text));
+        QCOMPARE(text.asked, 0);   // la extensión ya lo descartó: no se lee
+        QVERIFY(byFilter.matches(file(txt), &text));
+        QCOMPARE(text.asked, 1);
+        // Sin nadie que dé el texto, no se cumple.
+        QVERIFY(!byFilter.matches(file(txt)));
+        // Una carpeta no tiene contenido.
+        Item folder = file(txt);
+        folder.isDirectory = true;
+        QVERIFY(!byFilter.matches(folder, &text));
+
+        QVERIFY(!parsed(QStringLiteral("content:PRESUPUESTO"), true).matches(file(txt), &text));
+        QVERIFY(parsed(QStringLiteral("content:PRESUPUESTO"), false).matches(file(txt), &text));
+        QVERIFY(!parsed(QStringLiteral("cuentas")).usesContent());
+
+        // Modo "buscar en el contenido": las palabras sueltas miran dentro.
+        QueryOptions inside;
+        inside.termsInContent = true;
+        const Query words = Query::parse(QStringLiteral("total anual*"), inside).value();
+        QVERIFY(words.usesContent());
+        QVERIFY(words.matches(file(pdf), &text));
+        QVERIFY(!Query::parse(QStringLiteral("total inexistente"), inside).value().matches(file(pdf), &text));
+        // Los filtros siguen mirando el nombre.
+        QVERIFY(!Query::parse(QStringLiteral("total name:informe"), inside).value().matches(file(pdf), &text));
     }
 
     void syntaxErrors_data()

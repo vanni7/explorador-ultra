@@ -32,6 +32,7 @@ struct SearchProgress
     qint64 itemsExamined = 0;       ///< Elementos comparados con la consulta.
     qint64 hits = 0;                ///< Resultados encontrados hasta ahora.
     qint64 unreadableFolders = 0;   ///< Carpetas que no se pudieron leer (permisos…).
+    qint64 filesRead = 0;           ///< Archivos abiertos para mirar su contenido.
     QString currentFolder;          ///< La que se está leyendo.
 };
 
@@ -43,6 +44,10 @@ struct SearchOptions
     /// defecto no: buscar en "/" no debe recorrer todos los discos conectados.
     /// Solo se puede comprobar donde el sistema informa del dispositivo.
     bool crossDevices = false;
+    /// Bajar a las subcarpetas. Sin esto solo se mira dentro de cada raíz.
+    bool recursive = true;
+    /// Al buscar en el contenido, los archivos mayores que esto no se leen.
+    qint64 maxContentBytes = 20 * 1000 * 1000;
     /// Tope de resultados. Al alcanzarlo la búsqueda termina y se marca
     /// `truncated`: una consulta que lo cumple todo no debe agotar la memoria.
     qint64 maxHits = 200000;
@@ -84,6 +89,10 @@ using HitsCallback = std::function<void(std::vector<Hit> &&, const SearchProgres
 /// - Una carpeta que no se puede leer se cuenta y se sigue con las demás.
 /// - Es bloqueante: se llama desde una tarea. Comprueba `cancel` y `pause`
 ///   entre carpeta y carpeta y entre lote y lote.
+///
+/// - Si la consulta mira el contenido (Query::usesContent), se leen los
+///   archivos de texto (UTF-8, UTF-16 o Latin-1) de hasta `maxContentBytes`.
+///   Los binarios (PDF, DOCX, imágenes…) no se leen: nunca cumplen.
 ///
 /// `pause` puede ser nullptr.
 SearchSummary searchTree(const QStringList &roots, const Query &query, const SearchOptions &options,

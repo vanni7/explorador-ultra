@@ -167,6 +167,53 @@ private slots:
 #endif
     }
 
+    void onlyTheFolderItselfWhenNotRecursive()
+    {
+        SearchOptions options;
+        options.recursive = false;
+        const Collected found = run({m_root}, QStringLiteral("playa OR informe"), options);
+        QCOMPARE(found.paths, QStringList{m_root + QStringLiteral("/informe.pdf")});
+        QCOMPARE(found.summary.progress.foldersScanned, 1);
+    }
+
+    void findsTextInsideFiles()
+    {
+        QTemporaryDir directory;
+        const QString root = QDir::cleanPath(directory.path());
+        QVERIFY(QDir(root).mkpath(QStringLiteral("notas/viejas")));
+        const auto write = [](const QString &path, const QByteArray &data) {
+            QFile file(path);
+            QVERIFY2(file.open(QIODevice::WriteOnly), qPrintable(path));
+            file.write(data);
+        };
+        write(root + QStringLiteral("/notas/lista.txt"), "Comprar pan\nLlamar a Walter Riso\n");
+        write(root + QStringLiteral("/notas/viejas/carta.txt"), QByteArray("Se\xf1or Riso: gracias"));   // Latin-1
+        const QString utf16 = QStringLiteral("apunte sobre riso");
+        write(root + QStringLiteral("/notas/unicode.txt"),
+              QByteArray("\xff\xfe") + QByteArray(reinterpret_cast<const char *>(utf16.utf16()), utf16.size() * 2));
+        write(root + QStringLiteral("/notas/otra.txt"), "nada que ver");
+        write(root + QStringLiteral("/binario.dat"), QByteArray("riso\0riso", 9));
+        write(root + QStringLiteral("/riso.txt"), "el nombre lo dice, el contenido no");
+        write(root + QStringLiteral("/grande.txt"), QByteArray(3000, 'a') + " riso");
+
+        SearchOptions options;
+        options.maxContentBytes = 2000;
+        const Collected found = run({root}, QStringLiteral("content:riso"), options);
+        QStringList expected{root + QStringLiteral("/notas/lista.txt"), root + QStringLiteral("/notas/unicode.txt"),
+                             root + QStringLiteral("/notas/viejas/carta.txt")};
+        expected.sort();
+        QCOMPARE(found.paths, expected);
+        QVERIFY(found.summary.progress.filesRead >= 5);
+
+        // Con la extensión por delante solo se abren los que la cumplen.
+        const Collected narrowed = run({root}, QStringLiteral("content:riso ext:dat"), options);
+        QVERIFY(narrowed.paths.isEmpty());
+        QCOMPARE(narrowed.summary.progress.filesRead, 1);
+
+        QCOMPARE(run({root}, QStringLiteral("content:\"Walter Riso\""), options).paths,
+                 QStringList{root + QStringLiteral("/notas/lista.txt")});
+    }
+
     void stopsAtTheLimit()
     {
         SearchOptions options;

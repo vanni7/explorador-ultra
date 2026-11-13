@@ -8,6 +8,7 @@
 #include <QRegularExpression>
 #include <QSet>
 
+#include <algorithm>
 #include <limits>
 #include <vector>
 
@@ -54,6 +55,7 @@ struct Query::Node
         Type,
         Hidden,      ///< isHidden == flag.
         Regex,
+        Content,     ///< El texto del archivo contiene `text`.
         Unavailable, ///< Filtro aún no implementado: nunca se cumple.
     };
 
@@ -193,6 +195,20 @@ bool wildcardMatch(QStringView pattern, QStringView name, bool fold)
         ++p;
     }
     return p == pattern.size();
+}
+
+/// true si esta parte de la consulta necesita leer el archivo.
+bool nodeUsesContent(const Query::Node &node)
+{
+    if (node.kind == Kind::Content) {
+        return true;
+    }
+    for (const NodePtr &child : node.children) {
+        if (nodeUsesContent(*child)) {
+            return true;
+        }
+    }
+    return false;
 }
 
 // ---------------------------------------------------------------------------
@@ -518,7 +534,8 @@ class Parser
 public:
     Parser(QList<Token> tokens, const QueryOptions &options, qint64 nowMs)
         : m_tokens(std::move(tokens)),
-          m_sensitivity(options.caseSensitive ? Qt::CaseSensitive : Qt::CaseInsensitive), m_nowMs(nowMs)
+          m_sensitivity(options.caseSensitive ? Qt::CaseSensitive : Qt::CaseInsensitive),
+          m_termsInContent(options.termsInContent), m_nowMs(nowMs)
     {
     }
 
@@ -564,10 +581,49 @@ private:
         if (children.size() == 1) {
             return children.front();
         }
+        // En un AND, lo que obliga a leer el archivo va al final: si el
+        // nombre, el tamaño o la fecha ya lo descartan, no se llega a abrir.
+        if (kind == Kind::And) {
+            std::stable_partition(children.begin(), children.end(), [](const NodePtr &child) {
+                return child && !nodeUsesContent(*child);
+            });
+        }
         auto node = std::make_shared<Query::Node>();
         node->kind = kind;
         node->children = std::move(children);
         return node;
+    }
+
+    static bool hasWildcards(const QString &text)
+    {
+        return text.contains(QLatin1Char('*')) || text.contains(QLatin1Char('?'));
+    }
+
+    /// Lo que va entre dos operadores. Varias palabras seguidas sin comillas
+    /// se leen juntas: tienen que estar todas (AND) y, si alguna lleva
+    /// comodines, también vale que el nombre encaje con la frase tal como se
+    /// escribió. Así "walter riso*" encuentra "Walter Riso - Amar.pdf", que
+    /// contiene "walter" pero no empieza por "riso".
+    NodePtr parseOperand()
+    {
+        if (m_termsInContent || peek().type != Token::Type::Term || peek().quoted) {
+            return parseNot();
+        }
+        std::vector<NodePtr> words;
+        QStringList phrase;
+        bool wildcards = false;
+        while (peek().type == Token::Type::Term && !peek().quoted) {
+            const Token token = take();
+            words.push_back(makeNameNode(token.value, false));
+            phrase.append(token.value);
+            wildcards = wildcards || hasWildcards(token.value);
+        }
+        const bool several = words.size() > 1;
+        NodePtr all = combine(Kind::And, std::move(words));
+        if (!several || !wildcards) {
+            return all;
+        }
+        return combine(Kind::Or, {all, makeNameNode(phrase.join(QLatin1Char(' ')), false)});
     }
 
     NodePtr parseOr()
@@ -588,7 +644,7 @@ private:
     NodePtr parseAnd()
     {
         std::vector<NodePtr> parts;
-        parts.push_back(parseNot());
+        parts.push_back(parseOperand());
         while (m_error.isEmpty()) {
             const Token::Type next = peek().type;
             if (next == Token::Type::Or || next == Token::Type::RightParen || next == Token::Type::End) {
@@ -603,7 +659,7 @@ private:
                     break;
                 }
             }
-            parts.push_back(parseNot());   // un espacio entre términos equivale a AND
+            parts.push_back(parseOperand());   // un espacio entre términos equivale a AND
         }
         return combine(Kind::And, std::move(parts));
     }
@@ -644,7 +700,8 @@ private:
             return inner;
         }
         case Token::Type::Term:
-            return makeNameNode(token.value, token.quoted);
+            return m_termsInContent ? makeContentNode(token.value, token.quoted)
+                                    : makeNameNode(token.value, token.quoted);
         case Token::Type::Filter:
             return makeFilter(token);
         case Token::Type::Or:
@@ -670,8 +727,28 @@ private:
         auto node = std::make_shared<Query::Node>();
         node->text = foldPattern(toNfc(text), m_sensitivity);
         node->caseSensitivity = m_sensitivity;
-        const bool hasWildcards = !quoted && (text.contains(QLatin1Char('*')) || text.contains(QLatin1Char('?')));
-        node->kind = hasWildcards ? Kind::Wildcard : Kind::Substring;
+        node->kind = (!quoted && hasWildcards(text)) ? Kind::Wildcard : Kind::Substring;
+        return node;
+    }
+
+    /// Texto que tiene que aparecer dentro del archivo. Es siempre "contiene":
+    /// los asteriscos de los extremos sobran y se quitan; entre comillas el
+    /// texto se toma tal cual.
+    NodePtr makeContentNode(const QString &text, bool quoted) const
+    {
+        QString wanted = toNfc(text);
+        if (!quoted) {
+            while (wanted.startsWith(QLatin1Char('*'))) {
+                wanted.remove(0, 1);
+            }
+            while (wanted.endsWith(QLatin1Char('*'))) {
+                wanted.chop(1);
+            }
+        }
+        auto node = std::make_shared<Query::Node>();
+        node->kind = Kind::Content;
+        node->text = wanted;
+        node->caseSensitivity = m_sensitivity;
         return node;
     }
 
@@ -761,7 +838,10 @@ private:
             }
             return node;
         }
-        // tag: y content: existen en la gramática, pero aún no se evalúan.
+        if (token.key == QLatin1String("content")) {
+            return makeContentNode(token.value, token.quoted);
+        }
+        // tag: existe en la gramática, pero aún no se evalúa.
         node->kind = Kind::Unavailable;
         if (!m_unavailable.contains(token.key)) {
             m_unavailable.append(token.key);
@@ -886,6 +966,7 @@ private:
     QList<Token> m_tokens;
     qsizetype m_index = 0;
     Qt::CaseSensitivity m_sensitivity;
+    bool m_termsInContent;
     qint64 m_nowMs;
     QString m_error;
     QStringList m_unavailable;
@@ -902,25 +983,25 @@ bool hasExtension(QStringView name, const QString &dotExtension)
     return name.size() > dotExtension.size() && name.endsWith(dotExtension, Qt::CaseInsensitive);
 }
 
-bool evaluate(const Query::Node &node, const Item &item, QStringView name)
+bool evaluate(const Query::Node &node, const Item &item, QStringView name, ContentSource *content)
 {
     switch (node.kind) {
     case Kind::And:
         for (const NodePtr &child : node.children) {
-            if (!evaluate(*child, item, name)) {
+            if (!evaluate(*child, item, name, content)) {
                 return false;
             }
         }
         return true;
     case Kind::Or:
         for (const NodePtr &child : node.children) {
-            if (evaluate(*child, item, name)) {
+            if (evaluate(*child, item, name, content)) {
                 return true;
             }
         }
         return false;
     case Kind::Not:
-        return !evaluate(*node.children.front(), item, name);
+        return !evaluate(*node.children.front(), item, name, content);
     case Kind::Substring:
         return containsText(node.text, name, node.caseSensitivity == Qt::CaseInsensitive);
     case Kind::Wildcard:
@@ -959,6 +1040,13 @@ bool evaluate(const Query::Node &node, const Item &item, QStringView name)
         return item.isHidden == node.flag;
     case Kind::Regex:
         return node.regex.matchView(name).hasMatch();
+    case Kind::Content: {
+        if (content == nullptr || item.isDirectory) {
+            return false;
+        }
+        const QString *text = content->text();
+        return text != nullptr && text->contains(node.text, node.caseSensitivity);
+    }
     case Kind::Unavailable:
         return false;
     }
@@ -1043,10 +1131,11 @@ core::Result<Query> Query::parse(const QString &text, const QueryOptions &option
     query.m_root = std::move(root);
     query.m_unavailable = parser.unavailable();
     query.m_text = text;
+    query.m_usesContent = query.m_root != nullptr && nodeUsesContent(*query.m_root);
     return query;
 }
 
-bool Query::matches(const Item &item) const
+bool Query::matches(const Item &item, ContentSource *content) const
 {
     if (!m_root) {
         return true;
@@ -1054,10 +1143,10 @@ bool Query::matches(const Item &item) const
     // El nombre se compara en forma compuesta (NFC). Casi todos los nombres
     // ya están así con seguridad: entonces se evita copiar la cadena.
     if (isComposedForSure(item.name)) {
-        return evaluate(*m_root, item, item.name);
+        return evaluate(*m_root, item, item.name, content);
     }
     const QString composed = item.name.toString().normalized(QString::NormalizationForm_C);
-    return evaluate(*m_root, item, composed);
+    return evaluate(*m_root, item, composed, content);
 }
 
 } // namespace eu::search
