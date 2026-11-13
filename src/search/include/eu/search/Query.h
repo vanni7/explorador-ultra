@@ -80,6 +80,13 @@ public:
     /// con `termsInContent`): hay que evaluarla con un ContentSource.
     bool usesContent() const { return m_usesContent; }
 
+    /// Un texto que el nombre de todo elemento que cumpla la consulta contiene
+    /// con seguridad (sin distinguir mayúsculas), o vacío si no se puede
+    /// asegurar ninguno. Le sirve al índice para descartar filas antes de
+    /// evaluarlas. Solo letras ASCII, dígitos y signos: lo que una base de
+    /// datos compara igual que esta clase.
+    QString nameHint() const { return m_nameHint; }
+
     /// Filtros que aparecen en la consulta y esta versión todavía no sabe
     /// evaluar (`tag:`). Un elemento nunca los cumple; la
     /// interfaz debe avisar en vez de aparentar que se aplicaron.
@@ -94,6 +101,7 @@ private:
     QStringList m_unavailable;
     QString m_text;
     bool m_usesContent = false;
+    QString m_nameHint;
 };
 
 /// Interpreta un tamaño escrito por el usuario: "10MB", "1,5 GiB", "300".

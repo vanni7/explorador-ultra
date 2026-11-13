@@ -6,6 +6,7 @@
 //   eu-bench listing <carpeta>              compara formas de listar una carpeta
 //   eu-bench sort    <carpeta>              ordenamiento natural y filtrado en memoria
 //   eu-bench copy    <origen> <carpetaDestino>   compara formas de copiar un archivo grande
+//   eu-bench index   <carpeta> <archivo.db> [consulta…]   construye el índice y busca en él
 //
 // Cada medición imprime una línea "nombre;milisegundos;detalle" fácil de pegar
 // en docs/BENCHMARKS.md. Aquí nunca se escribe un valor que no se haya medido.
@@ -13,6 +14,7 @@
 #include "eu/core/NaturalCompare.h"
 #include "eu/fs/DirectoryLister.h"
 #include "eu/fs/Volumes.h"
+#include "eu/index/Index.h"
 
 #include <QCoreApplication>
 #include <QDir>
@@ -324,6 +326,59 @@ int commandCopy(const QString &source, const QString &targetFolder)
 
 } // namespace
 
+/// Construye (o pone al día) el índice de una carpeta y mide búsquedas en él:
+/// tiempo hasta el primer resultado y tiempo total.
+int commandIndex(const QString &folder, const QString &databasePath, const QStringList &queries)
+{
+    const auto opened = eu::index::Index::open(databasePath, folder);
+    if (!opened.ok()) {
+        out() << "No se pudo abrir el índice: " << opened.error().message << '\n';
+        return 1;
+    }
+    const eu::index::Index index = opened.value();
+    QElapsedTimer timer;
+    timer.start();
+    const auto synced = index.sync(folder, {}, {});
+    if (!synced.ok()) {
+        out() << "No se pudo indexar: " << synced.error().message << '\n';
+        return 1;
+    }
+    const eu::index::IndexInfo info = index.info();
+    report(QStringLiteral("índice: recorrido completo"), timer.nsecsElapsed(),
+           QStringLiteral("%1 entradas, %2 carpetas; añadidas %3, quitadas %4, cambiadas %5; ilegibles %6; "
+                          "base %7 MB; RSS %8 MB")
+               .arg(info.entries).arg(info.folders).arg(synced.value().added).arg(synced.value().removed)
+               .arg(synced.value().updated).arg(synced.value().unreadableFolders)
+               .arg(double(QFileInfo(databasePath).size()) / 1e6, 0, 'f', 1)
+               .arg(residentMemoryMb(), 0, 'f', 1));
+
+    for (const QString &text : queries) {
+        const auto query = eu::search::Query::parse(text);
+        if (!query.ok()) {
+            out() << "Consulta no válida: " << text << '\n';
+            continue;
+        }
+        eu::search::SearchOptions options;
+        options.batchSize = 1;   // entregar en cuanto haya algo, para medir el primer resultado
+        options.maxBatchDelayMs = 0;
+        qint64 firstNs = -1;
+        timer.restart();
+        const eu::search::SearchSummary summary = index.search(
+            {folder}, query.value(), options, {},
+            [&](std::vector<eu::search::Hit> &&hits, const eu::search::SearchProgress &) {
+                if (firstNs < 0 && !hits.empty()) {
+                    firstNs = timer.nsecsElapsed();
+                }
+            });
+        report(QStringLiteral("índice: buscar «%1»").arg(text), timer.nsecsElapsed(),
+               QStringLiteral("%1 resultados; primer resultado a los %2 ms; filas examinadas %3")
+                   .arg(summary.progress.hits)
+                   .arg(firstNs < 0 ? QStringLiteral("—") : QString::number(double(firstNs) / 1e6, 'f', 2))
+                   .arg(summary.progress.itemsExamined));
+    }
+    return 0;
+}
+
 int main(int argc, char *argv[])
 {
     QCoreApplication application(argc, argv);
@@ -345,6 +400,10 @@ int main(int argc, char *argv[])
     if (command == QStringLiteral("copy") && arguments.size() == 4) {
         return commandCopy(arguments[2], arguments[3]);
     }
+    if (command == QStringLiteral("index") && arguments.size() >= 4) {
+        return commandIndex(QDir::cleanPath(arguments[2]), arguments[3], arguments.mid(4));
+    }
+    out() << "Uso: eu-bench index <carpeta> <archivo.db> [consulta…]\n";
     out() << "Uso: eu-bench mktree <carpeta> <n> | volumes | listing <carpeta> | sort <carpeta> | copy <origen> <carpetaDestino>\n";
     return 2;
 }

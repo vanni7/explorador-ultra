@@ -211,6 +211,31 @@ bool nodeUsesContent(const Query::Node &node)
     return false;
 }
 
+/// Texto que el nombre contiene seguro si se cumple esta parte de la consulta.
+QString nameHintOf(const Query::Node &node)
+{
+    if (node.kind == Kind::Substring) {
+        for (const QChar character : node.text) {
+            if (character.unicode() >= 0x80) {
+                return {};   // fuera de ASCII las mayúsculas no se comparan igual en SQLite
+            }
+        }
+        return node.text;
+    }
+    if (node.kind == Kind::And) {
+        // Basta con uno de los términos; el más largo descarta más.
+        QString best;
+        for (const NodePtr &child : node.children) {
+            const QString hint = nameHintOf(*child);
+            if (hint.size() > best.size()) {
+                best = hint;
+            }
+        }
+        return best;
+    }
+    return {};
+}
+
 // ---------------------------------------------------------------------------
 // Tipos de archivo
 // ---------------------------------------------------------------------------
@@ -1132,6 +1157,7 @@ core::Result<Query> Query::parse(const QString &text, const QueryOptions &option
     query.m_unavailable = parser.unavailable();
     query.m_text = text;
     query.m_usesContent = query.m_root != nullptr && nodeUsesContent(*query.m_root);
+    query.m_nameHint = query.m_root != nullptr ? nameHintOf(*query.m_root) : QString();
     return query;
 }
 
