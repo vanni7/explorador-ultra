@@ -211,29 +211,79 @@ bool nodeUsesContent(const Query::Node &node)
     return false;
 }
 
-/// Texto que el nombre contiene seguro si se cumple esta parte de la consulta.
-QString nameHintOf(const Query::Node &node)
+bool isAscii(QStringView text)
 {
-    if (node.kind == Kind::Substring) {
-        for (const QChar character : node.text) {
-            if (character.unicode() >= 0x80) {
-                return {};   // fuera de ASCII las mayúsculas no se comparan igual en SQLite
+    for (const QChar character : text) {
+        if (character.unicode() >= 0x80) {
+            return false;   // fuera de ASCII las mayúsculas no se comparan igual en SQLite
+        }
+    }
+    return true;
+}
+
+/// Textos de los que el nombre contiene seguro al menos uno si se cumple esta
+/// parte de la consulta. Vacío = no se puede asegurar nada.
+QStringList nameHintsOf(const Query::Node &node)
+{
+    switch (node.kind) {
+    case Kind::Substring:
+        return (!node.text.isEmpty() && isAscii(node.text)) ? QStringList{node.text} : QStringList();
+    case Kind::Wildcard: {
+        // El tramo literal más largo del patrón: "fot*.jpg" contiene ".jpg".
+        QString best;
+        const QStringList pieces = node.text.split(QRegularExpression(QStringLiteral("[*?]")), Qt::SkipEmptyParts);
+        for (const QString &piece : pieces) {
+            if (piece.size() > best.size()) {
+                best = piece;
             }
         }
-        return node.text;
+        return (!best.isEmpty() && isAscii(best)) ? QStringList{best} : QStringList();
     }
-    if (node.kind == Kind::And) {
-        // Basta con uno de los términos; el más largo descarta más.
-        QString best;
+    case Kind::Extension:
+        for (const QString &extension : node.list) {
+            if (!isAscii(extension)) {
+                return {};
+            }
+        }
+        return node.list;   // ".pdf", ".jpg"…
+    case Kind::And: {
+        // Basta con la condición de uno de los términos: se elige la que
+        // más descarta (menos alternativas y más largas).
+        QStringList best;
+        qsizetype bestScore = 0;
         for (const NodePtr &child : node.children) {
-            const QString hint = nameHintOf(*child);
-            if (hint.size() > best.size()) {
-                best = hint;
+            const QStringList hints = nameHintsOf(*child);
+            if (hints.isEmpty()) {
+                continue;
+            }
+            qsizetype shortest = hints.first().size();
+            for (const QString &hint : hints) {
+                shortest = qMin(shortest, hint.size());
+            }
+            const qsizetype score = shortest * 8 / hints.size();
+            if (score > bestScore) {
+                bestScore = score;
+                best = hints;
             }
         }
         return best;
     }
-    return {};
+    case Kind::Or: {
+        // Cualquiera de las ramas vale: hacen falta las pistas de todas.
+        QStringList all;
+        for (const NodePtr &child : node.children) {
+            const QStringList hints = nameHintsOf(*child);
+            if (hints.isEmpty()) {
+                return {};
+            }
+            all += hints;
+        }
+        all.removeDuplicates();
+        return all.size() <= 16 ? all : QStringList();
+    }
+    default:
+        return {};
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1157,7 +1207,7 @@ core::Result<Query> Query::parse(const QString &text, const QueryOptions &option
     query.m_unavailable = parser.unavailable();
     query.m_text = text;
     query.m_usesContent = query.m_root != nullptr && nodeUsesContent(*query.m_root);
-    query.m_nameHint = query.m_root != nullptr ? nameHintOf(*query.m_root) : QString();
+    query.m_nameHints = query.m_root != nullptr ? nameHintsOf(*query.m_root) : QStringList();
     return query;
 }
 

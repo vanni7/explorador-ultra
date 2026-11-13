@@ -402,6 +402,28 @@ private slots:
         QVERIFY(!Query::parse(QStringLiteral("total name:informe"), inside).value().matches(file(pdf), &text));
     }
 
+    void nameHintsNeverExcludeAMatch()
+    {
+        QCOMPARE(parsed(QStringLiteral("Factura")).nameHints(), QStringList{QStringLiteral("factura")});
+        QCOMPARE(parsed(QStringLiteral("fot*.jpg")).nameHints(), QStringList{QStringLiteral(".jpg")});
+        QCOMPARE(parsed(QStringLiteral("ext:pdf,epub")).nameHints(),
+                 (QStringList{QStringLiteral(".pdf"), QStringLiteral(".epub")}));
+        // De un AND basta la condición que más descarta.
+        QCOMPARE(parsed(QStringLiteral("a presupuesto ext:pdf")).nameHints(), QStringList{QStringLiteral("presupuesto")});
+        // De un OR hacen falta todas las ramas; si una no da pista, no hay pista.
+        QCOMPARE(parsed(QStringLiteral("acta OR informe")).nameHints(),
+                 (QStringList{QStringLiteral("acta"), QStringLiteral("informe")}));
+        QVERIFY(parsed(QStringLiteral("acta OR size:>1MB")).nameHints().isEmpty());
+        QCOMPARE(parsed(QStringLiteral("walter riso*")).nameHints(),
+                 (QStringList{QStringLiteral("walter"), QStringLiteral("walter riso")}));
+        // Nada seguro: negaciones, tamaños, expresiones regulares, letras no ASCII.
+        QVERIFY(parsed(QStringLiteral("-borrador")).nameHints().isEmpty());
+        QVERIFY(parsed(QStringLiteral("size:>1MB")).nameHints().isEmpty());
+        QVERIFY(parsed(QStringLiteral("regex:/^a/")).nameHints().isEmpty());
+        QVERIFY(parsed(QStringLiteral("camión")).nameHints().isEmpty());
+        QVERIFY(parsed(QString()).nameHints().isEmpty());
+    }
+
     void syntaxErrors_data()
     {
         QTest::addColumn<QString>("query");

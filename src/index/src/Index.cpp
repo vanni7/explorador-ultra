@@ -611,7 +611,7 @@ search::SearchSummary Index::search(const QStringList &roots, const search::Quer
 
     {
         Connection connection(m_databasePath);
-        const QString hint = query.nameHint();
+        const QStringList hints = query.nameHints();
         for (const QString &root : roots) {
             if (!connection.isOpen() || summary.truncated || cancel.isCancelled()) {
                 break;
@@ -625,8 +625,13 @@ search::SearchSummary Index::search(const QStringList &roots, const search::Quer
             if (!options.includeHidden) {
                 sql += QStringLiteral(" AND d.hidden = 0 AND (e.flags & %1) = 0").arg(int(HiddenFlag));
             }
-            if (!hint.isEmpty()) {
-                sql += QStringLiteral(" AND e.name LIKE ? ESCAPE '\\'");
+            if (!hints.isEmpty()) {
+                // La base descarta casi todo sin que haya que traer la fila.
+                QStringList alternatives;
+                for (qsizetype i = 0; i < hints.size(); ++i) {
+                    alternatives.append(QStringLiteral("e.name LIKE ? ESCAPE '\\'"));
+                }
+                sql += QStringLiteral(" AND (") + alternatives.join(QStringLiteral(" OR ")) + QLatin1Char(')');
             }
             QSqlQuery rows(connection.database());
             rows.setForwardOnly(true);
@@ -636,7 +641,7 @@ search::SearchSummary Index::search(const QStringList &roots, const search::Quer
                 rows.addBindValue(relative + QLatin1Char('/'));
                 rows.addBindValue(relative + QLatin1Char('0'));
             }
-            if (!hint.isEmpty()) {
+            for (const QString &hint : hints) {
                 rows.addBindValue(likeContaining(hint));
             }
             if (!rows.exec()) {
