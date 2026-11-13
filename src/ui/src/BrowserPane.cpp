@@ -735,11 +735,51 @@ bool BrowserPane::showsSearch() const
 void BrowserPane::search(const QString &queryText)
 {
     const QString text = queryText.trimmed();
-    const QString root = showsSearch() ? searchRootOf(m_location) : m_location;
-    if (text.isEmpty() || root.isEmpty() || showsVolumes()) {
+    if (text.isEmpty() || m_location.isEmpty() || showsVolumes()) {
         return;
     }
-    navigateTo(searchLocation(root, text));
+    // Desde unos resultados se repite con el mismo alcance y las mismas opciones.
+    SearchSpec spec;
+    if (showsSearch()) {
+        spec = searchSpecOf(m_location);
+    } else {
+        spec.origin = m_location;
+    }
+    spec.query = text;
+    search(spec);
+}
+
+void BrowserPane::search(const SearchSpec &spec)
+{
+    if (spec.query.trimmed().isEmpty() || spec.origin.isEmpty()) {
+        return;
+    }
+    navigateTo(searchLocation(spec));
+}
+
+QString BrowserPane::searchWhere() const
+{
+    if (!showsSearch()) {
+        return {};
+    }
+    const SearchSpec spec = searchSpecOf(m_location);
+    switch (spec.scope) {
+    case SearchScope::Folder:
+        return tr("%1 (sin subcarpetas)").arg(QDir::toNativeSeparators(spec.origin));
+    case SearchScope::Subfolders:
+        return QDir::toNativeSeparators(spec.origin);
+    case SearchScope::Volume:
+        return tr("la unidad %1").arg(QDir::toNativeSeparators(spec.roots.value(0)));
+    case SearchScope::AllVolumes:
+        return tr("todas las unidades (%1)").arg(spec.roots.size());
+    case SearchScope::ChosenVolumes:
+        break;
+    }
+    QStringList names;
+    for (const QString &root : spec.roots) {
+        names.append(QDir::toNativeSeparators(root));
+    }
+    return tr("las unidades %1").arg(names.join(QStringLiteral(", ")));
 }
 
 void BrowserPane::cancelSearch()
@@ -755,14 +795,20 @@ void BrowserPane::cancelSearch()
 void BrowserPane::startSearch()
 {
     cancelSearch();
-    const QString root = searchRootOf(m_location);
+    const SearchSpec spec = searchSpecOf(m_location);
+    const bool withinFolder = spec.scope == SearchScope::Folder || spec.scope == SearchScope::Subfolders;
     m_resultsModel->clear();
-    m_resultsModel->setRoot(root);
+    // Buscando en una carpeta, la columna Carpeta es relativa a ella; en
+    // unidades enteras se muestra la ruta completa.
+    m_resultsModel->setRoot(withinFolder ? spec.origin : QString());
     m_searchProgress = {};
     m_searchTruncated = false;
     m_searchError.clear();
 
-    const core::Result<search::Query> parsedQuery = search::Query::parse(searchQueryOf(m_location));
+    search::QueryOptions queryOptions;
+    queryOptions.caseSensitive = spec.caseSensitive;
+    queryOptions.termsInContent = spec.inContent;
+    const core::Result<search::Query> parsedQuery = search::Query::parse(spec.query, queryOptions);
     if (!parsedQuery.ok()) {
         m_searchError = parsedQuery.error().message;
         m_searchState = SearchState::Invalid;
@@ -779,6 +825,8 @@ void BrowserPane::startSearch()
     m_searchState = SearchState::Running;
     search::SearchOptions options;
     options.includeHidden = m_model->showHidden();
+    options.recursive = spec.scope != SearchScope::Folder;
+    m_searchReadsContent = parsedQuery.value().usesContent();
 
     // La tarea no toca este objeto: trabaja con copias y devuelve los lotes al
     // hilo de interfaz, donde se comprueba que la pestaña sigue viva y que
@@ -787,10 +835,10 @@ void BrowserPane::startSearch()
     const quint64 generation = m_searchGeneration;
     m_searchTask = m_scheduler.submit(
         tasks::Category::Indexing, tasks::Priority::UserInteraction,
-        [self, generation, root, query = parsedQuery.value(), options,
+        [self, generation, roots = spec.roots, query = parsedQuery.value(), options,
          gate = m_searchGate](const tasks::CancelToken &cancel) {
             const search::SearchSummary summary = search::searchTree(
-                {root}, query, options, cancel, gate.get(),
+                roots, query, options, cancel, gate.get(),
                 [&](std::vector<search::Hit> &&hits, const search::SearchProgress &progress) {
                     QMetaObject::invokeMethod(qApp, [self, generation, hits = std::move(hits), progress]() mutable {
                         if (self) {
@@ -888,8 +936,15 @@ void BrowserPane::updateSearchInfo()
     case SearchState::Stopped:  pattern = tr("Detenida antes de terminar. «%1» en %2 — carpetas revisadas: %3"); break;
     default:                    pattern = tr("Búsqueda terminada. «%1» en %2 — carpetas revisadas: %3"); break;
     }
-    QString text = pattern.arg(searchQueryOf(m_location), QDir::toNativeSeparators(searchRootOf(m_location)),
-                               QLocale().toString(m_searchProgress.foldersScanned));
+    const SearchSpec spec = searchSpecOf(m_location);
+    QString text = pattern.arg(spec.query, searchWhere(), QLocale().toString(m_searchProgress.foldersScanned));
+    if (m_searchReadsContent) {
+        text += tr(" · archivos leídos: %1 (solo texto, hasta 20 MB)")
+                    .arg(QLocale().toString(m_searchProgress.filesRead));
+    }
+    if (spec.caseSensitive) {
+        text += tr(" · distingue mayúsculas");
+    }
     if (m_searchProgress.unreadableFolders > 0) {
         text += tr(" · no se pudieron leer: %1").arg(QLocale().toString(m_searchProgress.unreadableFolders));
     }
@@ -1007,6 +1062,9 @@ void BrowserPane::applyFilterText(const QString &text)
     const QStringList unavailable = parsedQuery.value().unavailableFilters();
     if (!unavailable.isEmpty()) {
         m_filterProblem = tr("Aún no disponible: %1").arg(unavailable.join(QStringLiteral(":, ")) + QLatin1Char(':'));
+    } else if (parsedQuery.value().usesContent()) {
+        // El filtro no abre archivos: se dice, en vez de dejar la lista vacía sin más.
+        m_filterProblem = tr("content: solo funciona en el buscador (Ctrl+F)");
     }
     m_model->setFilter(parsedQuery.value());
     updateFilterInfo();

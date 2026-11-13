@@ -6,7 +6,22 @@ Así se escriben las consultas en Explorador Ultra. La misma sintaxis sirve para
 | Dónde | Qué hace |
 |---|---|
 | **Filtro** (Ctrl+I, bajo la lista) | Deja a la vista solo lo que cumple, dentro de la carpeta abierta. Actúa a cada tecla |
-| **Buscador** (Ctrl+F, arriba a la derecha) | Al pulsar Intro busca en la carpeta abierta **y en todas sus subcarpetas**. Los resultados ocupan la pestaña; se vuelve con Atrás o Subir |
+| **Buscador** (Ctrl+F, arriba a la derecha) | Al pulsar Intro busca en la carpeta abierta **y en todas sus subcarpetas** (o donde diga el botón «Opciones»). Los resultados ocupan la pestaña; se vuelve con Atrás o Subir |
+
+### Opciones del buscador
+El botón **Opciones**, a la derecha del buscador, decide cómo se busca. El texto gris del buscador dice en cada momento qué va a hacer, y el botón muestra un punto («Opciones •») cuando algo no está como de fábrica.
+
+| Opción | Qué hace |
+|---|---|
+| Solo en esta carpeta | No entra en las subcarpetas |
+| En esta carpeta y sus subcarpetas | Lo habitual |
+| En toda esta unidad | Busca desde la raíz de la unidad donde está la carpeta |
+| En todas las unidades | Recorre todas las unidades conectadas. Es lo que se hace siempre desde la lista «Unidades» |
+| En las unidades que elija… | Pregunta en cuáles |
+| El nombre / El contenido (archivos de texto) | Con «El contenido», las palabras sueltas se buscan **dentro** de los archivos; los filtros (`ext:`, `name:`, `size:`…) siguen mirando el nombre y los datos del archivo |
+| Distinguir mayúsculas y minúsculas | Desactivado de fábrica. Es la única opción que se recuerda al cerrar |
+
+**Límites de la búsqueda en contenido (por ahora):** solo lee archivos de texto (TXT, código, Markdown, CSV, registros…) en UTF-8, UTF-16 o Latin-1 y de hasta 20 MB. **No lee PDF, Word, Excel ni otros documentos de oficina**: eso llega con la Fase 4 (SPEC §6.5). No hay índice: abre cada archivo, así que en una unidad entera puede tardar; conviene acotar con `ext:` (`presupuesto ext:txt,md`).
 
 La búsqueda en subcarpetas no entra en carpetas ocultas salvo que esté activado «Mostrar ocultos», no sigue enlaces simbólicos a carpetas y no pasa a otras unidades montadas dentro de la carpeta. Se detiene al llegar a 200 000 resultados y lo avisa.
 
@@ -17,6 +32,7 @@ La búsqueda en subcarpetas no entra en carpetas ocultas salvo que esté activad
 | `fot*.jpg` | Nombres que **encajan enteros** con el patrón: `foto playa.jpg`, pero no `mi foto.jpg` |
 | `informe_202?.pdf` | `informe_2024.pdf`, `informe_2025.pdf`… (`?` es exactamente un carácter) |
 | `factura 2025` | Nombres que contienen las dos palabras (el espacio significa "y") |
+| `walter riso*` | Nombres que **empiezan** por "walter riso": `Walter Riso - Amar o depender.pdf` y la carpeta `WALTER RISO` |
 | `"acta final"` | Ese texto exacto, con su espacio |
 | `acta OR informe` | Cualquiera de los dos |
 | `informe NOT borrador` | Informes que no sean borradores (también `informe -borrador`) |
@@ -25,8 +41,9 @@ La búsqueda en subcarpetas no entra en carpetas ocultas salvo que esté activad
 ## Términos
 - **Palabra sin comodines**: basta con que el nombre la contenga.
 - **Palabra con `*` o `?`**: el patrón debe coincidir con el nombre completo. `*` vale por cero o más caracteres y `?` por exactamente uno. Para "contiene" con comodines, rodea con asteriscos: `*factura*202?*`.
+- **Varias palabras seguidas con algún comodín** (`walter riso*`, `informe final 202?.pdf`): además de leerse palabra por palabra, se prueban como un solo patrón con sus espacios, y basta con que una de las dos lecturas se cumpla. Así no hace falta escribir `walter?riso*`. Si entre las palabras hay un operador, un filtro o comillas, cada tramo se lee por separado.
 - **Texto entre comillas**: literal. Dentro de las comillas `*`, `?`, los espacios y las palabras `AND`/`OR`/`NOT` son texto corriente. Una comilla dentro se escribe `\"`.
-- **Mayúsculas y minúsculas**: no se distinguen, salvo que se active la opción. Los acentos sí cuentan (`camion` no encuentra `camión`).
+- **Mayúsculas y minúsculas**: no se distinguen, salvo que se active la opción «Distinguir mayúsculas y minúsculas» del botón Opciones. Los acentos sí cuentan (`camion` no encuentra `camión`).
 - **Unicode**: `é` escrita como una letra o como `e` + acento (como la guarda macOS) se consideran iguales.
 
 ## Operadores
@@ -51,9 +68,9 @@ Se escriben `clave:valor`, sin espacio tras los dos puntos. La clave puede ir en
 | `regex:` | Expresión regular sobre el nombre, entre barras. | `regex:/^IMG_\d{4}\.jpe?g$/` |
 | `name:` | Igual que un término suelto; útil para buscar algo que se parece a un filtro. | `name:fot*.jpg` |
 | `tag:` | Etiqueta. **Aún no disponible** (Fase 5). | `tag:rojo` |
-| `content:` | Texto dentro del archivo. **Aún no disponible.** | `content:"presupuesto anual"` |
+| `content:` | Texto dentro del archivo (solo archivos de texto; ver «Opciones del buscador»). Es siempre "contiene". Solo en el buscador: el filtro Ctrl+I no abre archivos y lo avisa. | `content:"presupuesto anual"` · `content:riso ext:txt` |
 
-Si la consulta usa `tag:` o `content:`, la aplicación avisa de que ese filtro todavía no funciona; no devuelve resultados como si lo hubiera aplicado.
+Si la consulta usa `tag:`, la aplicación avisa de que ese filtro todavía no funciona; no devuelve resultados como si lo hubiera aplicado.
 
 Una palabra con dos puntos que no sea uno de estos filtros (`nota:importante`) se busca tal cual.
 
@@ -82,7 +99,8 @@ Una palabra con dos puntos que no sea uno de estos filtros (`nota:importante`) s
 ```
 consulta   = [ alternativa ] ;
 alternativa= conjuncion { "OR" conjuncion } ;
-conjuncion = negacion { [ "AND" ] negacion } ;
+conjuncion = tramo { [ "AND" ] tramo } ;
+tramo      = palabra { palabra } | negacion ;   (* varias palabras: todas, o la frase si hay comodines *)
 negacion   = ( "NOT" | "-" ) negacion | primario ;
 primario   = "(" alternativa ")" | filtro | termino ;
 filtro     = clave ":" ( valor | cadena ) | "regex:" "/" patron "/" [ banderas ] ;

@@ -1018,6 +1018,115 @@ private slots:
         QSettings().clear();
     }
 
+    void searchScopesAndOptions()
+    {
+        QTemporaryDir directory;
+        const QString base = QDir::cleanPath(directory.path());
+        const QString diskA = base + QStringLiteral("/discoA");
+        const QString diskB = base + QStringLiteral("/discoB");
+        const QString books = diskA + QStringLiteral("/libros");
+        QVERIFY(QDir(base).mkpath(QStringLiteral("discoA/libros/WALTER RISO")));
+        QVERIFY(QDir(base).mkpath(QStringLiteral("discoB")));
+        writeFile(books + QStringLiteral("/WALTER RISO/Amar o depender.pdf"), 10);
+        writeFile(diskA + QStringLiteral("/suelto.dat"), 10);
+        writeFile(diskB + QStringLiteral("/Riso en B.dat"), 10);
+        {
+            QFile note(books + QStringLiteral("/apuntes.txt"));
+            QVERIFY(note.open(QIODevice::WriteOnly));
+            note.write("Una nota sobre Riso y sus libros\n");
+        }
+
+        fs::Volume a;
+        a.rootPath = diskA;
+        a.displayName = QStringLiteral("A");
+        fs::Volume b;
+        b.rootPath = diskB;
+        b.displayName = QStringLiteral("B");
+
+        MainWindow window(m_scheduler, openJournal(directory));
+        window.setSearchVolumeSource([a, b] { return QList<fs::Volume>{a, b}; });
+        BrowserPane *pane = window.openTab(books);
+        QVERIFY(waitReady(pane));
+        window.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&window));
+        const auto searchFor = [&](const QString &text) {
+            window.searchEdit()->setText(text);
+            QTest::keyClick(window.searchEdit(), Qt::Key_Return);
+            return pane->showsSearch()
+                && QTest::qWaitFor([pane] { return pane->searchState() == BrowserPane::SearchState::Finished; }, 20000);
+        };
+        SearchResultsModel *results = pane->resultsModel();
+
+        // Lo que falló al dueño: varias palabras con un comodín al final.
+        QVERIFY(searchFor(QStringLiteral("walter riso*")));
+        QCOMPARE(results->count(), 1);
+        QCOMPARE(results->hitAt(0).entry.name, QStringLiteral("WALTER RISO"));
+
+        // Distinguiendo mayúsculas, "walter" ya no es "WALTER".
+        window.setSearchCaseSensitive(true);
+        QVERIFY(searchFor(QStringLiteral("walter riso*")));
+        QCOMPARE(results->count(), 0);
+        QVERIFY(pane->searchInfo().contains(QStringLiteral("distingue mayúsculas")));
+        QVERIFY(searchFor(QStringLiteral("WALTER RISO*")));
+        QCOMPARE(results->count(), 1);
+        window.setSearchCaseSensitive(false);
+
+        // Solo la carpeta: el PDF está una carpeta más abajo.
+        window.setSearchScope(SearchScope::Folder);
+        QVERIFY(searchFor(QStringLiteral("ext:pdf")));
+        QCOMPARE(results->count(), 0);
+        QCOMPARE(searchRootOf(pane->currentPath()), books);
+        window.setSearchScope(SearchScope::Subfolders);
+        QVERIFY(searchFor(QStringLiteral("ext:pdf")));
+        QCOMPARE(results->count(), 1);
+
+        // Toda la unidad: encuentra lo que está fuera de la carpeta, pero no en la otra unidad.
+        window.setSearchScope(SearchScope::Volume);
+        QVERIFY(searchFor(QStringLiteral("ext:dat")));
+        QCOMPARE(searchSpecOf(pane->currentPath()).roots, QStringList{diskA});
+        QCOMPARE(results->count(), 1);
+        QCOMPARE(results->filePath(0), diskA + QStringLiteral("/suelto.dat"));
+
+        // Todas las unidades.
+        window.setSearchScope(SearchScope::AllVolumes);
+        QVERIFY(searchFor(QStringLiteral("ext:dat")));
+        QCOMPARE(results->count(), 2);
+        QVERIFY(pane->searchInfo().contains(QStringLiteral("todas las unidades")));
+
+        // Las elegidas.
+        window.setChosenSearchVolumes({diskB});
+        window.setSearchScope(SearchScope::ChosenVolumes);
+        QVERIFY(searchFor(QStringLiteral("ext:dat")));
+        QCOMPARE(results->count(), 1);
+        QCOMPARE(results->filePath(0), diskB + QStringLiteral("/Riso en B.dat"));
+
+        // Subir desde cualquier resultado vuelve a la carpeta de partida.
+        pane->goUp();
+        QCOMPARE(pane->currentPath(), books);
+        QVERIFY(waitReady(pane));
+
+        // En el contenido: la palabra está dentro del archivo, no en su nombre.
+        window.setSearchScope(SearchScope::Subfolders);
+        window.setSearchInContent(true);
+        QVERIFY(searchFor(QStringLiteral("riso libros")));
+        QCOMPARE(results->count(), 1);
+        QCOMPARE(results->hitAt(0).entry.name, QStringLiteral("apuntes.txt"));
+        QVERIFY(pane->searchInfo().contains(QStringLiteral("archivos leídos")));
+        window.setSearchInContent(false);
+        // El filtro content: hace lo mismo sin cambiar de modo.
+        QVERIFY(searchFor(QStringLiteral("content:\"nota sobre riso\"")));
+        QCOMPARE(results->count(), 1);
+
+        // Desde la lista de unidades se busca en todas.
+        pane->navigateTo(volumesLocation());
+        QVERIFY(pane->showsVolumes());
+        QVERIFY(window.searchEdit()->isEnabled());
+        QVERIFY(searchFor(QStringLiteral("ext:dat")));
+        QCOMPARE(results->count(), 2);
+        pane->goUp();
+        QVERIFY(pane->showsVolumes());
+    }
+
     void searchCanBePausedAndStopped()
     {
         QTemporaryDir directory;

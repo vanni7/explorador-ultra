@@ -1,6 +1,6 @@
 # Estado del proyecto
 
-Última actualización: 2026-11-12 · Fase actual: **2 (por empezar)**; la Fase 1 se entregó el 12-nov con puntos abiertos (ver `INFORME_FASE_1.md`)
+Última actualización: 2026-11-13 · Fase actual: **2 (por empezar)**; la Fase 1 se entregó el 12-nov con puntos abiertos (ver `INFORME_FASE_1.md`)
 
 Estados: **Terminada** (cumple §26) · **Parcial** · **Pendiente** · **Bloqueada**.
 
@@ -13,8 +13,9 @@ Fase 2 — Búsqueda y rendimiento, rama `fase-2/busqueda` (sale de `main` con l
 | 2 | Filtrado local de la carpeta a la vista (meta: 100 000 elementos < 50 ms por tecla) | **Hecho**: barra «Filtrar esta carpeta» (Ctrl+I, menú Ver), 5–7 ms sobre 100 000 elementos. Pruebas en Ubuntu release y ASan. Falta: que el dueño lo pruebe, medir el repintado, CI |
 | 2b | Ubicación «Unidades» (pedida por el dueño el 12-nov): clic en el rótulo «Unidades» del árbol, o subir desde la raíz de un disco, muestra las unidades con tamaño total, ocupado, libre y barra de uso | **Hecho**: `VolumesView`, `Locations.h`; pruebas en Ubuntu release y ASan, vista con ratón simulado en X11, CI verde. Falta: que el dueño lo pruebe y usarla a mano en Windows |
 | 3 | Búsqueda recursiva progresiva (pausa, cancelación < 500 ms, contadores) y resultados como ubicación virtual | **Hecho**: motor `search::searchTree` (pausa, cancelación, contadores, tope de 200 000 resultados, no sigue enlaces ni cruza a otras unidades) y la interfaz: buscador de la barra (Ctrl+F, Intro), resultados como ubicación `buscar:` de la pestaña (Atrás/Subir vuelven), franja con avance, Pausar/Reanudar/Detener/Buscar de nuevo, orden en segundo plano, menú contextual con «Abrir la carpeta que lo contiene», copiar/cortar/papelera sobre lo encontrado. Pruebas en Ubuntu release, ASan y TSan (motor); búsqueda real en la carpeta personal con ratón simulado (X11). CI verde en las seis plataformas (commit `tests: la búsqueda en Windows…`). Falta: que el dueño lo pruebe, usar la ventana a mano en Windows, renombrar desde resultados, soltar sobre resultados |
-| 4 | Alcances: carpeta, con subcarpetas, unidad, varias unidades, todas | Siguiente |
-| 5 | Índice SQLite opcional, vigilancia de cambios, asistente de primer arranque, resultados «del índice» | Pendiente |
+| 3b | Ajustes pedidos por el dueño el 13-nov tras probarlo | **Hecho**: (1) en el árbol, el clic ya no pasa el teclado a la lista y las flechas actúan sobre el árbol (Izquierda recoge/sube al padre, Derecha despliega/baja, Arriba/Abajo recorren y la lista sigue tras 300 ms); (2) `walter riso*` ya encuentra «Walter Riso…» (varias palabras con comodines valen también como frase); (3) opción «Distinguir mayúsculas y minúsculas»; (4) búsqueda en el contenido de archivos de texto (`content:` y opción «El contenido»), sin PDF ni ofimática hasta la Fase 4. Pruebas en Ubuntu release |
+| 4 | Alcances: carpeta, con subcarpetas, unidad, varias unidades, todas | **Hecho**: botón «Opciones» junto al buscador (`SearchScope`, `SearchSpec` en `Locations.h`); desde «Unidades» se busca en todas. Prueba `searchScopesAndOptions` con unidades simuladas. Falta: que el dueño lo pruebe; no se ha medido una búsqueda en todas las unidades reales; el diálogo de elegir unidades solo se ha visto en X11 simulado |
+| 5 | Índice SQLite opcional, vigilancia de cambios, asistente de primer arranque, resultados «del índice» | Siguiente |
 | 6 | Concurrencia adaptativa por dispositivo en `tasks` | Pendiente |
 | 7 | Mediciones (`BENCHMARKS.md`), verificación manual, CI, fusionar a `main`, informe | Pendiente |
 

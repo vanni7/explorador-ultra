@@ -3,6 +3,7 @@
 
 #include "eu/fs/Volumes.h"
 #include "eu/search/Searcher.h"
+#include "eu/ui/Locations.h"
 #include "eu/ui/DirectoryModel.h"
 #include "eu/ui/FileClipboard.h"
 
@@ -69,6 +70,9 @@ public:
     const search::SearchProgress &searchProgress() const { return m_searchProgress; }
     SearchResultsModel *resultsModel() const { return m_resultsModel; }
     QTreeView *resultsView() const { return m_resultsView; }
+    /// Dónde busca la búsqueda a la vista, dicho para una persona
+    /// ("/home/ana", "todas las unidades"…).
+    QString searchWhere() const;
     /// Texto de la franja que hay sobre los resultados.
     QString searchInfo() const;
 
@@ -125,6 +129,8 @@ public slots:
     /// Busca en la carpeta actual y sus subcarpetas; los resultados ocupan la
     /// pestaña como una ubicación más (se vuelve con Atrás).
     void search(const QString &queryText);
+    /// Lanza una búsqueda con su alcance y sus opciones.
+    void search(const eu::ui::SearchSpec &spec);
     void setSearchPaused(bool paused);
     void stopSearch();
     /// Va a la carpeta del resultado seleccionado y lo deja seleccionado.
@@ -196,6 +202,7 @@ private:
     SearchState m_searchState = SearchState::Idle;
     search::SearchProgress m_searchProgress;
     bool m_searchTruncated = false;
+    bool m_searchReadsContent = false;   ///< La búsqueda en curso abre archivos.
     QString m_searchError;
 
     // Barra de filtro local (SPEC §6.6).

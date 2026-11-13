@@ -6,6 +6,7 @@
 #include "eu/journal/Journal.h"
 #include "eu/tasks/Scheduler.h"
 #include "eu/ui/FileActions.h"
+#include "eu/ui/Locations.h"
 
 #include <QHash>
 #include <QMainWindow>
@@ -48,6 +49,17 @@ public:
     /// Buscador de la barra superior.
     QLineEdit *searchEdit() const { return m_searchEdit; }
     int tabCount() const;
+
+    /// Opciones del buscador; son las del botón "Opciones" que tiene al lado.
+    void setSearchScope(SearchScope scope);
+    SearchScope searchScope() const { return m_searchScope; }
+    void setSearchInContent(bool inContent);
+    void setSearchCaseSensitive(bool caseSensitive);
+    /// Unidades para el alcance "las unidades que elija" (puntos de montaje).
+    void setChosenSearchVolumes(const QStringList &roots) { m_chosenVolumes = roots; }
+    /// Sustituye la lista de unidades que usa el buscador. Para las pruebas,
+    /// que no deben recorrer los discos reales del equipo.
+    void setSearchVolumeSource(std::function<QList<fs::Volume>()> source) { m_searchVolumeSource = std::move(source); }
 
     /// Restaura pestañas y geometría de la sesión anterior. Si no hay sesión
     /// guardada, abre la carpeta personal.
@@ -169,6 +181,18 @@ private:
     QAction *m_filterAction = nullptr;
     QAction *m_searchAction = nullptr;
     QLineEdit *m_searchEdit = nullptr;
+    QToolButton *m_searchOptionsButton = nullptr;
+    QHash<int, QAction *> m_scopeActions;   ///< Por SearchScope.
+    QAction *m_searchInNameAction = nullptr;
+    QAction *m_searchInContentAction = nullptr;
+    QAction *m_searchCaseAction = nullptr;
+    SearchScope m_searchScope = SearchScope::Subfolders;
+    QStringList m_chosenVolumes;
+    std::function<QList<fs::Volume>()> m_searchVolumeSource;
+    void buildSearchOptions();
+    void updateSearchHints();
+    bool chooseSearchVolumes();
+    QList<fs::Volume> searchVolumes() const;
     QAction *m_editPathAction = nullptr;
 
     QAction *m_openAction = nullptr;

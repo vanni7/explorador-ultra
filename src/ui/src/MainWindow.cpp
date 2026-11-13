@@ -11,16 +11,20 @@
 #include "eu/ui/TrashDialog.h"
 
 #include <QAction>
+#include <QActionGroup>
 #include <QApplication>
 #include <QCheckBox>
 #include <QClipboard>
 #include <QCloseEvent>
 #include <QDateTime>
+#include <QDialog>
+#include <QDialogButtonBox>
 #include <QDir>
 #include <QHBoxLayout>
 #include <QItemSelectionModel>
 #include <QLabel>
 #include <QLineEdit>
+#include <QListWidget>
 #include <QLocale>
 #include <QMenu>
 #include <QMenuBar>
@@ -36,6 +40,7 @@
 #include <QTabWidget>
 #include <QToolBar>
 #include <QToolButton>
+#include <QVBoxLayout>
 #include <QTreeView>
 
 namespace eu::ui {
@@ -208,7 +213,7 @@ void MainWindow::createActions()
     connect(m_filterAction, &QAction::triggered, this, [this] { if (auto *pane = currentPane()) pane->showFilter(); });
 
     m_searchAction = new QAction(themedIcon(QStringLiteral("edit-find"), QStyle::SP_FileDialogContentsView),
-                                 tr("Buscar en esta carpeta y sus subcarpetas"), this);
+                                 tr("Buscar archivos y carpetas"), this);
     m_searchAction->setShortcut(QKeySequence::Find);
     connect(m_searchAction, &QAction::triggered, this, [this] {
         m_searchEdit->setFocus(Qt::ShortcutFocusReason);
@@ -423,7 +428,7 @@ void MainWindow::updateEditActions()
     const bool canModify = inFolder && m_actions->isAvailable();
     const bool canRemove = pane != nullptr && m_actions->isAvailable();
     m_filterAction->setEnabled(inFolder);
-    m_searchAction->setEnabled(pane != nullptr && !pane->showsVolumes());
+    m_searchAction->setEnabled(pane != nullptr);
     if (m_searchEdit != nullptr) {
         m_searchEdit->setEnabled(m_searchAction->isEnabled());
     }
@@ -999,7 +1004,6 @@ void MainWindow::createToolBar()
     // Buscador: busca en la carpeta de la pestaña y en sus subcarpetas, con
     // la misma sintaxis que el filtro (docs/SEARCH_SYNTAX.md).
     m_searchEdit = new QLineEdit(toolBar);
-    m_searchEdit->setPlaceholderText(tr("Buscar aquí y en subcarpetas (Ctrl+F)"));
     m_searchEdit->setToolTip(tr("Escribe y pulsa Intro. Ejemplos: factura 2025 · *.pdf · ext:jpg size:>5MB"));
     m_searchEdit->setAccessibleName(tr("Buscar"));
     m_searchEdit->setClearButtonEnabled(true);
@@ -1007,6 +1011,14 @@ void MainWindow::createToolBar()
     m_searchEdit->addAction(m_searchAction->icon(), QLineEdit::LeadingPosition);
     toolBar->addWidget(m_searchEdit);
     connect(m_searchEdit, &QLineEdit::returnPressed, this, &MainWindow::runSearch);
+    m_searchOptionsButton = new QToolButton(toolBar);
+    m_searchOptionsButton->setText(tr("Opciones"));
+    m_searchOptionsButton->setToolTip(tr("Opciones de búsqueda: dónde buscar, en el nombre o en el contenido, "
+                                         "y si se distinguen las mayúsculas"));
+    m_searchOptionsButton->setAccessibleName(tr("Opciones de búsqueda"));
+    m_searchOptionsButton->setPopupMode(QToolButton::InstantPopup);
+    toolBar->addWidget(m_searchOptionsButton);
+    buildSearchOptions();
     // Esc devuelve el teclado a la lista.
     auto *leaveSearch = new QAction(m_searchEdit);
     leaveSearch->setShortcut(QKeySequence(Qt::Key_Escape));
@@ -1105,20 +1117,211 @@ void MainWindow::navigateCurrentTo(const QString &path)
     }
 }
 
+void MainWindow::buildSearchOptions()
+{
+    auto *menu = new QMenu(m_searchOptionsButton);
+    m_searchOptionsButton->setMenu(menu);
+
+    menu->addSection(tr("Dónde buscar"));
+    auto *scopes = new QActionGroup(menu);
+    const auto addScope = [&](SearchScope scope, const QString &text) {
+        QAction *action = menu->addAction(text);
+        action->setCheckable(true);
+        action->setChecked(scope == m_searchScope);
+        scopes->addAction(action);
+        m_scopeActions.insert(int(scope), action);
+        connect(action, &QAction::triggered, this, [this, scope] { setSearchScope(scope); });
+    };
+    addScope(SearchScope::Folder, tr("Solo en esta carpeta"));
+    addScope(SearchScope::Subfolders, tr("En esta carpeta y sus subcarpetas"));
+    addScope(SearchScope::Volume, tr("En toda esta unidad"));
+    addScope(SearchScope::AllVolumes, tr("En todas las unidades"));
+    addScope(SearchScope::ChosenVolumes, tr("En las unidades que elija…"));
+    // Elegir unidades pide cuáles; si se cancela, se queda el alcance anterior.
+    disconnect(m_scopeActions.value(int(SearchScope::ChosenVolumes)), &QAction::triggered, this, nullptr);
+    connect(m_scopeActions.value(int(SearchScope::ChosenVolumes)), &QAction::triggered, this, [this] {
+        if (chooseSearchVolumes()) {
+            setSearchScope(SearchScope::ChosenVolumes);
+        } else {
+            m_scopeActions.value(int(m_searchScope))->setChecked(true);
+        }
+    });
+
+    menu->addSection(tr("Qué se compara"));
+    auto *targets = new QActionGroup(menu);
+    m_searchInNameAction = menu->addAction(tr("El nombre"));
+    m_searchInNameAction->setCheckable(true);
+    m_searchInNameAction->setChecked(true);
+    targets->addAction(m_searchInNameAction);
+    m_searchInContentAction = menu->addAction(tr("El contenido (archivos de texto)"));
+    m_searchInContentAction->setCheckable(true);
+    m_searchInContentAction->setToolTip(tr("Busca las palabras dentro de los archivos de texto de hasta 20 MB. "
+                                           "Todavía no lee PDF ni documentos de oficina."));
+    targets->addAction(m_searchInContentAction);
+    connect(targets, &QActionGroup::triggered, this, &MainWindow::updateSearchHints);
+
+    menu->addSeparator();
+    m_searchCaseAction = menu->addAction(tr("Distinguir mayúsculas y minúsculas"));
+    m_searchCaseAction->setCheckable(true);
+    connect(m_searchCaseAction, &QAction::toggled, this, &MainWindow::updateSearchHints);
+    menu->setToolTipsVisible(true);
+    updateSearchHints();
+}
+
+void MainWindow::setSearchScope(SearchScope scope)
+{
+    m_searchScope = scope;
+    if (QAction *action = m_scopeActions.value(int(scope))) {
+        action->setChecked(true);
+    }
+    updateSearchHints();
+}
+
+void MainWindow::setSearchInContent(bool inContent)
+{
+    (inContent ? m_searchInContentAction : m_searchInNameAction)->setChecked(true);
+    updateSearchHints();
+}
+
+void MainWindow::setSearchCaseSensitive(bool caseSensitive)
+{
+    m_searchCaseAction->setChecked(caseSensitive);
+}
+
+void MainWindow::updateSearchHints()
+{
+    if (m_searchEdit == nullptr || m_searchCaseAction == nullptr) {
+        return;
+    }
+    // El propio buscador dice qué va a hacer, para no tener que abrir el menú.
+    QString where;
+    switch (m_searchScope) {
+    case SearchScope::Folder:        where = tr("Buscar solo en esta carpeta"); break;
+    case SearchScope::Subfolders:    where = tr("Buscar aquí y en subcarpetas"); break;
+    case SearchScope::Volume:        where = tr("Buscar en toda la unidad"); break;
+    case SearchScope::AllVolumes:    where = tr("Buscar en todas las unidades"); break;
+    case SearchScope::ChosenVolumes: where = tr("Buscar en las unidades elegidas"); break;
+    }
+    if (m_searchInContentAction->isChecked()) {
+        where += tr(", en el contenido");
+    }
+    m_searchEdit->setPlaceholderText(where + tr(" (Ctrl+F)"));
+    const bool changed = m_searchScope != SearchScope::Subfolders || m_searchInContentAction->isChecked()
+        || m_searchCaseAction->isChecked();
+    // Con opciones distintas de las habituales, el botón lo avisa.
+    m_searchOptionsButton->setText(changed ? tr("Opciones •") : tr("Opciones"));
+}
+
+QList<fs::Volume> MainWindow::searchVolumes() const
+{
+    return m_searchVolumeSource ? m_searchVolumeSource() : m_volumeMonitor.volumes();
+}
+
+bool MainWindow::chooseSearchVolumes()
+{
+    QDialog dialog(this);
+    dialog.setWindowTitle(tr("Unidades donde buscar"));
+    auto *layout = new QVBoxLayout(&dialog);
+    layout->addWidget(new QLabel(tr("Marca las unidades en las que quieres buscar:"), &dialog));
+    auto *list = new QListWidget(&dialog);
+    for (const fs::Volume &volume : searchVolumes()) {
+        auto *item = new QListWidgetItem(
+            tr("%1 — %2").arg(volume.displayName, QDir::toNativeSeparators(volume.rootPath)), list);
+        item->setData(Qt::UserRole, volume.rootPath);
+        item->setFlags(item->flags() | Qt::ItemIsUserCheckable);
+        item->setCheckState(m_chosenVolumes.contains(volume.rootPath) ? Qt::Checked : Qt::Unchecked);
+    }
+    layout->addWidget(list);
+    auto *buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dialog);
+    buttons->button(QDialogButtonBox::Ok)->setText(tr("Aceptar"));
+    buttons->button(QDialogButtonBox::Cancel)->setText(tr("Cancelar"));
+    connect(buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
+    connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+    layout->addWidget(buttons);
+    if (dialog.exec() != QDialog::Accepted) {
+        return false;
+    }
+    QStringList chosen;
+    for (int row = 0; row < list->count(); ++row) {
+        if (list->item(row)->checkState() == Qt::Checked) {
+            chosen.append(list->item(row)->data(Qt::UserRole).toString());
+        }
+    }
+    if (chosen.isEmpty()) {
+        return false;
+    }
+    m_chosenVolumes = chosen;
+    return true;
+}
+
 void MainWindow::runSearch()
 {
     BrowserPane *pane = currentPane();
     const QString text = m_searchEdit->text().trimmed();
-    if (pane == nullptr || text.isEmpty() || pane->showsVolumes()) {
+    if (pane == nullptr || text.isEmpty()) {
         return;
     }
+    SearchSpec spec;
+    spec.query = text;
+    spec.caseSensitive = m_searchCaseAction->isChecked();
+    spec.inContent = m_searchInContentAction->isChecked();
+    // Desde unos resultados se busca donde se buscó la primera vez.
+    spec.origin = pane->showsSearch() ? searchRootOf(pane->currentPath()) : pane->currentPath();
+    spec.scope = m_searchScope;
+    // En la lista de unidades no hay carpeta: se busca en las unidades.
+    if (isVolumesLocation(spec.origin) && spec.scope != SearchScope::ChosenVolumes) {
+        spec.scope = SearchScope::AllVolumes;
+    }
+
+    const QList<fs::Volume> volumes = searchVolumes();
+    switch (spec.scope) {
+    case SearchScope::Folder:
+    case SearchScope::Subfolders:
+        spec.roots = QStringList{spec.origin};
+        break;
+    case SearchScope::Volume: {
+        // La unidad de la carpeta: el punto de montaje más largo que la contiene.
+        QString best;
+        for (const fs::Volume &volume : volumes) {
+            const QString root = volume.rootPath;
+            const QString prefix = root.endsWith(QLatin1Char('/')) ? root : root + QLatin1Char('/');
+            if ((spec.origin == root || spec.origin.startsWith(prefix)) && root.size() > best.size()) {
+                best = root;
+            }
+        }
+        if (!best.isEmpty()) {
+            spec.roots = QStringList{best};
+        }
+        break;
+    }
+    case SearchScope::AllVolumes:
+        for (const fs::Volume &volume : volumes) {
+            spec.roots.append(volume.rootPath);
+        }
+        break;
+    case SearchScope::ChosenVolumes:
+        for (const fs::Volume &volume : volumes) {
+            if (m_chosenVolumes.contains(volume.rootPath)) {
+                spec.roots.append(volume.rootPath);   // solo las que siguen conectadas
+            }
+        }
+        break;
+    }
+    if (spec.roots.isEmpty()) {
+        statusBar()->showMessage(tr("No se puede buscar: no hay ninguna unidad conectada para ese alcance."), 10000);
+        return;
+    }
+
     // Una consulta mal escrita se explica aquí, sin salir de la carpeta.
-    const core::Result<search::Query> parsedQuery = search::Query::parse(text);
+    search::QueryOptions queryOptions;
+    queryOptions.caseSensitive = spec.caseSensitive;
+    queryOptions.termsInContent = spec.inContent;
+    const core::Result<search::Query> parsedQuery = search::Query::parse(text, queryOptions);
     if (!parsedQuery.ok()) {
         statusBar()->showMessage(tr("No se puede buscar: %1").arg(parsedQuery.error().message), 10000);
         return;
     }
-    pane->search(text);
+    pane->search(spec);
     pane->focusContent();
 }
 
@@ -1177,7 +1380,7 @@ void MainWindow::updateTabTitle(BrowserPane *pane)
     m_tabs->setTabText(index, title);
     m_tabs->setTabToolTip(index, pane->showsVolumes() ? title
                                  : pane->showsSearch()
-                                     ? tr("%1 en %2").arg(title, QDir::toNativeSeparators(searchRootOf(path)))
+                                     ? tr("%1 en %2").arg(title, pane->searchWhere())
                                      : QDir::toNativeSeparators(path));
     if (pane == currentPane()) {
         setWindowTitle(QStringLiteral("%1 — %2").arg(title, core::applicationName()));
@@ -1192,6 +1395,9 @@ void MainWindow::restoreSession()
     m_showHiddenAction->setChecked(settings.value(QStringLiteral("view/showHidden"), false).toBool());
     m_binaryUnitsAction->setChecked(settings.value(QStringLiteral("view/binaryUnits"), false).toBool());
     m_folderSizesAction->setChecked(settings.value(QStringLiteral("view/folderSizes"), false).toBool());
+    // El alcance y "en el contenido" no se guardan: una búsqueda en todos los
+    // discos no debe heredarse sin querer de la sesión anterior.
+    m_searchCaseAction->setChecked(settings.value(QStringLiteral("search/caseSensitive"), false).toBool());
 
     const QStringList paths = settings.value(QStringLiteral("session/tabs")).toStringList();
     for (const QString &path : paths) {
@@ -1216,6 +1422,7 @@ void MainWindow::saveSession()
     settings.setValue(QStringLiteral("view/showHidden"), m_showHiddenAction->isChecked());
     settings.setValue(QStringLiteral("view/binaryUnits"), m_binaryUnitsAction->isChecked());
     settings.setValue(QStringLiteral("view/folderSizes"), m_folderSizesAction->isChecked());
+    settings.setValue(QStringLiteral("search/caseSensitive"), m_searchCaseAction->isChecked());
 
     QStringList paths;
     for (int i = 0; i < m_tabs->count(); ++i) {
