@@ -908,6 +908,9 @@ private slots:
             results->index(victim, 0), QItemSelectionModel::ClearAndSelect | QItemSelectionModel::Rows);
         QCOMPARE(pane->selectedPaths(), QStringList{root + QStringLiteral("/fotos/playa.jpg")});
         QCOMPARE(pane->selectedCount(), 1);
+        // Donde la unidad no tiene papelera (carpetas temporales de macOS) se
+        // ofrece eliminar para siempre: se acepta, para no dejar un diálogo abierto.
+        window.setDeleteConfirmation([](const QStringList &) { return true; });
         window.trashSelection();
         QVERIFY(waitIdle(window));
         QVERIFY(!QFileInfo::exists(root + QStringLiteral("/fotos/playa.jpg")));

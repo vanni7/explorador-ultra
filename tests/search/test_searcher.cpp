@@ -10,6 +10,10 @@
 #include <atomic>
 #include <thread>
 
+#ifdef Q_OS_WIN
+#include <windows.h>
+#endif
+
 using namespace eu;
 using namespace eu::search;
 
@@ -20,6 +24,19 @@ void writeFile(const QString &path, qsizetype bytes = 0)
     QFile file(path);
     QVERIFY2(file.open(QIODevice::WriteOnly), qPrintable(path));
     file.write(QByteArray(bytes, 'x'));
+}
+
+/// En Unix un nombre que empieza por punto ya es oculto; en Windows hay que
+/// ponerle el atributo.
+void markHidden(const QString &path)
+{
+#ifdef Q_OS_WIN
+    const std::wstring native = QDir::toNativeSeparators(path).toStdWString();
+    QVERIFY2(SetFileAttributesW(native.c_str(), GetFileAttributesW(native.c_str()) | FILE_ATTRIBUTE_HIDDEN),
+             qPrintable(path));
+#else
+    Q_UNUSED(path);
+#endif
 }
 
 Query parsed(const QString &text)
@@ -76,6 +93,8 @@ private slots:
         writeFile(root.filePath(QStringLiteral("documentos/facturas/factura playa.pdf")), 2000000);
         writeFile(root.filePath(QStringLiteral(".oculta/dentro/playa secreta.jpg")), 1);
         writeFile(root.filePath(QStringLiteral("documentos/.playa-oculta.txt")), 1);
+        markHidden(root.filePath(QStringLiteral(".oculta")));
+        markHidden(root.filePath(QStringLiteral("documentos/.playa-oculta.txt")));
     }
 
     void findsInSubfolders()
