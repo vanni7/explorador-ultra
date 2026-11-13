@@ -69,6 +69,10 @@ public:
     /// Borra lo anotado y empieza de cero.
     void rebuild(const QString &root);
 
+    /// Cada cuánto se vuelve a recorrer una carpeta que el sistema no vigila
+    /// entera (límite de inotify, o sistema sin vigilancia). 30 minutos.
+    void setReviewIntervalMs(int milliseconds) { m_reviewTimer.setInterval(milliseconds); }
+
     void setPaused(bool paused);
     bool isPaused() const { return m_paused; }
     /// true si hay un recorrido en marcha o esperando.
@@ -101,6 +105,7 @@ private:
     QHash<QString, QString> m_failures;   ///< Carpetas cuya base no se pudo abrir, con el motivo.
     std::shared_ptr<search::PauseGate> m_gate;
     QTimer m_startTimer;   ///< Junta los avisos seguidos antes de lanzar el trabajo.
+    QTimer m_reviewTimer;  ///< Repaso periódico de lo que el sistema no vigila.
     bool m_paused = false;
     bool m_running = false;   ///< Hay una tarea en marcha (solo una a la vez).
     quint64 m_generation = 0;

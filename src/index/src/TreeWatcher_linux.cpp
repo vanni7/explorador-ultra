@@ -17,6 +17,29 @@ namespace eu::index {
 
 namespace {
 
+/// Vigilancias que usan todos los índices de este proceso.
+std::atomic<qint64> s_watchesInUse{0};
+
+/// Cuántas vigilancias se permite usar a la aplicación. El límite del sistema
+/// (fs.inotify.max_user_watches) es por usuario y lo comparten todos sus
+/// programas: agotarlo dejaría sin avisos a editores, sincronizadores, etc.
+/// Se usa como mucho el 60 %.
+qint64 watchBudget()
+{
+    static const qint64 budget = [] {
+        qint64 systemLimit = 8192;
+        QFile file(QStringLiteral("/proc/sys/fs/inotify/max_user_watches"));
+        if (file.open(QIODevice::ReadOnly)) {
+            const qint64 value = file.readAll().trimmed().toLongLong();
+            if (value > 0) {
+                systemLimit = value;
+            }
+        }
+        return systemLimit * 6 / 10;
+    }();
+    return budget;
+}
+
 class InotifyTreeWatcher : public TreeWatcher
 {
 public:
@@ -35,6 +58,7 @@ public:
         if (m_descriptor >= 0) {
             delete m_notifier;
             ::close(m_descriptor);   // cierra también todas las vigilancias
+            s_watchesInUse -= m_folders.size();
         }
     }
 
@@ -55,24 +79,38 @@ public:
         // Lo que cambia la lista de una carpeta: crear, borrar, renombrar y
         // terminar de escribir (que cambia el tamaño). IN_MODIFY se deja
         // fuera: avisaría en cada escritura de un archivo que se está copiando.
+        if (s_watchesInUse.load() >= watchBudget()) {
+            reportLimit();
+            return;
+        }
         const uint32_t mask = IN_CREATE | IN_DELETE | IN_MOVED_FROM | IN_MOVED_TO | IN_CLOSE_WRITE | IN_DELETE_SELF
             | IN_ONLYDIR | IN_DONT_FOLLOW;
         const int watch = ::inotify_add_watch(m_descriptor, QFile::encodeName(folder).constData(), mask);
         if (watch < 0) {
             // ENOSPC: se agotó fs.inotify.max_user_watches. Lo demás (la
             // carpeta ya no existe, sin permiso) no tiene remedio ni importa.
-            if (errno == ENOSPC && !m_limited.exchange(true)) {
-                QMetaObject::invokeMethod(this, [this] { emit limitReached(); }, Qt::QueuedConnection);
+            if (errno == ENOSPC) {
+                reportLimit();
             }
             return;
         }
         // Si la carpeta se movió, el sistema devuelve la misma vigilancia y
         // aquí queda anotada con su ruta nueva.
         const std::lock_guard<std::mutex> lock(m_mutex);
+        if (!m_folders.contains(watch)) {
+            ++s_watchesInUse;
+        }
         m_folders.insert(watch, folder);
     }
 
 private:
+    void reportLimit()
+    {
+        if (!m_limited.exchange(true)) {
+            QMetaObject::invokeMethod(this, [this] { emit limitReached(); }, Qt::QueuedConnection);
+        }
+    }
+
     void readEvents()
     {
         alignas(inotify_event) char buffer[64 * 1024];
@@ -97,6 +135,7 @@ private:
                 }
                 if (event->mask & IN_IGNORED) {
                     m_folders.erase(folder);   // el sistema dejó de vigilarla (se borró)
+                    --s_watchesInUse;
                     continue;
                 }
                 changed.insert(*folder);

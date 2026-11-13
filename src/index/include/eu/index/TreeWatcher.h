@@ -13,8 +13,9 @@ namespace eu::index {
 ///
 /// - Linux: inotify, que vigila carpeta a carpeta. Hay que pedirle cada una
 ///   con addFolder() y el sistema limita cuántas (`fs.inotify.max_user_watches`).
-///   Si se alcanza el límite, isLimited() pasa a true y se emite limitReached():
-///   las carpetas que no caben quedan sin vigilar.
+///   Ese límite lo comparten todos los programas del usuario, así que aquí se
+///   usa como mucho el 60 %. Al llegar al tope, isLimited() pasa a true y se
+///   emite limitReached(): las carpetas que no caben quedan sin vigilar.
 /// - Windows: ReadDirectoryChangesW sobre la raíz, con todo el árbol.
 /// - macOS: FSEvents sobre la raíz, con todo el árbol.
 ///

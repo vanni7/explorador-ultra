@@ -33,6 +33,18 @@ IndexService::IndexService(tasks::Scheduler &scheduler, QString dataDirectory, Q
     m_startTimer.setSingleShot(true);
     m_startTimer.setInterval(500);
     connect(&m_startTimer, &QTimer::timeout, this, &IndexService::startNext);
+
+    // Donde el sistema no avisa de todo, el índice se repasa entero cada rato.
+    m_reviewTimer.setInterval(30 * 60 * 1000);
+    connect(&m_reviewTimer, &QTimer::timeout, this, [this] {
+        for (auto &[path, root] : m_roots) {
+            if (!root->watcher->isActive() || root->watcher->isLimited()) {
+                root->wholePending = true;
+            }
+        }
+        schedule();
+    });
+    m_reviewTimer.start();
 }
 
 IndexService::~IndexService()
