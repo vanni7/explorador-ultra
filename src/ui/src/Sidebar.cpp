@@ -4,10 +4,13 @@
 #include "eu/core/NaturalCompare.h"
 #include "eu/core/SizeFormat.h"
 #include "eu/fs/DirectoryLister.h"
+#include "eu/ui/Locations.h"
+#include "eu/ui/VolumesView.h"
 
 #include <QApplication>
 #include <QDir>
 #include <QDragEnterEvent>
+#include <QKeyEvent>
 #include <QMimeData>
 #include <QPainter>
 #include <QPointer>
@@ -30,20 +33,6 @@ enum ItemRole {
 QIcon themedIcon(const QString &name, QStyle::StandardPixmap fallback)
 {
     return QIcon::fromTheme(name, QApplication::style()->standardIcon(fallback));
-}
-
-QIcon iconForVolume(const fs::Volume &volume)
-{
-    switch (volume.kind) {
-    case fs::DeviceKind::Removable:
-        return themedIcon(QStringLiteral("drive-removable-media"), QStyle::SP_DriveFDIcon);
-    case fs::DeviceKind::Network:
-        return themedIcon(QStringLiteral("folder-remote"), QStyle::SP_DriveNetIcon);
-    case fs::DeviceKind::Optical:
-        return themedIcon(QStringLiteral("media-optical"), QStyle::SP_DriveCDIcon);
-    default:
-        return themedIcon(QStringLiteral("drive-harddisk"), QStyle::SP_DriveHDIcon);
-    }
 }
 
 QStandardItem *makeSection(const QString &title)
@@ -69,6 +58,7 @@ Sidebar::Sidebar(tasks::Scheduler &scheduler, fs::VolumeMonitor &volumes, QWidge
 
     m_favoritesSection = makeSection(tr("Favoritos"));
     m_volumesSection = makeSection(tr("Unidades"));
+    m_volumesSection->setToolTip(tr("Ver todas las unidades con su tamaño y su espacio libre"));
     m_model->appendRow(m_favoritesSection);
     m_model->appendRow(m_volumesSection);
 
@@ -88,20 +78,87 @@ Sidebar::Sidebar(tasks::Scheduler &scheduler, fs::VolumeMonitor &volumes, QWidge
     connect(this, &QTreeView::clicked, this, &Sidebar::onClicked);
     // Con el teclado: Intro va al lugar; las flechas despliegan y recogen.
     connect(this, &QTreeView::activated, this, [this](const QModelIndex &index) {
-        const QString path = index.data(PathRole).toString();
+        const QString path = index == m_volumesSection->index() ? volumesLocation()
+                                                                 : index.data(PathRole).toString();
         if (!path.isEmpty() && !(QApplication::mouseButtons() & Qt::LeftButton)) {
             emit placeActivated(path);
+        }
+    });
+
+    setContextMenuPolicy(Qt::CustomContextMenu);
+    connect(this, &QWidget::customContextMenuRequested, this, [this](const QPoint &position) {
+        const QString path = pathAt(position);
+        if (!path.isEmpty()) {
+            emit contextMenuRequested(path, viewport()->mapToGlobal(position));
         }
     });
 
     setAcceptDrops(true);
     setDragDropMode(QAbstractItemView::DropOnly);
     setDropIndicatorShown(false);
+
+    // Al recorrer el árbol con las flechas, la carpeta se abre tras una pausa
+    // corta: así se puede pasar deprisa por encima de muchas sin leerlas todas.
+    m_followTimer.setSingleShot(true);
+    m_followTimer.setInterval(300);
+    connect(&m_followTimer, &QTimer::timeout, this, [this] {
+        const QString path = currentPlace();
+        if (!path.isEmpty() && path != m_currentPath) {
+            emit placeActivated(path);
+        }
+    });
+}
+
+void Sidebar::addPlace(const QString &name, const QString &path)
+{
+    m_favoritesSection->appendRow(
+        makeFolderItem(name, QDir::cleanPath(path), themedIcon(QStringLiteral("folder"), QStyle::SP_DirIcon)));
+}
+
+QString Sidebar::currentPlace() const
+{
+    const QModelIndex index = currentIndex();
+    return index == m_volumesSection->index() ? volumesLocation() : index.data(PathRole).toString();
+}
+
+void Sidebar::keyPressEvent(QKeyEvent *event)
+{
+    const QModelIndex before = currentIndex();
+    const int key = event->key();
+    const bool plain = (event->modifiers() & ~Qt::KeypadModifier) == Qt::NoModifier;
+    if (plain && before.isValid() && (key == Qt::Key_Left || key == Qt::Key_Right)) {
+        // Derecha: despliega la rama; si ya lo está, baja a la primera
+        // subcarpeta. Izquierda: recoge la rama; si ya lo está, sube a la
+        // carpeta padre. No depende del estilo del sistema.
+        if (key == Qt::Key_Right) {
+            if (m_model->hasChildren(before) && !isExpanded(before)) {
+                expand(before);
+            } else {
+                const QModelIndex child = m_model->index(0, 0, before);
+                if (child.isValid() && (child.flags() & Qt::ItemIsEnabled)) {
+                    setCurrentIndex(child);
+                }
+            }
+        } else if (m_model->hasChildren(before) && isExpanded(before)) {
+            collapse(before);
+        } else if (before.parent().isValid()) {
+            setCurrentIndex(before.parent());
+        }
+        event->accept();
+    } else {
+        QTreeView::keyPressEvent(event);
+    }
+    if (currentIndex() != before) {
+        scrollTo(currentIndex());
+        m_followTimer.start();
+    }
 }
 
 void Sidebar::onClicked(const QModelIndex &index)
 {
-    const QString path = index.data(PathRole).toString();
+    // El rótulo "Unidades" abre la lista de unidades con su espacio.
+    const bool isVolumesSection = index == m_volumesSection->index();
+    const QString path = isVolumesSection ? volumesLocation() : index.data(PathRole).toString();
     if (path.isEmpty()) {
         return;
     }
@@ -113,7 +170,10 @@ void Sidebar::onClicked(const QModelIndex &index)
         return;
     }
     // Si ya se está viendo esa carpeta, el clic solo cambia desplegado/recogido.
-    if (path == m_currentPath) {
+    if (isVolumesSection) {
+        setExpanded(index, true);
+        emit placeActivated(path);
+    } else if (path == m_currentPath) {
         setExpanded(index, !isExpanded(index));
     } else {
         setExpanded(index, true);
@@ -292,8 +352,8 @@ void Sidebar::loadChildren(QStandardItem *item)
     // La tarea no toca `this` directamente: el resultado vuelve al hilo de
     // interfaz y allí se comprueba, con el QPointer, que el panel sigue vivo.
     const QPointer<Sidebar> self(this);
-    m_scheduler.submit(tasks::Category::Listing, tasks::Priority::VisibleNavigation,
-                       [self, path](const tasks::CancelToken &cancel) {
+    m_scheduler.submitForPaths(tasks::Category::Listing, tasks::Priority::VisibleNavigation, {path},
+                               [self, path](const tasks::CancelToken &cancel) {
         QStringList folders;
         const core::Status status = fs::listDirectory(path, fs::ListOptions(), cancel,
                                                       [&](std::vector<fs::Entry> &&batch) {

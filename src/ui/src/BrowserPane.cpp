@@ -1,24 +1,34 @@
 // Explorador Ultra — SPDX-License-Identifier: GPL-3.0-or-later
 #include "eu/ui/BrowserPane.h"
 
+#include <utility>
+
 #include "eu/fs/DirectoryWatcher.h"
 #include "eu/ui/FileClipboard.h"
+#include "eu/ui/Locations.h"
+#include "eu/ui/SearchResultsModel.h"
+#include "eu/ui/VolumesView.h"
 
 #include <QApplication>
 #include <QDesktopServices>
 #include <QDir>
+#include <QAction>
 #include <QDragEnterEvent>
+#include <QHBoxLayout>
 #include <QHeaderView>
 #include <QItemSelectionModel>
 #include <QLabel>
 #include <QLineEdit>
 #include <QMimeData>
 #include <QPainter>
+#include <QPointer>
 #include <QPushButton>
 #include <QRubberBand>
+#include <QSignalBlocker>
 #include <QStackedLayout>
 #include <QStyledItemDelegate>
 #include <QTimer>
+#include <QToolButton>
 #include <QTreeView>
 #include <QUrl>
 #include <QVBoxLayout>
@@ -311,7 +321,8 @@ QString parentPathOf(const QString &path)
 }
 
 BrowserPane::BrowserPane(tasks::Scheduler &scheduler, fs::DirectoryWatcher &watcher, QWidget *parent)
-    : QWidget(parent), m_model(new DirectoryModel(scheduler, this)), m_watcher(watcher)
+    : QWidget(parent), m_scheduler(scheduler), m_model(new DirectoryModel(scheduler, this)), m_watcher(watcher),
+      m_volumeSource(&fs::listVolumes)
 {
     auto *fileView = new FileView(m_model, this);
     fileView->onDrop = [this](const QStringList &paths, const QString &destination, bool move) {
@@ -360,15 +371,140 @@ BrowserPane::BrowserPane(tasks::Scheduler &scheduler, fs::DirectoryWatcher &watc
     messageLayout->addWidget(m_retryButton, 0, Qt::AlignHCenter);
     messageLayout->addStretch();
 
-    m_stack = new QStackedLayout(this);
+    auto *stackHost = new QWidget(this);
+    m_stack = new QStackedLayout(stackHost);
     m_stack->setContentsMargins(0, 0, 0, 0);
     m_stack->addWidget(m_view);
     m_stack->addWidget(m_messagePage);
+
+    // Lista de unidades: lo que se ve en la ubicación "Unidades".
+    m_volumesView = new VolumesView(this);
+    m_stack->addWidget(m_volumesView);
+    connect(m_volumesView, &VolumesView::volumeActivated, this, &BrowserPane::navigateTo);
+    connect(m_volumesView, &QTreeWidget::itemSelectionChanged, this, &BrowserPane::statusChanged);
+    // El espacio libre cambia solo: se vuelve a consultar cada pocos segundos,
+    // pero solo mientras la lista está en pantalla.
+    m_volumesTimer.setInterval(3000);
+    connect(&m_volumesTimer, &QTimer::timeout, this, [this] {
+        if (isVisible()) {
+            reloadVolumes();
+        }
+    });
+
+    // Resultados de búsqueda: una franja con el avance y los botones, y la lista.
+    m_resultsModel = new SearchResultsModel(scheduler, this);
+    m_searchPage = new QWidget(this);
+    auto *searchBar = new QWidget(m_searchPage);
+    searchBar->setAutoFillBackground(true);
+    searchBar->setBackgroundRole(QPalette::AlternateBase);
+    m_searchInfo = new QLabel(searchBar);
+    // Un texto largo (rutas) no debe ensanchar la ventana.
+    m_searchInfo->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
+    m_searchPauseButton = new QPushButton(tr("Pausar"), searchBar);
+    m_searchStopButton = new QPushButton(tr("Detener"), searchBar);
+    m_searchAgainButton = new QPushButton(tr("Buscar de nuevo"), searchBar);
+    m_searchVerifyButton = new QPushButton(tr("Verificar en disco"), searchBar);
+    m_searchVerifyButton->setToolTip(tr("Estos resultados salen del índice. Verificar los busca de nuevo "
+                                        "recorriendo las carpetas, que es más lento pero seguro."));
+    auto *searchBarLayout = new QHBoxLayout(searchBar);
+    searchBarLayout->setContentsMargins(6, 3, 6, 3);
+    searchBarLayout->addWidget(m_searchInfo, 1);
+    searchBarLayout->addWidget(m_searchPauseButton);
+    searchBarLayout->addWidget(m_searchStopButton);
+    searchBarLayout->addWidget(m_searchVerifyButton);
+    searchBarLayout->addWidget(m_searchAgainButton);
+
+    m_resultsView = new QTreeView(m_searchPage);
+    m_resultsView->setModel(m_resultsModel);
+    m_resultsView->setRootIsDecorated(false);
+    m_resultsView->setUniformRowHeights(true);
+    m_resultsView->setItemsExpandable(false);
+    m_resultsView->setAllColumnsShowFocus(true);
+    m_resultsView->setAlternatingRowColors(true);
+    m_resultsView->setSelectionMode(QAbstractItemView::ExtendedSelection);
+    m_resultsView->setSelectionBehavior(QAbstractItemView::SelectRows);
+    m_resultsView->setEditTriggers(QAbstractItemView::NoEditTriggers);
+    m_resultsView->setDragEnabled(true);
+    m_resultsView->setDragDropMode(QAbstractItemView::DragOnly);
+    m_resultsView->setAccessibleName(tr("Resultados de la búsqueda"));
+    m_resultsView->setContextMenuPolicy(Qt::CustomContextMenu);
+    // Sin orden elegido se ven en el orden en que aparecen: primero lo más
+    // cercano a la carpeta donde se busca.
+    m_resultsView->header()->setSortIndicator(-1, Qt::AscendingOrder);
+    m_resultsView->setSortingEnabled(true);
+    m_resultsView->header()->setStretchLastSection(false);
+    m_resultsView->header()->resizeSection(SearchResultsModel::NameColumn, 280);
+    m_resultsView->header()->setSectionResizeMode(SearchResultsModel::FolderColumn, QHeaderView::Stretch);
+    m_resultsView->header()->resizeSection(SearchResultsModel::SizeColumn, 100);
+    m_resultsView->header()->resizeSection(SearchResultsModel::TypeColumn, 170);
+    m_resultsView->header()->resizeSection(SearchResultsModel::ModifiedColumn, 150);
+    m_resultsView->header()->resizeSection(SearchResultsModel::OriginColumn, 70);
+
+    auto *searchLayout = new QVBoxLayout(m_searchPage);
+    searchLayout->setContentsMargins(0, 0, 0, 0);
+    searchLayout->setSpacing(0);
+    searchLayout->addWidget(searchBar);
+    searchLayout->addWidget(m_resultsView, 1);
+    m_stack->addWidget(m_searchPage);
+
+    connect(m_resultsView, &QTreeView::activated, this, &BrowserPane::onResultActivated);
+    connect(m_resultsView->selectionModel(), &QItemSelectionModel::selectionChanged, this,
+            &BrowserPane::statusChanged);
+    connect(m_resultsView, &QWidget::customContextMenuRequested, this, [this](const QPoint &position) {
+        emit contextMenuRequested(m_resultsView->viewport()->mapToGlobal(position));
+    });
+    connect(m_resultsModel, &SearchResultsModel::contentReplaced, this, &BrowserPane::statusChanged);
+    connect(m_searchPauseButton, &QPushButton::clicked, this, [this] {
+        setSearchPaused(m_searchState == SearchState::Running);
+    });
+    connect(m_searchStopButton, &QPushButton::clicked, this, &BrowserPane::stopSearch);
+    connect(m_searchAgainButton, &QPushButton::clicked, this, &BrowserPane::refresh);
+    connect(m_searchVerifyButton, &QPushButton::clicked, this, &BrowserPane::verifySearchOnDisk);
+
+    // Barra de filtro: aparece bajo la lista, con otro color de fondo, para
+    // que no se confunda con la búsqueda global de la barra superior.
+    m_filterBar = new QWidget(this);
+    m_filterBar->setAutoFillBackground(true);
+    m_filterBar->setBackgroundRole(QPalette::AlternateBase);
+    auto *filterLabel = new QLabel(tr("Filtrar esta carpeta:"), m_filterBar);
+    m_filterEdit = new QLineEdit(m_filterBar);
+    m_filterEdit->setClearButtonEnabled(true);
+    m_filterEdit->setPlaceholderText(tr("nombre, *.pdf, ext:jpg, size:>1MB, modified:2025…"));
+    m_filterEdit->setAccessibleName(tr("Filtro de la carpeta"));
+    filterLabel->setBuddy(m_filterEdit);
+    m_filterInfo = new QLabel(m_filterBar);
+    auto *closeFilter = new QToolButton(m_filterBar);
+    closeFilter->setText(tr("Quitar filtro"));
+    closeFilter->setToolTip(tr("Quitar el filtro (Esc)"));
+    auto *filterLayout = new QHBoxLayout(m_filterBar);
+    filterLayout->setContentsMargins(6, 3, 6, 3);
+    filterLayout->addWidget(filterLabel);
+    filterLayout->addWidget(m_filterEdit, 1);
+    filterLayout->addWidget(m_filterInfo);
+    filterLayout->addWidget(closeFilter);
+    m_filterBar->hide();
+
+    auto *outerLayout = new QVBoxLayout(this);
+    outerLayout->setContentsMargins(0, 0, 0, 0);
+    outerLayout->setSpacing(0);
+    outerLayout->addWidget(stackHost, 1);
+    outerLayout->addWidget(m_filterBar);
+
+    connect(m_filterEdit, &QLineEdit::textChanged, this, &BrowserPane::applyFilterText);
+    connect(closeFilter, &QToolButton::clicked, this, &BrowserPane::hideFilter);
+    // Intro o flecha abajo: pasar a la lista filtrada. Esc: quitar el filtro.
+    connect(m_filterEdit, &QLineEdit::returnPressed, this, [this] { m_view->setFocus(); });
+    auto *escape = new QAction(m_filterEdit);
+    escape->setShortcut(QKeySequence(Qt::Key_Escape));
+    escape->setShortcutContext(Qt::WidgetShortcut);
+    m_filterEdit->addAction(escape);
+    connect(escape, &QAction::triggered, this, &BrowserPane::hideFilter);
 
     connect(m_view, &QTreeView::activated, this, &BrowserPane::onActivated);
     connect(m_view->selectionModel(), &QItemSelectionModel::selectionChanged, this, &BrowserPane::statusChanged);
     connect(m_model, &DirectoryModel::stateChanged, this, &BrowserPane::onModelStateChanged);
     connect(m_model, &DirectoryModel::contentReplaced, this, &BrowserPane::restoreSelection);
+    connect(m_model, &DirectoryModel::contentReplaced, this, &BrowserPane::updateFilterInfo);
     connect(m_model, &DirectoryModel::renameRequested, this, &BrowserPane::renameRequested);
     connect(m_model, &DirectoryModel::folderSizesChanged, this, &BrowserPane::statusChanged);
     connect(m_model, &QAbstractItemModel::modelAboutToBeReset, this, &BrowserPane::rememberSelection);
@@ -388,6 +524,8 @@ void BrowserPane::setMoveByDefaultRule(MoveByDefaultRule rule)
 
 BrowserPane::~BrowserPane()
 {
+    // La tarea de búsqueda no toca este objeto: basta pedirle que pare.
+    cancelSearch();
     if (!m_watchedPath.isEmpty()) {
         m_watcher.unwatch(m_watchedPath);
     }
@@ -395,8 +533,16 @@ BrowserPane::~BrowserPane()
 
 void BrowserPane::navigateTo(const QString &path)
 {
-    const QString clean = QDir::cleanPath(path);
-    if (clean.isEmpty() || clean == currentPath()) {
+    // Las ubicaciones virtuales no son rutas: no se normalizan.
+    const QString clean = isVolumesLocation(path) ? volumesLocation()
+        : isSearchLocation(path) ? path : QDir::cleanPath(path);
+    if (clean.isEmpty()) {
+        return;
+    }
+    if (clean == currentPath()) {
+        if (showsSearch()) {
+            refresh();   // repetir la misma búsqueda es volver a buscar
+        }
         return;
     }
     if (!currentPath().isEmpty()) {
@@ -415,7 +561,13 @@ void BrowserPane::goBack()
     m_forwardHistory.append(leaving);
     // Al volver se deja seleccionada la carpeta de la que se viene, si es hija.
     const QString target = m_backHistory.takeLast();
-    changePath(target, parentPathOf(leaving) == target ? QDir(leaving).dirName() : QString());
+    if (isVolumesLocation(target)) {
+        changePath(target, leaving);   // queda seleccionada la unidad de la que se viene
+        return;
+    }
+    const bool cameFromChild = !isVirtualLocation(leaving) && !isVirtualLocation(target)
+        && parentPathOf(leaving) == target;
+    changePath(target, cameFromChild ? QDir(leaving).dirName() : QString());
 }
 
 void BrowserPane::goForward()
@@ -429,14 +581,24 @@ void BrowserPane::goForward()
 
 void BrowserPane::goUp()
 {
-    const QString parent = parentPathOf(currentPath());
-    if (parent.isEmpty()) {
+    if (!canGoUp()) {
         return;
     }
     const QString leaving = currentPath();
     m_backHistory.append(leaving);
     m_forwardHistory.clear();
-    changePath(parent, QDir(leaving).dirName());
+    if (showsSearch()) {
+        // Por encima de unos resultados está la carpeta donde se buscó.
+        changePath(searchRootOf(leaving), {});
+        return;
+    }
+    const QString parent = parentPathOf(leaving);
+    if (parent.isEmpty()) {
+        // Por encima de la raíz de una unidad está la lista de unidades.
+        changePath(volumesLocation(), leaving);
+    } else {
+        changePath(parent, QDir(leaving).dirName());
+    }
 }
 
 void BrowserPane::changePath(const QString &path, const QString &nameToSelect)
@@ -445,13 +607,49 @@ void BrowserPane::changePath(const QString &path, const QString &nameToSelect)
         m_watcher.unwatch(m_watchedPath);
         m_watchedPath.clear();
     }
-    m_model->setPath(path);
-    // setPath vacía el modelo; lo que haya que seleccionar se fija después.
-    m_selectedNames = nameToSelect.isEmpty() ? QStringList() : QStringList{nameToSelect};
-    m_currentName = nameToSelect;
+    m_location = path;
+    if (!showsSearch() && m_searchState != SearchState::Idle) {
+        // Se sale de unos resultados: la búsqueda se detiene y se libera la lista.
+        cancelSearch();
+        m_resultsModel->clear();
+        m_searchState = SearchState::Idle;
+    }
+    if (showsSearch()) {
+        m_volumesTimer.stop();
+        m_model->clear();
+        m_selectedNames.clear();
+        m_currentName.clear();
+        m_stack->setCurrentWidget(m_searchPage);
+        startSearch();
+    } else if (showsVolumes()) {
+        // No hay carpeta que leer: el modelo queda vacío y se enseña la lista
+        // de unidades. `nameToSelect` es aquí la raíz de la unidad a seleccionar.
+        m_model->clear();
+        m_selectedNames.clear();
+        m_currentName.clear();
+        m_volumeToSelect = nameToSelect;
+        m_stack->setCurrentWidget(m_volumesView);
+        reloadVolumes();
+        m_volumesTimer.start();
+    } else {
+        m_volumesTimer.stop();
+        m_stack->setCurrentWidget(m_view);
+        m_model->setPath(path);
+        // setPath vacía el modelo; lo que haya que seleccionar se fija después.
+        m_selectedNames = nameToSelect.isEmpty() ? QStringList() : QStringList{nameToSelect};
+        m_currentName = nameToSelect;
+    }
     m_pendingNames.clear();
     m_editing = false;
     m_refreshDeferred = false;
+    // El filtro era de la carpeta anterior (el modelo ya lo quitó en setPath).
+    if (m_filterBar != nullptr && !m_filterBar->isHidden()) {
+        const QSignalBlocker blocker(m_filterEdit);
+        m_filterEdit->clear();
+        m_filterProblem.clear();
+        m_filterBar->hide();
+        updateFilterInfo();
+    }
 
     emit pathChanged(path);
     emit historyChanged();
@@ -460,11 +658,511 @@ void BrowserPane::changePath(const QString &path, const QString &nameToSelect)
 
 void BrowserPane::refresh()
 {
+    if (showsVolumes()) {
+        reloadVolumes();
+        return;
+    }
+    if (showsSearch()) {
+        startSearch();
+        return;
+    }
     if (m_editing) {
         m_refreshDeferred = true;   // se hará al terminar de escribir el nombre
         return;
     }
     m_model->refresh();
+}
+
+bool BrowserPane::showsVolumes() const
+{
+    return isVolumesLocation(m_location);
+}
+
+void BrowserPane::setVolumeSource(std::function<QList<fs::Volume>()> source)
+{
+    m_volumeSource = std::move(source);
+    if (showsVolumes()) {
+        reloadVolumes();
+    }
+}
+
+void BrowserPane::setSizeUnits(core::SizeUnits units)
+{
+    m_model->setSizeUnits(units);
+    m_volumesView->setSizeUnits(units);
+    m_resultsModel->setSizeUnits(units);
+}
+
+void BrowserPane::focusContent()
+{
+    if (showsVolumes()) {
+        m_volumesView->setFocus();
+    } else if (showsSearch()) {
+        m_resultsView->setFocus();
+    } else {
+        m_view->setFocus();
+    }
+}
+
+int BrowserPane::selectedCount() const
+{
+    if (showsVolumes()) {
+        return 0;   // una unidad no es un elemento sobre el que operar
+    }
+    const QTreeView *view = showsSearch() ? m_resultsView : m_view;
+    return int(view->selectionModel()->selectedRows().size());
+}
+
+void BrowserPane::selectAll()
+{
+    if (showsSearch()) {
+        m_resultsView->selectAll();
+    } else if (showsFolder()) {
+        m_view->selectAll();
+    }
+}
+
+void BrowserPane::contentMayHaveChanged()
+{
+    if (showsSearch()) {
+        // Volver a buscar por cada operación sería lento y perdería la
+        // selección: basta quitar lo que ya no está.
+        m_resultsModel->pruneMissing();
+    } else {
+        refresh();
+    }
+}
+
+// ---------------------------------------------------------------- búsqueda
+
+bool BrowserPane::showsSearch() const
+{
+    return isSearchLocation(m_location);
+}
+
+void BrowserPane::search(const QString &queryText)
+{
+    const QString text = queryText.trimmed();
+    if (text.isEmpty() || m_location.isEmpty() || showsVolumes()) {
+        return;
+    }
+    // Desde unos resultados se repite con el mismo alcance y las mismas opciones.
+    SearchSpec spec;
+    if (showsSearch()) {
+        spec = searchSpecOf(m_location);
+    } else {
+        spec.origin = m_location;
+    }
+    spec.query = text;
+    search(spec);
+}
+
+void BrowserPane::search(const SearchSpec &spec)
+{
+    if (spec.query.trimmed().isEmpty() || spec.origin.isEmpty()) {
+        return;
+    }
+    navigateTo(searchLocation(spec));
+}
+
+QString BrowserPane::searchWhere() const
+{
+    if (!showsSearch()) {
+        return {};
+    }
+    const SearchSpec spec = searchSpecOf(m_location);
+    switch (spec.scope) {
+    case SearchScope::Folder:
+        return tr("%1 (sin subcarpetas)").arg(QDir::toNativeSeparators(spec.origin));
+    case SearchScope::Subfolders:
+        return QDir::toNativeSeparators(spec.origin);
+    case SearchScope::Volume:
+        return tr("la unidad %1").arg(QDir::toNativeSeparators(spec.roots.value(0)));
+    case SearchScope::AllVolumes:
+        return tr("todas las unidades (%1)").arg(spec.roots.size());
+    case SearchScope::ChosenVolumes:
+        break;
+    }
+    QStringList names;
+    for (const QString &root : spec.roots) {
+        names.append(QDir::toNativeSeparators(root));
+    }
+    return tr("las unidades %1").arg(names.join(QStringLiteral(", ")));
+}
+
+void BrowserPane::cancelSearch()
+{
+    ++m_searchGeneration;
+    if (m_searchTask.isValid()) {
+        m_searchTask.cancel();
+        m_searchTask = tasks::TaskHandle();
+    }
+    m_searchGate.reset();
+}
+
+void BrowserPane::startSearch()
+{
+    cancelSearch();
+    const SearchSpec spec = searchSpecOf(m_location);
+    const bool withinFolder = spec.scope == SearchScope::Folder || spec.scope == SearchScope::Subfolders;
+    m_resultsModel->clear();
+    // Buscando en una carpeta, la columna Carpeta es relativa a ella; en
+    // unidades enteras se muestra la ruta completa.
+    m_resultsModel->setRoot(withinFolder ? spec.origin : QString());
+    m_searchProgress = {};
+    m_searchTruncated = false;
+    m_searchError.clear();
+
+    search::QueryOptions queryOptions;
+    queryOptions.caseSensitive = spec.caseSensitive;
+    queryOptions.termsInContent = spec.inContent;
+    const core::Result<search::Query> parsedQuery = search::Query::parse(spec.query, queryOptions);
+    if (!parsedQuery.ok()) {
+        m_searchError = parsedQuery.error().message;
+        m_searchState = SearchState::Invalid;
+        updateSearchInfo();
+        emit statusChanged();
+        return;
+    }
+    const QStringList unavailable = parsedQuery.value().unavailableFilters();
+    if (!unavailable.isEmpty()) {
+        m_searchError = tr("Aún no disponible: %1").arg(unavailable.join(QStringLiteral(":, ")) + QLatin1Char(':'));
+    }
+
+    m_searchGate = std::make_shared<search::PauseGate>();
+    m_searchState = SearchState::Running;
+    search::SearchOptions options;
+    options.includeHidden = m_model->showHidden();
+    options.recursive = spec.scope != SearchScope::Folder;
+    m_searchReadsContent = parsedQuery.value().usesContent();
+
+    // El índice de cada carpeta de partida, si lo tiene. Si alguna no lo
+    // tiene, o el índice no puede contestar esta consulta, se recorre el disco.
+    std::vector<std::optional<index::Index>> indexes;
+    const bool forceDisk = std::exchange(m_searchForceDisk, false);
+    if (m_indexResolver && !forceDisk) {
+        for (const QString &root : spec.roots) {
+            indexes.push_back(m_indexResolver(root));
+        }
+    }
+    m_searchFromIndex = false;
+    m_resultsModel->setFromIndex(false);
+
+    // La tarea no toca este objeto: trabaja con copias y devuelve los lotes al
+    // hilo de interfaz, donde se comprueba que la pestaña sigue viva y que
+    // los resultados son de la búsqueda vigente.
+    const QPointer<BrowserPane> self(this);
+    const quint64 generation = m_searchGeneration;
+    m_searchTask = m_scheduler.submitForPaths(
+        tasks::Category::Indexing, tasks::Priority::UserInteraction, spec.roots,
+        [self, generation, roots = spec.roots, query = parsedQuery.value(), options, indexes,
+         gate = m_searchGate](const tasks::CancelToken &cancel) {
+            const auto deliver = [&](std::vector<search::Hit> &&hits, const search::SearchProgress &progress) {
+                QMetaObject::invokeMethod(qApp, [self, generation, hits = std::move(hits), progress]() mutable {
+                    if (self) {
+                        self->onSearchHits(generation, std::move(hits), progress);
+                    }
+                }, Qt::QueuedConnection);
+            };
+            bool fromIndex = !indexes.empty();
+            for (size_t i = 0; i < indexes.size() && fromIndex; ++i) {
+                fromIndex = indexes[i].has_value() && indexes[i]->canAnswer({roots[qsizetype(i)]}, query, options);
+            }
+            QMetaObject::invokeMethod(qApp, [self, generation, fromIndex] {
+                if (self) {
+                    self->onSearchSource(generation, fromIndex);
+                }
+            }, Qt::QueuedConnection);
+
+            search::SearchSummary summary;
+            if (fromIndex) {
+                // Cada carpeta en su índice; los contadores se van sumando.
+                for (size_t i = 0; i < indexes.size() && !summary.truncated && !cancel.isCancelled(); ++i) {
+                    const search::SearchProgress before = summary.progress;
+                    search::SearchOptions remaining = options;
+                    remaining.maxHits = options.maxHits - before.hits;
+                    const search::SearchSummary part = indexes[i]->search(
+                        {roots[qsizetype(i)]}, query, remaining, cancel,
+                        [&](std::vector<search::Hit> &&hits, const search::SearchProgress &progress) {
+                            search::SearchProgress total = progress;
+                            total.itemsExamined += before.itemsExamined;
+                            total.hits += before.hits;
+                            deliver(std::move(hits), total);
+                        });
+                    summary.progress.itemsExamined += part.progress.itemsExamined;
+                    summary.progress.hits += part.progress.hits;
+                    summary.truncated = part.truncated;
+                }
+                summary.cancelled = cancel.isCancelled();
+            } else {
+                summary = search::searchTree(roots, query, options, cancel, gate.get(), deliver);
+            }
+            QMetaObject::invokeMethod(qApp, [self, generation, summary] {
+                if (self) {
+                    self->onSearchFinished(generation, summary);
+                }
+            }, Qt::QueuedConnection);
+        });
+    updateSearchInfo();
+    emit statusChanged();
+}
+
+void BrowserPane::onSearchHits(quint64 generation, std::vector<search::Hit> hits,
+                               const search::SearchProgress &progress)
+{
+    if (generation != m_searchGeneration) {
+        return;
+    }
+    m_searchProgress = progress;
+    m_resultsModel->append(std::move(hits));
+    updateSearchInfo();
+    emit statusChanged();
+}
+
+void BrowserPane::onSearchSource(quint64 generation, bool fromIndex)
+{
+    if (generation != m_searchGeneration) {
+        return;
+    }
+    m_searchFromIndex = fromIndex;
+    m_resultsModel->setFromIndex(fromIndex);
+    updateSearchInfo();
+}
+
+void BrowserPane::verifySearchOnDisk()
+{
+    if (!showsSearch()) {
+        return;
+    }
+    m_searchForceDisk = true;
+    startSearch();
+}
+
+void BrowserPane::onSearchFinished(quint64 generation, const search::SearchSummary &summary)
+{
+    if (generation != m_searchGeneration) {
+        return;
+    }
+    m_searchProgress = summary.progress;
+    m_searchTruncated = summary.truncated;
+    m_searchState = summary.cancelled ? SearchState::Stopped : SearchState::Finished;
+    m_searchTask = tasks::TaskHandle();
+    m_resultsModel->resort();   // si hay un orden elegido, que incluya lo último
+    updateSearchInfo();
+    emit statusChanged();
+}
+
+void BrowserPane::setSearchPaused(bool paused)
+{
+    if (m_searchState != SearchState::Running && m_searchState != SearchState::Paused) {
+        return;
+    }
+    m_searchGate->setPaused(paused);
+    m_searchState = paused ? SearchState::Paused : SearchState::Running;
+    updateSearchInfo();
+    emit statusChanged();
+}
+
+void BrowserPane::stopSearch()
+{
+    if (m_searchState != SearchState::Running && m_searchState != SearchState::Paused) {
+        return;
+    }
+    // Lo encontrado se queda a la vista; lo que la tarea entregue a partir
+    // de ahora se descarta.
+    cancelSearch();
+    m_searchState = SearchState::Stopped;
+    m_resultsModel->resort();
+    updateSearchInfo();
+    emit statusChanged();
+}
+
+QString BrowserPane::searchInfo() const
+{
+    return m_searchInfo->text();
+}
+
+void BrowserPane::updateSearchInfo()
+{
+    const bool active = m_searchState == SearchState::Running || m_searchState == SearchState::Paused;
+    m_searchPauseButton->setVisible(active);
+    m_searchPauseButton->setText(m_searchState == SearchState::Paused ? tr("Reanudar") : tr("Pausar"));
+    m_searchStopButton->setVisible(active);
+    m_searchAgainButton->setVisible(m_searchState == SearchState::Finished || m_searchState == SearchState::Stopped);
+    m_searchVerifyButton->setVisible(m_searchFromIndex && m_searchAgainButton->isVisibleTo(m_searchPage));
+
+    QPalette palette;
+    if (m_searchState == SearchState::Invalid) {
+        palette.setColor(QPalette::WindowText, QColor(0xb0, 0x2a, 0x1e));
+        m_searchInfo->setPalette(palette);
+        m_searchInfo->setText(tr("No se puede buscar: %1").arg(m_searchError));
+        return;
+    }
+    m_searchInfo->setPalette(palette);
+
+    QString pattern;
+    switch (m_searchState) {
+    case SearchState::Running:  pattern = tr("Buscando «%1» en %2 — carpetas revisadas: %3"); break;
+    case SearchState::Paused:   pattern = tr("En pausa. «%1» en %2 — carpetas revisadas: %3"); break;
+    case SearchState::Stopped:  pattern = tr("Detenida antes de terminar. «%1» en %2 — carpetas revisadas: %3"); break;
+    default:                    pattern = tr("Búsqueda terminada. «%1» en %2 — carpetas revisadas: %3"); break;
+    }
+    const SearchSpec spec = searchSpecOf(m_location);
+    QString text = pattern.arg(spec.query, searchWhere(), QLocale().toString(m_searchProgress.foldersScanned));
+    if (m_searchFromIndex) {
+        // Del índice no se lee ninguna carpeta: se dice de dónde sale y que
+        // puede no estar al día.
+        const QString where = tr("«%1» en %2").arg(spec.query, searchWhere());
+        text = (m_searchState == SearchState::Running || m_searchState == SearchState::Paused)
+            ? tr("Buscando en el índice %1").arg(where)
+            : tr("Resultados del índice, sin comprobar en el disco: %1").arg(where);
+    }
+    if (m_searchReadsContent) {
+        text += tr(" · archivos leídos: %1 (solo texto, hasta 20 MB)")
+                    .arg(QLocale().toString(m_searchProgress.filesRead));
+    }
+    if (spec.caseSensitive) {
+        text += tr(" · distingue mayúsculas");
+    }
+    if (m_searchProgress.unreadableFolders > 0) {
+        text += tr(" · no se pudieron leer: %1").arg(QLocale().toString(m_searchProgress.unreadableFolders));
+    }
+    if (m_searchTruncated) {
+        text += tr(" · hay más resultados de los que se muestran: afina la búsqueda");
+    }
+    if (!m_searchError.isEmpty()) {
+        text += QStringLiteral(" · ") + m_searchError;
+    }
+    m_searchInfo->setText(text);
+    m_searchInfo->setToolTip(text);
+}
+
+void BrowserPane::onResultActivated(const QModelIndex &index)
+{
+    if (!index.isValid() || index.row() >= m_resultsModel->count()) {
+        return;
+    }
+    // Copias: navegar vacía la lista de resultados.
+    const QString path = m_resultsModel->filePath(index.row());
+    const bool isDirectory = m_resultsModel->hitAt(index.row()).entry.isDirectory;
+    if (isDirectory) {
+        navigateTo(path);
+    } else if (!QDesktopServices::openUrl(QUrl::fromLocalFile(path))) {
+        emit openFailed(path);
+    }
+}
+
+void BrowserPane::openContainingFolder()
+{
+    if (!showsSearch()) {
+        return;
+    }
+    const QModelIndexList rows = m_resultsView->selectionModel()->selectedRows();
+    if (rows.isEmpty()) {
+        return;
+    }
+    const search::Hit hit = m_resultsModel->hitAt(rows.first().row());
+    m_backHistory.append(currentPath());
+    m_forwardHistory.clear();
+    changePath(hit.directory, hit.entry.name);
+}
+
+void BrowserPane::reloadVolumes()
+{
+    if (m_volumesLoading) {
+        return;   // una unidad lenta no debe acumular consultas
+    }
+    m_volumesLoading = true;
+    // Consultar el espacio puede tardar (unidades de red, discos dormidos):
+    // se hace en una tarea y el resultado vuelve al hilo de interfaz.
+    const QPointer<BrowserPane> self(this);
+    m_scheduler.submit(tasks::Category::Listing, tasks::Priority::VisibleNavigation,
+                       [self, source = m_volumeSource](const tasks::CancelToken &) {
+        const QList<fs::Volume> volumes = source();
+        QMetaObject::invokeMethod(qApp, [self, volumes] {
+            if (!self) {
+                return;
+            }
+            self->m_volumesLoading = false;
+            if (!self->showsVolumes()) {
+                return;
+            }
+            self->m_volumesView->setVolumes(volumes);
+            if (!self->m_volumeToSelect.isEmpty()) {
+                self->m_volumesView->selectRoot(self->m_volumeToSelect);
+                self->m_volumeToSelect.clear();
+            }
+            emit self->statusChanged();
+        }, Qt::QueuedConnection);
+    });
+}
+
+void BrowserPane::showFilter()
+{
+    if (!showsFolder()) {
+        return;   // el filtro es de una carpeta
+    }
+    m_filterBar->show();
+    m_filterEdit->setFocus(Qt::ShortcutFocusReason);
+    m_filterEdit->selectAll();
+}
+
+void BrowserPane::hideFilter()
+{
+    const bool hadFocus = m_filterEdit->hasFocus();
+    m_filterEdit->clear();   // quita el filtro (applyFilterText con texto vacío)
+    m_filterBar->hide();
+    if (hadFocus) {
+        m_view->setFocus();
+    }
+}
+
+bool BrowserPane::isFilterVisible() const
+{
+    return !m_filterBar->isHidden();
+}
+
+QString BrowserPane::filterMessage() const
+{
+    return m_filterInfo->text();
+}
+
+void BrowserPane::applyFilterText(const QString &text)
+{
+    const core::Result<search::Query> parsedQuery = search::Query::parse(text);
+    if (!parsedQuery.ok()) {
+        // Consulta a medio escribir o mal escrita: se explica y la lista se
+        // queda como estaba, en vez de vaciarse a cada tecla.
+        m_filterProblem = parsedQuery.error().message;
+        updateFilterInfo();
+        return;
+    }
+    m_filterProblem.clear();
+    const QStringList unavailable = parsedQuery.value().unavailableFilters();
+    if (!unavailable.isEmpty()) {
+        m_filterProblem = tr("Aún no disponible: %1").arg(unavailable.join(QStringLiteral(":, ")) + QLatin1Char(':'));
+    } else if (parsedQuery.value().usesContent()) {
+        // El filtro no abre archivos: se dice, en vez de dejar la lista vacía sin más.
+        m_filterProblem = tr("content: solo funciona en el buscador (Ctrl+F)");
+    }
+    m_model->setFilter(parsedQuery.value());
+    updateFilterInfo();
+    emit statusChanged();
+}
+
+void BrowserPane::updateFilterInfo()
+{
+    QPalette palette = m_filterInfo->palette();
+    if (!m_filterProblem.isEmpty()) {
+        palette.setColor(QPalette::WindowText, QColor(0xb0, 0x2a, 0x1e));
+        m_filterInfo->setText(m_filterProblem);
+    } else {
+        palette = QPalette();
+        m_filterInfo->setText(m_model->filter().isEmpty()
+                                  ? QString()
+                                  : tr("%1 de %2").arg(m_model->rowCount()).arg(m_model->unfilteredCount()));
+    }
+    m_filterInfo->setPalette(palette);
 }
 
 void BrowserPane::onEditingFinished()
@@ -561,6 +1259,10 @@ void BrowserPane::setFolderSizesEnabled(bool enabled)
 
 void BrowserPane::onModelStateChanged(DirectoryModel::State state)
 {
+    if (!showsFolder()) {
+        emit statusChanged();   // sigue a la vista la lista de unidades o de resultados
+        return;
+    }
     switch (state) {
     case DirectoryModel::State::Failed:
         m_messageLabel->setText(tr("No se puede mostrar esta carpeta.\n%1\n\n%2")
@@ -630,6 +1332,16 @@ void BrowserPane::restoreSelection()
 QStringList BrowserPane::selectedPaths() const
 {
     QStringList paths;
+    if (showsVolumes()) {
+        return paths;   // una unidad no se copia, corta ni borra como un archivo
+    }
+    if (showsSearch()) {
+        const QModelIndexList found = m_resultsView->selectionModel()->selectedRows();
+        for (const QModelIndex &index : found) {
+            paths.append(m_resultsModel->filePath(index.row()));
+        }
+        return paths;
+    }
     const QModelIndexList rows = m_view->selectionModel()->selectedRows();
     for (const QModelIndex &index : rows) {
         paths.append(m_model->filePath(index.row()));
@@ -653,6 +1365,27 @@ void BrowserPane::onActivated(const QModelIndex &index)
 
 void BrowserPane::openSelection()
 {
+    if (showsSearch()) {
+        const QModelIndexList found = m_resultsView->selectionModel()->selectedRows();
+        // Igual que en una carpeta: si hay una carpeta se entra en ella; si no,
+        // se abren todos los archivos.
+        for (const QModelIndex &index : found) {
+            if (m_resultsModel->hitAt(index.row()).entry.isDirectory) {
+                onResultActivated(index);
+                return;
+            }
+        }
+        QStringList files;
+        for (const QModelIndex &index : found) {
+            files.append(m_resultsModel->filePath(index.row()));
+        }
+        for (const QString &file : std::as_const(files)) {
+            if (!QDesktopServices::openUrl(QUrl::fromLocalFile(file))) {
+                emit openFailed(file);
+            }
+        }
+        return;
+    }
     const QModelIndexList rows = m_view->selectionModel()->selectedRows();
     // Con varias carpetas seleccionadas solo se entra en la primera; los
     // archivos se abren todos.
@@ -673,6 +1406,45 @@ void BrowserPane::openSelection()
 
 QString BrowserPane::statusText() const
 {
+    if (showsVolumes()) {
+        const QList<fs::Volume> volumes = m_volumesView->volumes();
+        QString summary = tr("%n unidad(es)", nullptr, int(volumes.size()));
+        const QString selected = m_volumesView->selectedRoot();
+        for (const fs::Volume &volume : volumes) {
+            if (volume.rootPath == selected && volume.totalBytes > 0) {
+                summary += tr(" · %1: %2 libres de %3")
+                               .arg(volume.displayName, core::formatSize(volume.freeBytes, m_model->sizeUnits()),
+                                    core::formatSize(volume.totalBytes, m_model->sizeUnits()));
+            }
+        }
+        return summary;
+    }
+    if (showsSearch()) {
+        const int found = m_resultsModel->count();
+        QString summary;
+        switch (m_searchState) {
+        case SearchState::Running: summary = tr("Buscando… %n resultado(s)", nullptr, found); break;
+        case SearchState::Paused:  summary = tr("Búsqueda en pausa: %n resultado(s)", nullptr, found); break;
+        case SearchState::Stopped: summary = tr("Búsqueda detenida: %n resultado(s)", nullptr, found); break;
+        case SearchState::Invalid: return tr("La búsqueda tiene un error");
+        default:                   summary = tr("%n resultado(s)", nullptr, found); break;
+        }
+        const QModelIndexList chosen = m_resultsView->selectionModel()->selectedRows();
+        if (!chosen.isEmpty()) {
+            qint64 bytes = 0;
+            bool onlyFiles = true;
+            for (const QModelIndex &index : chosen) {
+                const fs::Entry &entry = m_resultsModel->hitAt(index.row()).entry;
+                onlyFiles = onlyFiles && !entry.isDirectory;
+                bytes += entry.isDirectory ? 0 : entry.size;
+            }
+            summary += tr(" · %n seleccionado(s)", nullptr, int(chosen.size()));
+            if (onlyFiles) {
+                summary += QStringLiteral(" (%1)").arg(core::formatSize(bytes, m_model->sizeUnits()));
+            }
+        }
+        return summary;
+    }
     QString text;
     switch (m_model->state()) {
     case DirectoryModel::State::Loading:
@@ -682,7 +1454,9 @@ QString BrowserPane::statusText() const
     case DirectoryModel::State::Failed:
         return tr("No se pudo leer la carpeta");
     default:
-        text = tr("%n elemento(s)", nullptr, m_model->rowCount());
+        text = m_model->filter().isEmpty()
+            ? tr("%n elemento(s)", nullptr, m_model->rowCount())
+            : tr("Filtro: %1 de %n elemento(s)", nullptr, m_model->unfilteredCount()).arg(m_model->rowCount());
         break;
     }
     if (m_model->hiddenCount() > 0) {

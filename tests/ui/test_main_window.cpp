@@ -1,9 +1,14 @@
 // Explorador Ultra — SPDX-License-Identifier: GPL-3.0-or-later
 #include "eu/ui/BrowserPane.h"
 #include "eu/ui/FileClipboard.h"
+#include "eu/ui/Locations.h"
 #include "eu/ui/MainWindow.h"
 #include "eu/ui/PathBar.h"
+#include "eu/ui/SearchResultsModel.h"
+#include "eu/ui/IndexDialog.h"
+#include "eu/ui/Sidebar.h"
 #include "eu/ui/TrashDialog.h"
+#include "eu/ui/VolumesView.h"
 
 #include <QApplication>
 #include <QClipboard>
@@ -21,6 +26,7 @@
 #include <QStandardPaths>
 #include <QTemporaryDir>
 #include <QTest>
+#include <QTreeWidget>
 #include <QTreeView>
 #include <QUrl>
 
@@ -658,6 +664,634 @@ private slots:
             QVERIFY2(!icon.isNull() && !icon.pixmap(16, 16).isNull(),
                      qPrintable(pane->model()->entryAt(row).name));
         }
+    }
+
+    void filterBarFiltersWhileTyping()
+    {
+        QTemporaryDir directory;
+        QVERIFY(QDir(directory.path()).mkdir(QStringLiteral("Fotos")));
+        writeFile(directory.filePath(QStringLiteral("informe marzo.pdf")));
+        writeFile(directory.filePath(QStringLiteral("informe abril.pdf")));
+        writeFile(directory.filePath(QStringLiteral("notas.txt")));
+        MainWindow window(m_scheduler);
+        window.show();
+        BrowserPane *pane = window.openTab(directory.path());
+        QVERIFY(waitReady(pane));
+        QVERIFY(!pane->isFilterVisible());
+
+        pane->showFilter();
+        QVERIFY(pane->isFilterVisible());
+        QTest::keyClicks(pane->filterEdit(), QStringLiteral("informe"));
+        QCOMPARE(pane->model()->rowCount(), 2);
+        QCOMPARE(pane->filterMessage(), QStringLiteral("2 de 4"));
+        QVERIFY(pane->statusText().contains(QStringLiteral("2")));
+
+        // Una consulta a medio escribir explica el problema y no vacía la lista.
+        QTest::keyClicks(pane->filterEdit(), QStringLiteral(" (marzo OR"));
+        QCOMPARE(pane->model()->rowCount(), 2);
+        QVERIFY(pane->filterMessage().contains(QStringLiteral("OR")));
+        QTest::keyClicks(pane->filterEdit(), QStringLiteral(" mayo)"));
+        QCOMPARE(pane->model()->rowCount(), 1);
+
+        // Un filtro que aún no existe se dice, no se aparenta.
+        pane->filterEdit()->setText(QStringLiteral("tag:rojo"));
+        QCOMPARE(pane->model()->rowCount(), 0);
+        QVERIFY(pane->filterMessage().contains(QStringLiteral("tag")));
+
+        // Esc quita el filtro y vuelve todo.
+        QTest::keyClick(pane->filterEdit(), Qt::Key_Escape);
+        QVERIFY(!pane->isFilterVisible());
+        QCOMPARE(pane->model()->rowCount(), 4);
+
+        // Entrar en otra carpeta también lo quita.
+        pane->showFilter();
+        pane->filterEdit()->setText(QStringLiteral("type:carpeta"));
+        QCOMPARE(pane->model()->rowCount(), 1);
+        pane->navigateTo(directory.filePath(QStringLiteral("Fotos")));
+        QVERIFY(waitReady(pane));
+        QVERIFY(!pane->isFilterVisible());
+        pane->goBack();
+        QVERIFY(waitReady(pane));
+        QCOMPARE(pane->model()->rowCount(), 4);
+    }
+
+    void volumesLocationListsDrivesWithTheirSpace()
+    {
+        QTemporaryDir directory;
+        QVERIFY(QDir(directory.path()).mkpath(QStringLiteral("discoA/dentro")));
+        QVERIFY(QDir(directory.path()).mkpath(QStringLiteral("discoB")));
+        const QString rootA = QDir::cleanPath(directory.filePath(QStringLiteral("discoA")));
+        const QString rootB = QDir::cleanPath(directory.filePath(QStringLiteral("discoB")));
+
+        fs::Volume a;
+        a.rootPath = rootA;
+        a.displayName = QStringLiteral("Datos");
+        a.fileSystem = QStringLiteral("ext4");
+        a.kind = fs::DeviceKind::Ssd;
+        a.totalBytes = 1000000000;   // 1 GB
+        a.freeBytes = 250000000;     // 250 MB libres -> 75 % ocupado
+        fs::Volume b;
+        b.rootPath = rootB;
+        b.displayName = QStringLiteral("USB");
+        b.fileSystem = QStringLiteral("exfat");
+        b.kind = fs::DeviceKind::Removable;
+        b.totalBytes = 16000000000;
+        b.freeBytes = 16000000000;
+
+        MainWindow window(m_scheduler, openJournal(directory));
+        BrowserPane *pane = window.openTab(rootA + QStringLiteral("/dentro"));
+        QVERIFY(waitReady(pane));
+        pane->setVolumeSource([a, b] { return QList<fs::Volume>{a, b}; });
+        window.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&window));
+
+        // Un clic en el rótulo "Unidades" del árbol lleva a la lista.
+        Sidebar *sidebar = window.sidebar();
+        QModelIndex section;
+        for (int row = 0; row < sidebar->model()->rowCount(); ++row) {
+            if (sidebar->model()->index(row, 0).data().toString() == QStringLiteral("Unidades")) {
+                section = sidebar->model()->index(row, 0);
+            }
+        }
+        QVERIFY(section.isValid());
+        QTest::mouseClick(sidebar->viewport(), Qt::LeftButton, Qt::NoModifier, sidebar->visualRect(section).center());
+        QVERIFY(pane->showsVolumes());
+        QCOMPARE(pane->currentPath(), volumesLocation());
+        VolumesView *volumes = pane->volumesView();
+        QTRY_COMPARE(volumes->topLevelItemCount(), 2);
+        QVERIFY(volumes->isVisible());
+        QVERIFY(!pane->view()->isVisible());
+
+        // Tamaño total, ocupado, libre y porcentaje de cada unidad.
+        QTreeWidgetItem *first = volumes->topLevelItem(0);
+        QCOMPARE(first->text(VolumesView::NameColumn), QStringLiteral("Datos"));
+        QCOMPARE(first->text(VolumesView::LocationColumn), QDir::toNativeSeparators(rootA));
+        QVERIFY(first->text(VolumesView::TypeColumn).contains(QStringLiteral("SSD")));
+        QVERIFY(first->text(VolumesView::TypeColumn).contains(QStringLiteral("ext4")));
+        QCOMPARE(first->text(VolumesView::TotalColumn), core::formatSize(1000000000));
+        QCOMPARE(first->text(VolumesView::UsedColumn), core::formatSize(750000000));
+        QCOMPARE(first->text(VolumesView::FreeColumn), core::formatSize(250000000));
+        QVERIFY(first->text(VolumesView::UsageColumn).startsWith(QStringLiteral("75")));
+        QVERIFY(!first->icon(VolumesView::NameColumn).isNull());
+        QVERIFY(volumes->topLevelItem(1)->text(VolumesView::UsageColumn).startsWith(QStringLiteral("0")));
+
+        // Ordenar por espacio libre usa el número, no el texto.
+        volumes->sortByColumn(VolumesView::FreeColumn, Qt::DescendingOrder);
+        QCOMPARE(volumes->topLevelItem(0)->text(VolumesView::NameColumn), QStringLiteral("USB"));
+        volumes->sortByColumn(VolumesView::NameColumn, Qt::AscendingOrder);
+
+        // Aquí no hay carpeta: nada que copiar, crear ni pegar.
+        QVERIFY(pane->selectedPaths().isEmpty());
+        QVERIFY(!pane->canGoUp());
+        QVERIFY(pane->statusText().contains(QStringLiteral("2 unidad")));
+        window.newFolder();
+        QVERIFY(!window.fileActions()->isBusy());
+        pane->showFilter();
+        QVERIFY(!pane->isFilterVisible());
+        QCOMPARE(PathBar::crumbsFor(volumesLocation()).size(), 1);
+
+        // Cambiar las unidades de tamaño cambia el texto de la lista.
+        pane->setSizeUnits(core::SizeUnits::Binary);
+        QCOMPARE(volumes->topLevelItem(0)->text(VolumesView::TotalColumn),
+                 core::formatSize(1000000000, core::SizeUnits::Binary));
+        pane->setSizeUnits(core::SizeUnits::Decimal);
+
+        // Abrir una unidad entra en su raíz; subir desde la raíz vuelve a la
+        // lista con esa unidad seleccionada.
+        volumes->setCurrentItem(volumes->topLevelItem(0));
+        QVERIFY(pane->statusText().contains(QStringLiteral("Datos")));
+        emit volumes->itemActivated(volumes->topLevelItem(0), 0);
+        QCOMPARE(pane->currentPath(), rootA);
+        QVERIFY(!pane->showsVolumes());
+        QVERIFY(waitReady(pane));
+        QVERIFY(pane->view()->isVisible());
+        QVERIFY(pane->model()->rowOfName(QStringLiteral("dentro")) >= 0);
+
+        pane->goBack();
+        QVERIFY(pane->showsVolumes());
+        QTRY_COMPARE(volumes->selectedRoot(), rootA);
+        pane->goForward();
+        QCOMPARE(pane->currentPath(), rootA);
+        QVERIFY(waitReady(pane));
+
+        // La pestaña en "Unidades" se recuerda entre sesiones.
+        pane->navigateTo(volumesLocation());
+        QVERIFY(pane->showsVolumes());
+        window.close();
+        MainWindow restored(m_scheduler);
+        restored.restoreSession();
+        QCOMPARE(restored.tabCount(), 1);
+        QVERIFY(restored.currentPane()->showsVolumes());
+        QSettings().clear();
+    }
+
+    void goingUpFromARootShowsTheVolumes()
+    {
+        MainWindow window(m_scheduler);
+        BrowserPane *pane = window.openTab(QDir::rootPath());
+        QVERIFY(waitReady(pane));
+        QVERIFY(pane->canGoUp());
+        pane->goUp();
+        QVERIFY(pane->showsVolumes());
+        QVERIFY(!pane->canGoUp());
+        QVERIFY(pane->canGoBack());
+        // Las unidades reales del equipo: al menos la del sistema, con tamaño.
+        QTRY_VERIFY(pane->volumesView()->topLevelItemCount() >= 1);
+        pane->goBack();
+        QCOMPARE(pane->currentPath(), QDir::cleanPath(QDir::rootPath()));
+    }
+
+    void arrowKeysWorkInsideTheTree()
+    {
+        QTemporaryDir directory;
+        QVERIFY(QDir(directory.path()).mkpath(QStringLiteral("raiz/alfa/dentro")));
+        QVERIFY(QDir(directory.path()).mkpath(QStringLiteral("raiz/beta")));
+        const QString root = QDir::cleanPath(directory.filePath(QStringLiteral("raiz")));
+
+        MainWindow window(m_scheduler, openJournal(directory));
+        BrowserPane *pane = window.openTab(directory.path());
+        QVERIFY(waitReady(pane));
+        window.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&window));
+
+        Sidebar *sidebar = window.sidebar();
+        sidebar->addPlace(QStringLiteral("Raíz"), root);
+        const QPoint rootPosition = sidebar->positionOf(root);
+        QVERIFY(!rootPosition.isNull());
+
+        // Un clic en el árbol abre la carpeta y deja el teclado en el árbol.
+        QTest::mouseClick(sidebar->viewport(), Qt::LeftButton, Qt::NoModifier, rootPosition);
+        QTRY_COMPARE(pane->currentPath(), root);
+        QCOMPARE(window.focusWidget(), sidebar);
+        QCOMPARE(sidebar->currentPlace(), root);
+
+        // El clic ya desplegó la rama; Izquierda la recoge y Derecha la despliega.
+        const QModelIndex rootIndex = sidebar->currentIndex();
+        QTRY_VERIFY(!sidebar->positionOf(root + QStringLiteral("/alfa")).isNull());
+        QVERIFY(sidebar->isExpanded(rootIndex));
+        QTest::keyClick(sidebar, Qt::Key_Left);
+        QVERIFY(!sidebar->isExpanded(rootIndex));
+        QCOMPARE(sidebar->currentPlace(), root);
+        QTest::keyClick(sidebar, Qt::Key_Right);
+        QVERIFY(sidebar->isExpanded(rootIndex));
+
+        // Derecha otra vez baja a la primera subcarpeta, y la lista la sigue.
+        QTest::keyClick(sidebar, Qt::Key_Right);
+        QCOMPARE(sidebar->currentPlace(), root + QStringLiteral("/alfa"));
+        QTRY_COMPARE(pane->currentPath(), root + QStringLiteral("/alfa"));
+        QCOMPARE(window.focusWidget(), sidebar);
+
+        // Abajo y arriba se mueven por el árbol, no por la lista de archivos.
+        QTest::keyClick(sidebar, Qt::Key_Down);
+        QCOMPARE(sidebar->currentPlace(), root + QStringLiteral("/beta"));
+        QTRY_COMPARE(pane->currentPath(), root + QStringLiteral("/beta"));
+        QTest::keyClick(sidebar, Qt::Key_Up);
+        QCOMPARE(sidebar->currentPlace(), root + QStringLiteral("/alfa"));
+
+        // Izquierda en una rama recogida sube a la carpeta padre.
+        QTest::keyClick(sidebar, Qt::Key_Left);
+        QCOMPARE(sidebar->currentPlace(), root);
+        QTRY_COMPARE(pane->currentPath(), root);
+        QCOMPARE(window.focusWidget(), sidebar);
+    }
+
+    void searchFindsInSubfoldersAsALocation()
+    {
+        QTemporaryDir directory;
+        const QString root = QDir::cleanPath(directory.path());
+        QVERIFY(QDir(root).mkpath(QStringLiteral("fotos/2025")));
+        QVERIFY(QDir(root).mkpath(QStringLiteral("playa de documentos")));
+        writeFile(root + QStringLiteral("/fotos/playa.jpg"), 3000);
+        writeFile(root + QStringLiteral("/fotos/2025/playa 2.jpg"), 5000);
+        writeFile(root + QStringLiteral("/fotos/2025/monte.jpg"), 100);
+        writeFile(root + QStringLiteral("/informe.pdf"), 10);
+
+        MainWindow window(m_scheduler, openJournal(directory));
+        BrowserPane *pane = window.openTab(root);
+        QVERIFY(waitReady(pane));
+        window.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&window));
+        const auto waitSearch = [pane] {
+            return QTest::qWaitFor([pane] { return pane->searchState() == BrowserPane::SearchState::Finished; }, 20000);
+        };
+
+        // Una consulta mal escrita no saca de la carpeta.
+        QVERIFY(window.searchEdit()->isEnabled());
+        window.searchEdit()->setText(QStringLiteral("(playa"));
+        QTest::keyClick(window.searchEdit(), Qt::Key_Return);
+        QVERIFY(pane->showsFolder());
+
+        // Escribir y pulsar Intro: los resultados ocupan la pestaña.
+        window.searchEdit()->setText(QStringLiteral("playa"));
+        QTest::keyClick(window.searchEdit(), Qt::Key_Return);
+        QVERIFY(pane->showsSearch());
+        QCOMPARE(searchRootOf(pane->currentPath()), root);
+        QCOMPARE(searchQueryOf(pane->currentPath()), QStringLiteral("playa"));
+        QVERIFY(waitSearch());
+        SearchResultsModel *results = pane->resultsModel();
+        QCOMPARE(results->count(), 3);
+        QVERIFY(pane->resultsView()->isVisible());
+        QVERIFY(!pane->view()->isVisible());
+        // Primero lo más cercano: la carpeta que está en la raíz.
+        QCOMPARE(results->hitAt(0).entry.name, QStringLiteral("playa de documentos"));
+        QVERIFY(results->rowOfPath(root + QStringLiteral("/fotos/2025/playa 2.jpg")) >= 0);
+        QCOMPARE(pane->searchProgress().foldersScanned, 4);
+        QVERIFY(pane->searchInfo().contains(QStringLiteral("playa")));
+        QVERIFY(pane->statusText().contains(QStringLiteral("3 resultado")));
+
+        // La columna Carpeta es relativa a donde se buscó; todo tiene icono.
+        const int deep = results->rowOfPath(root + QStringLiteral("/fotos/2025/playa 2.jpg"));
+        QCOMPARE(results->index(deep, SearchResultsModel::FolderColumn).data().toString(),
+                 QDir::toNativeSeparators(QStringLiteral("fotos/2025")));
+        for (int row = 0; row < results->count(); ++row) {
+            QVERIFY(!results->index(row, 0).data(Qt::DecorationRole).value<QIcon>().isNull());
+        }
+
+        // La ruta enseña la carpeta y, al final, la búsqueda; la pestaña también.
+        const auto crumbs = PathBar::crumbsFor(pane->currentPath());
+        QVERIFY(crumbs.last().first.contains(QStringLiteral("playa")));
+        QCOMPARE(crumbs[crumbs.size() - 2].second, root);
+
+        // Ordenar por tamaño (en segundo plano): el mayor arriba.
+        pane->resultsView()->sortByColumn(SearchResultsModel::SizeColumn, Qt::DescendingOrder);
+        QTRY_COMPARE(results->hitAt(0).entry.name, QStringLiteral("playa 2.jpg"));
+
+        // En los resultados no se crea ni se pega, pero sí se copia y se borra.
+        window.newFolder();
+        QVERIFY(!window.fileActions()->isBusy());
+        const int victim = results->rowOfPath(root + QStringLiteral("/fotos/playa.jpg"));
+        pane->resultsView()->selectionModel()->select(
+            results->index(victim, 0), QItemSelectionModel::ClearAndSelect | QItemSelectionModel::Rows);
+        QCOMPARE(pane->selectedPaths(), QStringList{root + QStringLiteral("/fotos/playa.jpg")});
+        QCOMPARE(pane->selectedCount(), 1);
+        // Donde la unidad no tiene papelera (carpetas temporales de macOS) se
+        // ofrece eliminar para siempre: se acepta, para no dejar un diálogo abierto.
+        window.setDeleteConfirmation([](const QStringList &) { return true; });
+        window.trashSelection();
+        QVERIFY(waitIdle(window));
+        QVERIFY(!QFileInfo::exists(root + QStringLiteral("/fotos/playa.jpg")));
+        // Lo que ya no existe desaparece de la lista sin volver a buscar.
+        QTRY_COMPARE(results->count(), 2);
+        QCOMPARE(results->rowOfPath(root + QStringLiteral("/fotos/playa.jpg")), -1);
+
+        // "Abrir la carpeta que lo contiene" lleva a la carpeta con el archivo seleccionado.
+        const int other = results->rowOfPath(root + QStringLiteral("/fotos/2025/playa 2.jpg"));
+        pane->resultsView()->selectionModel()->select(
+            results->index(other, 0), QItemSelectionModel::ClearAndSelect | QItemSelectionModel::Rows);
+        pane->openContainingFolder();
+        QCOMPARE(pane->currentPath(), root + QStringLiteral("/fotos/2025"));
+        QVERIFY(pane->showsFolder());
+        QVERIFY(waitReady(pane));
+        QTRY_COMPARE(pane->selectedPaths(), QStringList{root + QStringLiteral("/fotos/2025/playa 2.jpg")});
+        QCOMPARE(pane->searchState(), BrowserPane::SearchState::Idle);
+        QCOMPARE(results->count(), 0);
+
+        // Atrás vuelve a los resultados (se busca de nuevo); Subir, a la carpeta.
+        pane->goBack();
+        QVERIFY(pane->showsSearch());
+        QVERIFY(waitSearch());
+        QCOMPARE(results->count(), 2);
+        QVERIFY(pane->canGoUp());
+        pane->goUp();
+        QCOMPARE(pane->currentPath(), root);
+        QVERIFY(waitReady(pane));
+
+        // Los filtros valen igual que en el filtro local.
+        pane->search(QStringLiteral("ext:jpg size:<1kB"));
+        QVERIFY(waitSearch());
+        QCOMPARE(results->count(), 1);
+        QCOMPARE(results->hitAt(0).entry.name, QStringLiteral("monte.jpg"));
+        // Abrir una carpeta encontrada entra en ella.
+        pane->search(QStringLiteral("type:folder 2025"));
+        QVERIFY(waitSearch());
+        QCOMPARE(results->count(), 1);
+        emit pane->resultsView()->activated(results->index(0, 0));
+        QCOMPARE(pane->currentPath(), root + QStringLiteral("/fotos/2025"));
+        QVERIFY(waitReady(pane));
+
+        // Unos resultados no se guardan en la sesión: se guarda la carpeta.
+        pane->search(QStringLiteral("playa"));
+        QVERIFY(waitSearch());
+        QVERIFY(window.close());
+        MainWindow restored(m_scheduler);
+        restored.restoreSession();
+        QCOMPARE(restored.tabCount(), 1);
+        QCOMPARE(restored.currentPane()->currentPath(), root + QStringLiteral("/fotos/2025"));
+        QSettings().clear();
+    }
+
+    void searchScopesAndOptions()
+    {
+        QTemporaryDir directory;
+        const QString base = QDir::cleanPath(directory.path());
+        const QString diskA = base + QStringLiteral("/discoA");
+        const QString diskB = base + QStringLiteral("/discoB");
+        const QString books = diskA + QStringLiteral("/libros");
+        QVERIFY(QDir(base).mkpath(QStringLiteral("discoA/libros/WALTER RISO")));
+        QVERIFY(QDir(base).mkpath(QStringLiteral("discoB")));
+        writeFile(books + QStringLiteral("/WALTER RISO/Amar o depender.pdf"), 10);
+        writeFile(diskA + QStringLiteral("/suelto.dat"), 10);
+        writeFile(diskB + QStringLiteral("/Riso en B.dat"), 10);
+        {
+            QFile note(books + QStringLiteral("/apuntes.txt"));
+            QVERIFY(note.open(QIODevice::WriteOnly));
+            note.write("Una nota sobre Riso y sus libros\n");
+        }
+
+        fs::Volume a;
+        a.rootPath = diskA;
+        a.displayName = QStringLiteral("A");
+        fs::Volume b;
+        b.rootPath = diskB;
+        b.displayName = QStringLiteral("B");
+
+        MainWindow window(m_scheduler, openJournal(directory));
+        window.setSearchVolumeSource([a, b] { return QList<fs::Volume>{a, b}; });
+        BrowserPane *pane = window.openTab(books);
+        QVERIFY(waitReady(pane));
+        window.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&window));
+        const auto searchFor = [&](const QString &text) {
+            window.searchEdit()->setText(text);
+            QTest::keyClick(window.searchEdit(), Qt::Key_Return);
+            return pane->showsSearch()
+                && QTest::qWaitFor([pane] { return pane->searchState() == BrowserPane::SearchState::Finished; }, 20000);
+        };
+        SearchResultsModel *results = pane->resultsModel();
+
+        // Lo que falló al dueño: varias palabras con un comodín al final.
+        QVERIFY(searchFor(QStringLiteral("walter riso*")));
+        QCOMPARE(results->count(), 1);
+        QCOMPARE(results->hitAt(0).entry.name, QStringLiteral("WALTER RISO"));
+
+        // Distinguiendo mayúsculas, "walter" ya no es "WALTER".
+        window.setSearchCaseSensitive(true);
+        QVERIFY(searchFor(QStringLiteral("walter riso*")));
+        QCOMPARE(results->count(), 0);
+        QVERIFY(pane->searchInfo().contains(QStringLiteral("distingue mayúsculas")));
+        QVERIFY(searchFor(QStringLiteral("WALTER RISO*")));
+        QCOMPARE(results->count(), 1);
+        window.setSearchCaseSensitive(false);
+
+        // Solo la carpeta: el PDF está una carpeta más abajo.
+        window.setSearchScope(SearchScope::Folder);
+        QVERIFY(searchFor(QStringLiteral("ext:pdf")));
+        QCOMPARE(results->count(), 0);
+        QCOMPARE(searchRootOf(pane->currentPath()), books);
+        window.setSearchScope(SearchScope::Subfolders);
+        QVERIFY(searchFor(QStringLiteral("ext:pdf")));
+        QCOMPARE(results->count(), 1);
+
+        // Toda la unidad: encuentra lo que está fuera de la carpeta, pero no en la otra unidad.
+        window.setSearchScope(SearchScope::Volume);
+        QVERIFY(searchFor(QStringLiteral("ext:dat")));
+        QCOMPARE(searchSpecOf(pane->currentPath()).roots, QStringList{diskA});
+        QCOMPARE(results->count(), 1);
+        QCOMPARE(results->filePath(0), diskA + QStringLiteral("/suelto.dat"));
+
+        // Todas las unidades.
+        window.setSearchScope(SearchScope::AllVolumes);
+        QVERIFY(searchFor(QStringLiteral("ext:dat")));
+        QCOMPARE(results->count(), 2);
+        QVERIFY(pane->searchInfo().contains(QStringLiteral("todas las unidades")));
+
+        // Las elegidas.
+        window.setChosenSearchVolumes({diskB});
+        window.setSearchScope(SearchScope::ChosenVolumes);
+        QVERIFY(searchFor(QStringLiteral("ext:dat")));
+        QCOMPARE(results->count(), 1);
+        QCOMPARE(results->filePath(0), diskB + QStringLiteral("/Riso en B.dat"));
+
+        // Subir desde cualquier resultado vuelve a la carpeta de partida.
+        pane->goUp();
+        QCOMPARE(pane->currentPath(), books);
+        QVERIFY(waitReady(pane));
+        // Lo que se buscaba sigue escrito al cambiar de carpeta, y las
+        // búsquedas hechas quedan en la lista de recientes, sin repetirse.
+        QCOMPARE(window.searchEdit()->text(), QStringLiteral("ext:dat"));
+        pane->navigateTo(diskA);
+        QVERIFY(waitReady(pane));
+        QCOMPARE(window.searchEdit()->text(), QStringLiteral("ext:dat"));
+        QCOMPARE(window.recentSearches(), (QStringList{QStringLiteral("ext:dat"), QStringLiteral("ext:pdf"),
+                                                       QStringLiteral("WALTER RISO*"),
+                                                       QStringLiteral("walter riso*")}));
+        pane->navigateTo(books);
+        QVERIFY(waitReady(pane));
+
+        // En el contenido: la palabra está dentro del archivo, no en su nombre.
+        window.setSearchScope(SearchScope::Subfolders);
+        window.setSearchInContent(true);
+        QVERIFY(searchFor(QStringLiteral("riso libros")));
+        QCOMPARE(results->count(), 1);
+        QCOMPARE(results->hitAt(0).entry.name, QStringLiteral("apuntes.txt"));
+        QVERIFY(pane->searchInfo().contains(QStringLiteral("archivos leídos")));
+        window.setSearchInContent(false);
+        // El filtro content: hace lo mismo sin cambiar de modo.
+        QVERIFY(searchFor(QStringLiteral("content:\"nota sobre riso\"")));
+        QCOMPARE(results->count(), 1);
+
+        // Desde la lista de unidades se busca en todas.
+        pane->navigateTo(volumesLocation());
+        QVERIFY(pane->showsVolumes());
+        QVERIFY(window.searchEdit()->isEnabled());
+        QVERIFY(searchFor(QStringLiteral("ext:dat")));
+        QCOMPARE(results->count(), 2);
+        pane->goUp();
+        QVERIFY(pane->showsVolumes());
+    }
+
+    void searchUsesTheIndexWhenThereIsOne()
+    {
+        QTemporaryDir directory;
+        const QString root = QDir::cleanPath(directory.path()) + QStringLiteral("/unidad");
+        QVERIFY(QDir().mkpath(root + QStringLiteral("/fotos/2025")));
+        writeFile(root + QStringLiteral("/fotos/playa.jpg"), 3000);
+        writeFile(root + QStringLiteral("/fotos/2025/playa 2.jpg"), 5000);
+        writeFile(root + QStringLiteral("/informe.pdf"), 10);
+
+        MainWindow window(m_scheduler, openJournal(directory));
+        BrowserPane *pane = window.openTab(root);
+        QVERIFY(waitReady(pane));
+        window.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&window));
+        index::IndexService *service = window.indexService();
+        const auto searchFor = [&](const QString &text) {
+            window.searchEdit()->setText(text);
+            QTest::keyClick(window.searchEdit(), Qt::Key_Return);
+            return pane->showsSearch()
+                && QTest::qWaitFor([pane] { return pane->searchState() == BrowserPane::SearchState::Finished; }, 20000);
+        };
+        SearchResultsModel *results = pane->resultsModel();
+        const auto origin = [&] {
+            return results->index(0, SearchResultsModel::OriginColumn).data().toString();
+        };
+
+        // Sin índice se recorre el disco.
+        QVERIFY(searchFor(QStringLiteral("playa")));
+        QCOMPARE(results->count(), 2);
+        QVERIFY(!pane->searchFromIndex());
+        QCOMPARE(origin(), QStringLiteral("Disco"));
+        QVERIFY(pane->searchProgress().foldersScanned > 0);
+
+        // La ventana "Índice de búsqueda" lista las unidades; marcar una la indexa.
+        fs::Volume volume;
+        volume.rootPath = root;
+        volume.displayName = QStringLiteral("Pruebas");
+        IndexDialog dialog(*service, [volume] { return QList<fs::Volume>{volume}; });
+        QCOMPARE(dialog.list()->topLevelItemCount(), 1);
+        QCOMPARE(dialog.list()->topLevelItem(0)->checkState(0), Qt::Unchecked);
+        QSignalSpy rootsChanged(&dialog, &IndexDialog::rootsChanged);
+        dialog.setIndexed(root, true);
+        QCOMPARE(rootsChanged.count(), 1);
+        QCOMPARE(service->roots(), QStringList{root});
+        QVERIFY(QTest::qWaitFor([&] {
+            const auto status = service->statusOf(root);
+            return status && status->state == index::RootStatus::State::Ready && !service->isBusy();
+        }, 30000));
+        QCOMPARE(dialog.list()->topLevelItem(0)->checkState(0), Qt::Checked);
+        QVERIFY(dialog.list()->topLevelItem(0)->text(2).startsWith(QStringLiteral("Al día")));
+
+        // Con índice, la misma búsqueda sale de él y lo dice.
+        QVERIFY(searchFor(QStringLiteral("playa")));
+        QCOMPARE(results->count(), 2);
+        QVERIFY(pane->searchFromIndex());
+        QCOMPARE(origin(), QStringLiteral("Índice"));
+        QCOMPARE(pane->searchProgress().foldersScanned, 0);
+        QVERIFY(pane->searchInfo().contains(QStringLiteral("índice")));
+        // También desde una subcarpeta.
+        pane->navigateTo(root + QStringLiteral("/fotos/2025"));
+        QVERIFY(waitReady(pane));
+        QVERIFY(searchFor(QStringLiteral("playa")));
+        QCOMPARE(results->count(), 1);
+        QVERIFY(pane->searchFromIndex());
+
+        // "Verificar en disco" repite la búsqueda recorriendo las carpetas.
+        pane->verifySearchOnDisk();
+        QVERIFY(QTest::qWaitFor([pane] { return pane->searchState() == BrowserPane::SearchState::Finished; }, 20000));
+        QVERIFY(!pane->searchFromIndex());
+        QCOMPARE(results->count(), 1);
+        QCOMPARE(origin(), QStringLiteral("Disco"));
+
+        // Lo que el índice no sabe (el contenido) se busca en el disco sin más.
+        QVERIFY(searchFor(QStringLiteral("content:x")));
+        QVERIFY(!pane->searchFromIndex());
+
+        // Desmarcar la unidad borra su índice.
+        dialog.setIndexed(root, false);
+        QVERIFY(service->roots().isEmpty());
+        QVERIFY(searchFor(QStringLiteral("playa")));
+        QVERIFY(!pane->searchFromIndex());
+    }
+
+    void searchCanBePausedAndStopped()
+    {
+        QTemporaryDir directory;
+        const QString root = QDir::cleanPath(directory.path());
+        for (int i = 0; i < 400; ++i) {
+            QVERIFY(QDir(root).mkpath(QStringLiteral("c%1").arg(i)));
+            writeFile(root + QStringLiteral("/c%1/dato.txt").arg(i));
+        }
+        MainWindow window(m_scheduler);
+        BrowserPane *pane = window.openTab(root);
+        QVERIFY(waitReady(pane));
+
+        pane->search(QStringLiteral("dato"));
+        QCOMPARE(pane->searchState(), BrowserPane::SearchState::Running);
+        pane->setSearchPaused(true);
+        QCOMPARE(pane->searchState(), BrowserPane::SearchState::Paused);
+        // En pausa deja de avanzar (tras lo que ya venía de camino).
+        QTest::qWait(200);
+        const qint64 scanned = pane->searchProgress().foldersScanned;
+        QTest::qWait(200);
+        QCOMPARE(pane->searchProgress().foldersScanned, scanned);
+        QVERIFY(scanned < 401);
+
+        pane->setSearchPaused(false);
+        QTRY_COMPARE_WITH_TIMEOUT(pane->searchState(), BrowserPane::SearchState::Finished, 20000);
+        QCOMPARE(pane->resultsModel()->count(), 400);
+
+        // Detener deja lo encontrado y lo marca como incompleto; salir de los
+        // resultados con una búsqueda en marcha no deja nada colgado.
+        pane->refresh();
+        pane->stopSearch();
+        QCOMPARE(pane->searchState(), BrowserPane::SearchState::Stopped);
+        QVERIFY(pane->statusText().contains(QStringLiteral("detenida")));
+        pane->refresh();
+        pane->goBack();
+        QVERIFY(pane->showsFolder());
+        QCOMPARE(pane->searchState(), BrowserPane::SearchState::Idle);
+    }
+
+    void pasteIntoAnotherFolder()
+    {
+        // Lo que hace "Pegar en esta carpeta" del menú del árbol de lugares:
+        // pegar en una carpeta que no es la que se está viendo.
+        QTemporaryDir data;
+        QTemporaryDir directory;
+        QVERIFY(QDir(directory.path()).mkdir(QStringLiteral("destino")));
+        writeFile(directory.filePath(QStringLiteral("a.txt")), 5);
+        writeFile(directory.filePath(QStringLiteral("b.txt")), 5);
+        const QString destination = directory.filePath(QStringLiteral("destino"));
+
+        MainWindow window(m_scheduler, openJournal(data));
+        window.show();
+        BrowserPane *pane = window.openTab(directory.path());
+        QVERIFY(waitReady(pane));
+
+        selectNames(pane, {QStringLiteral("a.txt")});
+        window.copySelection();
+        window.pasteInto(destination);
+        QTRY_VERIFY_WITH_TIMEOUT(QFileInfo::exists(destination + QStringLiteral("/a.txt")), 10000);
+        QVERIFY(waitIdle(window));
+        QVERIFY(QFileInfo::exists(directory.filePath(QStringLiteral("a.txt"))));
+        QCOMPARE(pane->currentPath(), QDir::cleanPath(directory.path()));   // no se cambia de carpeta
+
+        selectNames(pane, {QStringLiteral("b.txt")});
+        window.cutSelection();
+        window.pasteInto(destination);
+        QTRY_VERIFY_WITH_TIMEOUT(QFileInfo::exists(destination + QStringLiteral("/b.txt")), 10000);
+        QVERIFY(waitIdle(window));
+        QVERIFY(!QFileInfo::exists(directory.filePath(QStringLiteral("b.txt"))));
     }
 
     void withoutJournalTheWindowOnlyBrowses()

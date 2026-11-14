@@ -1,9 +1,11 @@
 # Módulo fs: listado de carpetas, unidades y vigilancia de cambios. Sin interfaz gráfica.
 add_library(eu_fs STATIC
+    src/DeviceMap.cpp
     src/DirectoryLister.cpp
     src/DirectoryWatcher.cpp
     src/TreeSize.cpp
     src/Volumes.cpp
+    include/eu/fs/DeviceMap.h
     include/eu/fs/DirectoryWatcher.h
     include/eu/fs/Volumes.h)
 add_library(eu::fs ALIAS eu_fs)

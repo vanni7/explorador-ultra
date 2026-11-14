@@ -3,6 +3,9 @@
 
 #include "eu/tasks/Cancel.h"
 
+#include <QString>
+#include <QStringList>
+
 #include <chrono>
 #include <functional>
 #include <map>
@@ -34,10 +37,25 @@ enum class Priority {
     Background = 5,        ///< Trabajo secundario.
 };
 
-/// Cuántos hilos tiene cada categoría. Todo es configurable (SPEC §3.3).
+/// Clase de dispositivo sobre el que trabaja una tarea (SPEC §3.3).
+enum class DeviceClass {
+    Unknown,    ///< No se sabe qué es: se trata con prudencia.
+    Ssd,
+    Hdd,        ///< Disco mecánico: un solo flujo secuencial.
+    Removable,  ///< USB y similares.
+    Network,
+    Optical,
+    Virtual,    ///< Memoria (tmpfs) e imágenes montadas.
+};
+
+/// Cuántos hilos tiene cada categoría y cuántas tareas admite a la vez cada
+/// clase de dispositivo. Todo es configurable (SPEC §3.3).
 struct SchedulerConfig
 {
     std::map<Category, int> threads;
+    /// Tareas simultáneas sobre un mismo dispositivo, contando todas las
+    /// categorías. Ver Scheduler::submit con dispositivos.
+    std::map<DeviceClass, int> deviceLimits;
 
     /// Valores predeterminados, proporcionales a los núcleos del equipo.
     static SchedulerConfig defaults();
@@ -78,6 +96,8 @@ private:
 /// Garantías:
 ///  - dentro de una categoría, se atiende primero la prioridad más urgente y,
 ///    a igual prioridad, por orden de llegada;
+///  - una tarea que declara sus dispositivos solo empieza cuando todos tienen
+///    sitio; mientras espera, las de detrás que sí pueden empezar la adelantan;
 ///  - ninguna excepción sale de una tarea: se captura y se registra (SPEC §25.6);
 ///  - al destruirse cancela lo pendiente y espera a las tareas en curso.
 class Scheduler
@@ -91,11 +111,49 @@ public:
 
     TaskHandle submit(Category category, Priority priority, TaskFunction function);
 
+    /// Igual, declarando los dispositivos sobre los que va a leer o escribir
+    /// (uno para listar una carpeta; origen y destino para copiar). Un
+    /// dispositivo es un texto cualquiera que lo identifique; lo habitual es su
+    /// punto de montaje (fs::DeviceMap).
+    ///
+    /// La concurrencia se adapta a cada dispositivo (SPEC §3.3): cada clase
+    /// tiene un límite de tareas simultáneas (un disco mecánico, una). Una
+    /// tarea solo espera a las de su nivel de urgencia o más urgentes:
+    ///  - interactivas (UserInteraction, VisibleNavigation): solo compiten
+    ///    entre sí y tienen dos sitios como mínimo, para que abrir una carpeta
+    ///    no espere a una copia larga;
+    ///  - trabajo pedido por el usuario (previsualización, transferencias,
+    ///    miniaturas visibles): espera a las interactivas y a las de su nivel;
+    ///  - de fondo (Background): espera a todo lo que haya en el dispositivo.
+    /// No se interrumpe a una tarea que ya empezó.
+    TaskHandle submit(Category category, Priority priority, const QStringList &devices, TaskFunction function);
+
+    /// Dice de qué clase es un dispositivo. Los que no se declaran son Unknown.
+    void setDeviceClass(const QString &device, DeviceClass deviceClass);
+    /// Cambia el límite de una clase de dispositivo (mínimo 1). Vale para las
+    /// tareas que empiecen a partir de ahora.
+    void setDeviceLimit(DeviceClass deviceClass, int maxTasks);
+    int deviceLimit(DeviceClass deviceClass) const;
+    /// Tareas que están trabajando ahora mismo sobre un dispositivo.
+    int runningOn(const QString &device) const;
+
+    /// Cómo se averigua el dispositivo de una ruta (lo instala quien conoce
+    /// las unidades: fs::DeviceMap). Sin esto, submitForPaths no limita nada.
+    using DeviceResolver = std::function<QString(const QString &path)>;
+    void setDeviceResolver(DeviceResolver resolver);
+    /// Como submit con dispositivos, pero dando las rutas sobre las que se trabaja.
+    TaskHandle submitForPaths(Category category, Priority priority, const QStringList &paths, TaskFunction function);
+
     /// Número de tareas en cola (sin contar las que ya se están ejecutando).
     int pendingCount(Category category) const;
 
 private:
     class Pool;
+    struct Devices;
+    void wakeAllPools();
+
+    std::unique_ptr<Devices> m_devices;
+    std::shared_ptr<const DeviceResolver> m_resolver;   ///< Protegido por el cerrojo de m_devices.
     std::map<Category, std::unique_ptr<Pool>> m_pools;
 };
 

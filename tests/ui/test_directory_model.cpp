@@ -229,6 +229,32 @@ private slots:
         QVERIFY2(totalMs < 3000, qPrintable(QString::number(totalMs)));
 #endif
 
+        // Filtro local sobre los 100 000: lo que tarda una tecla (evaluar la
+        // consulta y sustituir lo que muestra la vista).
+        const search::Query oneDigit = search::Query::parse(QStringLiteral("archivo?.dat")).value();
+        const search::Query sevens = search::Query::parse(QStringLiteral("77 ext:dat")).value();
+        timer.restart();
+        model.setFilter(oneDigit);
+        const qint64 narrowMs = timer.elapsed();
+        QCOMPARE(model.rowCount(), 10);
+        QCOMPARE(model.unfilteredCount(), count);
+        timer.restart();
+        model.setFilter(sevens);
+        const qint64 broadMs = timer.elapsed();
+        QCOMPARE(model.rowCount(), 3691);   // números de 0 a 99999 que contienen "77"
+        timer.restart();
+        model.setFilter(search::Query());
+        const qint64 clearMs = timer.elapsed();
+        QCOMPARE(model.rowCount(), count);
+        QCOMPARE(model.entryAt(count - 1).name, QStringLiteral("archivo99999.dat"));
+        qInfo("Filtro local sobre 100 000: %lld ms (10 resultados), %lld ms (3691), %lld ms (quitarlo)",
+              narrowMs, broadMs, clearMs);
+#ifdef EU_CHECK_TIMINGS
+        // Meta de SPEC §4: < 100 ms por tecla (en el equipo de desarrollo, mucho menos).
+        QVERIFY2(narrowMs < 100 && broadMs < 100 && clearMs < 100,
+                 qPrintable(QStringLiteral("%1 %2 %3").arg(narrowMs).arg(broadMs).arg(clearMs)));
+#endif
+
         // Reordenar una carpeta enorme no vacía la vista y termina bien.
         model.sort(int(Column::Name), Qt::DescendingOrder);
         QCOMPARE(model.rowCount(), count);
@@ -287,6 +313,51 @@ private slots:
                                      && model.folderSizeAt(model.rowOfName(QStringLiteral("viaje")))->finished,
                                  10000);
         QCOMPARE(model.folderSizeAt(model.rowOfName(QStringLiteral("viaje")))->size.bytes, qint64(2500));
+    }
+
+    void filterKeepsTheFullListBehind()
+    {
+        QTemporaryDir directory;
+        QVERIFY(QDir(directory.path()).mkdir(QStringLiteral("Fotos")));
+        writeFile(directory.filePath(QStringLiteral("informe.pdf")), 10);
+        writeFile(directory.filePath(QStringLiteral("informe.txt")), 10);
+        writeFile(directory.filePath(QStringLiteral("playa.jpg")), 2'000'000);
+
+        DirectoryModel model(m_scheduler);
+        QAbstractItemModelTester tester(&model, QAbstractItemModelTester::FailureReportingMode::QtTest);
+        model.setPath(directory.path());
+        QVERIFY(waitUntilSettled(model));
+        QCOMPARE(model.rowCount(), 4);
+
+        model.setFilter(search::Query::parse(QStringLiteral("informe")).value());
+        QCOMPARE(names(model), (QStringList{QStringLiteral("informe.pdf"), QStringLiteral("informe.txt")}));
+        QCOMPARE(model.unfilteredCount(), 4);
+
+        // Ordenar con el filtro puesto no pierde los elementos que no se ven.
+        model.sort(int(Column::Name), Qt::DescendingOrder);
+        QCOMPARE(names(model), (QStringList{QStringLiteral("informe.txt"), QStringLiteral("informe.pdf")}));
+        model.sort(int(Column::Name), Qt::AscendingOrder);
+
+        // Un archivo nuevo que cumple el filtro aparece al refrescar; uno que no, no.
+        writeFile(directory.filePath(QStringLiteral("informe2.pdf")), 10);
+        writeFile(directory.filePath(QStringLiteral("otro.pdf")), 10);
+        model.refresh();
+        QVERIFY(waitUntilSettled(model));
+        QCOMPARE(model.rowCount(), 3);
+        QCOMPARE(model.unfilteredCount(), 6);
+
+        // Cambiar el filtro parte de la lista completa, no de lo ya filtrado.
+        model.setFilter(search::Query::parse(QStringLiteral("size:>1MB OR type:carpeta")).value());
+        QCOMPARE(names(model), (QStringList{QStringLiteral("Fotos"), QStringLiteral("playa.jpg")}));
+
+        model.setFilter(search::Query());
+        QCOMPARE(model.rowCount(), 6);
+
+        // Al cambiar de carpeta el filtro desaparece.
+        model.setFilter(search::Query::parse(QStringLiteral("informe")).value());
+        model.setPath(directory.filePath(QStringLiteral("Fotos")));
+        QVERIFY(waitUntilSettled(model));
+        QVERIFY(model.filter().isEmpty());
     }
 
     void destroyingWhileLoadingIsSafe()

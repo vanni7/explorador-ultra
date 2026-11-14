@@ -2,6 +2,7 @@
 #include "eu/ui/PathBar.h"
 
 #include "eu/ui/FileClipboard.h"
+#include "eu/ui/Locations.h"
 
 #include <QAbstractItemView>
 #include <QClipboard>
@@ -58,6 +59,16 @@ PathBar::PathBar(QWidget *parent)
 QList<QPair<QString, QString>> PathBar::crumbsFor(const QString &path)
 {
     QList<QPair<QString, QString>> crumbs;
+    if (isVolumesLocation(path)) {
+        crumbs.append({tr("Unidades"), volumesLocation()});
+        return crumbs;
+    }
+    if (isSearchLocation(path)) {
+        // La carpeta donde se busca, con sus migas, y al final la búsqueda.
+        crumbs = crumbsFor(searchRootOf(path));
+        crumbs.append({tr("Buscar: %1").arg(searchQueryOf(path)), path});
+        return crumbs;
+    }
     const QString clean = QDir::cleanPath(path);
     if (clean.isEmpty()) {
         return crumbs;
@@ -85,7 +96,7 @@ QList<QPair<QString, QString>> PathBar::crumbsFor(const QString &path)
 
 void PathBar::setPath(const QString &path)
 {
-    m_path = QDir::cleanPath(path);
+    m_path = isVirtualLocation(path) ? path : QDir::cleanPath(path);
     rebuildCrumbs();
     if (m_stack->currentWidget() == m_edit) {
         finishEditing(false);
@@ -116,7 +127,8 @@ void PathBar::rebuildCrumbs()
         button->setText(crumbs[i].first);
         button->setAutoRaise(true);
         button->setCursor(Qt::PointingHandCursor);
-        button->setToolTip(QDir::toNativeSeparators(crumbs[i].second));
+        button->setToolTip(isVirtualLocation(crumbs[i].second) ? crumbs[i].first
+                                                                : QDir::toNativeSeparators(crumbs[i].second));
         button->setFocusPolicy(Qt::TabFocus);
         if (i == crumbs.size() - 1) {
             QFont bold = button->font();
@@ -171,7 +183,8 @@ void PathBar::resizeEvent(QResizeEvent *event)
 
 void PathBar::startEditing()
 {
-    m_edit->setText(QDir::toNativeSeparators(m_path));
+    // En unos resultados, la ruta que se edita es la de la carpeta donde se buscó.
+    m_edit->setText(QDir::toNativeSeparators(isSearchLocation(m_path) ? searchRootOf(m_path) : m_path));
     m_stack->setCurrentWidget(m_edit);
     m_edit->setFocus(Qt::ShortcutFocusReason);
     m_edit->selectAll();
@@ -198,7 +211,8 @@ void PathBar::mousePressEvent(QMouseEvent *event)
     // es querer pegarla en otro sitio. Si en el portapapeles hay archivos
     // copiados o cortados se respetan: perderlos estropearía un "pegar" pendiente.
     QClipboard *clipboard = QGuiApplication::clipboard();
-    if (fileSelectionFrom(clipboard->mimeData()).isEmpty()) {
+    // La lista de unidades no es una ruta: no hay nada útil que copiar.
+    if (!isVolumesLocation(m_path) && fileSelectionFrom(clipboard->mimeData()).isEmpty()) {
         clipboard->setText(m_edit->text());
         emit pathCopied(m_edit->text());
     }

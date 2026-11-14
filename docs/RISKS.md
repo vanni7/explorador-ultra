@@ -16,7 +16,7 @@ Gravedad: Alta (puede obligar a cambiar el diseño o el alcance), Media, Baja.
 | Riesgo | Gravedad | Mitigación |
 |---|---|---|
 | Wayland: arrastrar y soltar entre aplicaciones, posición de ventanas y atajos globales tienen limitaciones | Media | Probar en Wayland y X11; no depender de posicionamiento absoluto |
-| Límite de inotify (`max_user_watches`) insuficiente para indexar discos grandes | Media | Detectarlo, explicar cómo ampliarlo y, donde haya permisos, ofrecer fanotify; nuevo recorrido periódico como respaldo |
+| Límite de inotify (`max_user_watches`) insuficiente para indexar discos grandes | Media | Hecho en la Fase 2: se detecta, se usa como mucho el 60 % del límite, se explica cómo ampliarlo (ventana del índice y `SEARCH_SYNTAX.md`) y lo no vigilado se repasa cada 30 min. fanotify no se ha implementado (pide privilegios) |
 | La papelera en `/` no puede ir en la raíz | Baja | Ya previsto en §10.2: `~/PapeleraExploradorUltra` verificando el dispositivo |
 | Discos NTFS/exFAT montados (este equipo tiene varios): sin permisos POSIX, nombres sin distinguir mayúsculas | Media | Detectar el sistema de archivos por volumen y adaptar validación de nombres y colisiones |
 | El equipo de desarrollo es 26.04 y los destinos son 22.04/24.04 | Baja | CI en ambos; paquetes generados en 22.04 |

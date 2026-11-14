@@ -42,9 +42,63 @@ Herramientas nativas sobre la misma carpeta (`hyperfine`, 10 ejecuciones, media 
 
 El archivo de origen estaba en la caché de RAM, así que estas cifras miden sobre todo la escritura. Origen y destino en el mismo disco.
 
+## Fase 2 — Filtrado local (2026-11-12)
+Equipo de desarrollo (Ubuntu 26.04, SSD), compilación `release`, medido por las propias pruebas (`test_search_query` y `test_ui_directory_model`), que imprimen la cifra en cada ejecución.
+
+| Medida | Resultado | Meta |
+|---|---|---|
+| Evaluar una consulta con comodines, `OR`, `ext:` y `NOT` contra 100 000 nombres de ~45 caracteres | ~15 ms | < 50 ms |
+| Aplicar un filtro a una carpeta de 100 000 elementos en el modelo de la vista (10 resultados) | 5 ms | < 50 ms por tecla |
+| Ídem con 3691 resultados | 7 ms | < 50 ms por tecla |
+| Quitar el filtro (vuelven los 100 000) | < 1 ms | < 50 ms por tecla |
+
+Lo que **no** incluyen estas cifras: el tiempo que tarda la vista en repintar tras el cambio, que no se ha medido.
+
+### Búsqueda en subcarpetas (Fase 2, paso 3)
+Sin índice: recorre el disco cada vez. Cifras de este equipo (SSD NVMe, caché caliente), 12-nov.
+
+| Qué | Resultado | Meta |
+|---|---|---|
+| Buscar `ext:pdf` en la carpeta personal (12 418 carpetas) | terminó en menos de 1,5 s (observado en la ventana, no cronometrado con precisión) | — |
+| Cancelar una búsqueda en pausa (`test_search_searcher`) | < 500 ms (la prueba falla si tarda más) | < 500 ms |
+
+No medido: caché fría, discos mecánicos, unidades de red, bloqueo del hilo de interfaz con cientos de miles de resultados.
+
+### Índice de búsqueda (Fase 2, paso 5)
+`eu-bench index <carpeta> <archivo.db> [consultas…]`, compilación release, este equipo, caché caliente, 13-nov. Las consultas se miden dentro del proceso (sin interfaz): tiempo total y tiempo hasta el primer resultado.
+
+| Qué | `/media/merwin/RESPALDO` (199 512 entradas, 135 517 carpetas) | `/` (572 947 entradas, 70 501 carpetas) |
+|---|---|---|
+| Construir el índice | 3,3 s · base de 29 MB | 10,4 s · base de 42,5 MB |
+| Ponerlo al día sin cambios (recorrido completo) | 2,6 s | 3,0 s |
+| `walter` | 20 ms (primero a 1,5 ms) | 60 ms (primero a 4 ms) |
+| `walter riso*` | 32 ms (primero a 4 ms) · 102 resultados | — |
+| `*.pdf` | 40 ms · 16 186 resultados | 70 ms · 4 363 resultados |
+| `ext:jpg size:>5MB` | 30 ms (primero a 20 ms) | 65 ms (primero a 3 ms) |
+| `size:>1GB` (sin pista de nombre: lee todas las filas) | 160 ms | 380 ms (primero a 0,3 ms) |
+| `regex:/^IMG_\d+/` (sin pista de nombre) | 214 ms | 476 ms (0 resultados) |
+| Algo que no existe (`zzzznoexiste`) | 20 ms | 62 ms |
+
+Lectura: con una pista de nombre (palabra, comodín o extensión) la base descarta las filas y la consulta tarda decenas de milisegundos. Sin pista (solo tamaño, fecha, expresión regular o letras no ASCII) hay que leer todas las filas: unos 0,8 µs por fila.
+
+**Con 1 000 000 de entradas** (árbol sintético de `eu-bench mktree`: 10 carpetas de 100 000 archivos vacíos en memoria, 13-nov; base de 73 MB, construida en 6,0 s, repaso sin cambios en 3,0 s):
+
+| Consulta | Primer resultado | Total | Resultados |
+|---|---|---|---|
+| `archivo4242` | 4,8 ms | 139 ms | 100 |
+| `archivo99*` | 12 ms | 147 ms | 10 000 |
+| `*.jpg` | 12 ms | 244 ms | 100 000 |
+| `ñandú` (letra no ASCII: sin pista, lee todo) | 76 ms | 887 ms | 100 000 |
+| `zzzznoexiste` | — | 117 ms | 0 |
+| `size:>1GB` (sin pista) | — | 793 ms | 0 |
+| `ext:txt size:>1MB` (la pista `.txt` deja 900 000 filas) | — | 926 ms | 0 |
+| `regex:/^IMG_\d+/` (sin pista) | — | 1 157 ms | 0 |
+
+**Meta de SPEC §4 (1 000 000 de entradas, primeros resultados < 200 ms): cumplida en este equipo cuando hay resultados** (5–76 ms hasta el primero). Cuando la consulta no tiene pista de nombre y no hay nada que encontrar, saberlo cuesta entre 0,8 y 1,2 s: es lo que tarda en leer el millón de filas. Límites de la medición: árbol sintético (nombres cortos, pocas carpetas), caché caliente, medido dentro del proceso y no en la ventana. Falta: caché fría, discos mecánicos, Windows y macOS.
+
 ### No medido todavía (pendiente)
 - Tiempo de apertura real de una carpeta en Archivos de GNOME (no hay forma fiable de automatizarlo; `gio list` es una aproximación de su motor, no de su interfaz).
 - Caché fría, HDD, USB y unidades de red.
 - Memoria por elemento: la cifra de RSS que imprime `eu-bench listing` no es fiable porque las cuatro pruebas comparten proceso y el asignador reutiliza memoria; se medirá con el modelo real en la Fase 1.
 - Windows (VM y CI) y macOS (CI).
-- Bloqueo del hilo de interfaz, búsqueda con índice, miniaturas y cancelación: requieren código de las Fases 1 a 3.
+- Bloqueo del hilo de interfaz, miniaturas y cancelación: requieren código de las Fases 1 a 3.

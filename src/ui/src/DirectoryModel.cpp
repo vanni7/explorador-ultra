@@ -18,8 +18,6 @@ namespace eu::ui {
 namespace {
 
 /// Clave de la caché de tipos para lo que no es un archivo corriente.
-const QString folderKey = QStringLiteral("/carpeta");
-const QString linkBrokenKey = QStringLiteral("/enlace-roto");
 
 } // namespace
 
@@ -66,10 +64,31 @@ void DirectoryModel::retireCurrentTask()
 void DirectoryModel::setPath(const QString &path)
 {
     m_path = QDir::cleanPath(path);
+    m_filter = search::Query();   // el filtro era para la carpeta anterior
     // Los tamaños calculados eran de la carpeta anterior.
     stopMeasuringFolders();
     m_folderSizes.clear();
     startLoading(false);
+}
+
+void DirectoryModel::clear()
+{
+    retireCurrentTask();
+    ++m_generation;   // lo que llegue de la carga anterior se descarta
+    m_revealTimer.stop();
+    m_path.clear();
+    m_filter = search::Query();
+    stopMeasuringFolders();
+    m_folderSizes.clear();
+    m_pending.clear();
+    m_progressive = false;
+    m_keepCurrentContent = false;
+    beginResetModel();
+    m_entries.clear();
+    m_unfiltered.clear();
+    m_hiddenCount = 0;
+    endResetModel();
+    setState(State::Empty);
 }
 
 void DirectoryModel::refresh()
@@ -93,6 +112,7 @@ void DirectoryModel::startLoading(bool keepCurrentContent)
     if (!keepCurrentContent) {
         beginResetModel();
         m_entries.clear();
+        m_unfiltered.clear();
         m_hiddenCount = 0;
         endResetModel();
         m_revealTimer.start();
@@ -104,8 +124,8 @@ void DirectoryModel::startLoading(bool keepCurrentContent)
     const Column sortColumn = m_sortColumn;
     const Qt::SortOrder sortOrder = m_sortOrder;
 
-    m_task = m_scheduler.submit(tasks::Category::Listing, tasks::Priority::VisibleNavigation,
-                                [this, generation, path, sortColumn, sortOrder](const tasks::CancelToken &cancel) {
+    m_task = m_scheduler.submitForPaths(tasks::Category::Listing, tasks::Priority::VisibleNavigation, {path},
+                                        [this, generation, path, sortColumn, sortOrder](const tasks::CancelToken &cancel) {
         std::vector<fs::Entry> all;
         const core::Status status = fs::listDirectory(path, fs::ListOptions(), cancel,
                                                       [&](std::vector<fs::Entry> &&batch) {
@@ -139,6 +159,11 @@ void DirectoryModel::onBatch(quint64 generation, std::vector<fs::Entry> batch)
     int hidden = 0;
     std::vector<fs::Entry> visible = withoutHidden(std::move(batch), m_showHidden, &hidden);
     m_hiddenCount += hidden;
+    if (!m_filter.isEmpty()) {
+        // Carga progresiva con filtro: se guarda todo y se enseña lo que lo cumple.
+        m_unfiltered.insert(m_unfiltered.end(), visible.begin(), visible.end());
+        visible = filtered(visible);
+    }
     if (visible.empty()) {
         return;
     }
@@ -265,8 +290,8 @@ void DirectoryModel::startMeasuringFolders()
     const QString path = m_path;
     // Una sola tarea las mide de una en una: varias a la vez harían ir y
     // venir el cabezal de un disco mecánico y todo iría más lento.
-    m_sizeTask = m_scheduler.submit(tasks::Category::Metadata, tasks::Priority::Background,
-                                    [this, generation, path, names](const tasks::CancelToken &cancel) {
+    m_sizeTask = m_scheduler.submitForPaths(tasks::Category::Metadata, tasks::Priority::Background, {path},
+                                            [this, generation, path, names](const tasks::CancelToken &cancel) {
         using Clock = std::chrono::steady_clock;
         for (const QString &name : names) {
             if (cancel.isCancelled()) {
@@ -323,7 +348,13 @@ void DirectoryModel::onFolderSize(quint64 generation, const QString &name, const
 void DirectoryModel::replaceEntries(std::vector<fs::Entry> &&entries)
 {
     beginResetModel();
-    m_entries = std::move(entries);
+    if (m_filter.isEmpty()) {
+        m_entries = std::move(entries);
+        m_unfiltered.clear();
+    } else {
+        m_unfiltered = std::move(entries);
+        m_entries = filtered(m_unfiltered);
+    }
     endResetModel();
     m_progressive = false;
     m_keepCurrentContent = false;
@@ -342,6 +373,29 @@ std::vector<fs::Entry> DirectoryModel::withoutHidden(std::vector<fs::Entry> entr
     *hiddenCount = int(entries.end() - firstHidden);
     entries.erase(firstHidden, entries.end());
     return entries;
+}
+
+std::vector<fs::Entry> DirectoryModel::filtered(const std::vector<fs::Entry> &entries) const
+{
+    std::vector<fs::Entry> result;
+    for (const fs::Entry &entry : entries) {
+        if (m_filter.matches(entry)) {
+            result.push_back(entry);
+        }
+    }
+    return result;
+}
+
+void DirectoryModel::setFilter(const search::Query &filter)
+{
+    if (filter.isEmpty() && m_filter.isEmpty()) {
+        return;
+    }
+    // Se parte siempre de la lista completa, que está en un sitio u otro
+    // según hubiera filtro o no.
+    std::vector<fs::Entry> all = m_filter.isEmpty() ? std::move(m_entries) : std::move(m_unfiltered);
+    m_filter = filter;
+    replaceEntries(std::move(all));
 }
 
 void DirectoryModel::setState(State state)
@@ -394,52 +448,6 @@ int DirectoryModel::columnCount(const QModelIndex &parent) const
     return parent.isValid() ? 0 : int(Column::Count);
 }
 
-const DirectoryModel::TypeInfo &DirectoryModel::typeInfoFor(const fs::Entry &entry) const
-{
-    QString key;
-    if (entry.isBrokenSymlink) {
-        key = linkBrokenKey;
-    } else if (entry.isDirectory) {
-        key = folderKey;
-    } else {
-        key = suffixOf(entry.name);
-    }
-
-    auto it = m_typeCache.find(key);
-    if (it != m_typeCache.end()) {
-        return it.value();
-    }
-
-    // Se deduce el tipo solo por el nombre (sin abrir el archivo): no hay E/S.
-    // Icono: el del tema del escritorio si lo tiene; si no, el genérico del
-    // estilo de Qt, que existe siempre. Así ninguna fila queda sin icono.
-    const auto iconFor = [](const QStringList &themeNames, QStyle::StandardPixmap fallback) {
-        for (const QString &name : themeNames) {
-            if (!name.isEmpty() && QIcon::hasThemeIcon(name)) {
-                return QIcon::fromTheme(name);
-            }
-        }
-        return QApplication::style()->standardIcon(fallback);
-    };
-    TypeInfo info;
-    if (key == folderKey) {
-        info.description = tr("Carpeta");
-        info.icon = iconFor({QStringLiteral("folder"), QStringLiteral("inode-directory")}, QStyle::SP_DirIcon);
-    } else if (key == linkBrokenKey) {
-        info.description = tr("Enlace roto");
-        info.icon = iconFor({QStringLiteral("emblem-unreadable"), QStringLiteral("dialog-warning")},
-                            QStyle::SP_MessageBoxWarning);
-    } else {
-        static const QMimeDatabase mimeDatabase;
-        const QMimeType mime = mimeDatabase.mimeTypeForFile(entry.name, QMimeDatabase::MatchExtension);
-        info.description = mime.isDefault() ? (key.isEmpty() ? tr("Archivo") : tr("Archivo %1").arg(key.toUpper()))
-                                            : mime.comment();
-        info.icon = iconFor({mime.iconName(), mime.genericIconName(), QStringLiteral("text-x-generic")},
-                            QStyle::SP_FileIcon);
-    }
-    return m_typeCache.insert(key, info).value();
-}
-
 QVariant DirectoryModel::data(const QModelIndex &index, int role) const
 {
     if (!index.isValid() || index.row() >= int(m_entries.size())) {
@@ -473,7 +481,7 @@ QVariant DirectoryModel::data(const QModelIndex &index, int role) const
             }
             return core::formatSize(entry.size, m_sizeUnits);
         case Column::Type:
-            return typeInfoFor(entry).description;
+            return m_types.infoFor(entry).description;
         case Column::Modified:
             if (entry.modifiedMs == 0) {
                 return QString();
@@ -485,7 +493,7 @@ QVariant DirectoryModel::data(const QModelIndex &index, int role) const
         break;
     case Qt::DecorationRole:
         if (column == Column::Name) {
-            return typeInfoFor(entry).icon;
+            return m_types.infoFor(entry).icon;
         }
         break;
     case Qt::TextAlignmentRole:
@@ -615,7 +623,7 @@ void DirectoryModel::sort(int column, Qt::SortOrder order)
     }
     if (m_entries.size() <= 5000) {
         // Carpetas normales: ordenar aquí cuesta pocos milisegundos.
-        std::vector<fs::Entry> sorted = m_entries;
+        std::vector<fs::Entry> sorted = allEntries();
         sortEntries(sorted, m_sortColumn, m_sortOrder);
         replaceEntries(std::move(sorted));
         return;
@@ -625,7 +633,7 @@ void DirectoryModel::sort(int column, Qt::SortOrder order)
     ++m_generation;
     const quint64 generation = m_generation;
     m_task = m_scheduler.submit(tasks::Category::Listing, tasks::Priority::UserInteraction,
-                                [this, generation, entries = m_entries, sortColumn = m_sortColumn,
+                                [this, generation, entries = allEntries(), sortColumn = m_sortColumn,
                                  sortOrder = m_sortOrder](const tasks::CancelToken &cancel) mutable {
         sortEntries(entries, sortColumn, sortOrder);
         if (cancel.isCancelled()) {

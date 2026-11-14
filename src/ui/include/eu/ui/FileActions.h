@@ -119,7 +119,10 @@ private:
     };
     using Work = std::function<void(const Context &, ActionResult &)>;
 
-    quint64 start(ActionKind kind, const QString &directory, tasks::Category category, Work work);
+    /// `devicePaths`: rutas que dicen sobre qué unidades trabaja (para que el
+    /// planificador no lance dos transferencias a la vez al mismo disco lento).
+    quint64 start(ActionKind kind, const QString &directory, tasks::Category category, Work work,
+                  const QStringList &devicePaths = {});
     void onFinished(const ActionResult &result);
 
     tasks::Scheduler &m_scheduler;

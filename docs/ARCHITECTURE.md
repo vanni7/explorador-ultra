@@ -33,6 +33,8 @@ Un módulo solo puede depender de módulos de capas inferiores. Solo la capa 5 u
 | 5 | `ui`, `app` | todo lo anterior, Qt Widgets |
 | aparte | `indexsvc-win` | solo `core`; proceso separado, habla con `index` por *named pipe* |
 
+Nota de implementación (Fase 2): `index` depende de `search`, y no al revés como dice la tabla. El índice evalúa la misma `search::Query` que la búsqueda directa y entrega los mismos `search::Hit`, de modo que una consulta da lo mismo por los dos caminos; quien elige entre índice y disco es la interfaz (`BrowserPane`). `index` contiene `Index` (la base SQLite de una unidad: sincronización por diferencias y búsqueda), `TreeWatcher` (inotify, ReadDirectoryChangesW o FSEvents) e `IndexService` (qué unidades se indexan y el trabajo en segundo plano).
+
 Nota de implementación: `ops` contiene las operaciones elementales (`FileOps`) y el motor (`Engine`). Como el motor usa la papelera y la papelera usa las operaciones elementales, el motor se compila como biblioteca aparte (`eu_ops_engine`), después de `eu_trash`.
 
 Relaciones clave: `ops` escribe en `journal` **antes** de tocar el disco; `trash`, `rename`, `organize`, `sync` y `dupes` nunca modifican archivos por su cuenta: piden las operaciones a `ops`, de modo que todo queda en el historial y se puede deshacer. `thumbs`, `preview` y `print` usan `QImage` (Qt Gui) pero no Widgets.
@@ -59,6 +61,7 @@ Hilo de interfaz ── solo pinta y atiende eventos; nunca E/S
       │
       └─ limitador por dispositivo (SSD: varios flujos; HDD: 1 secuencial; USB y red: conservador)
 ```
+- **Limitador por dispositivo (hecho en la Fase 2)**: quien encola dice sobre qué rutas trabaja (`Scheduler::submitForPaths`); `fs::DeviceMap` las traduce al punto de montaje de su unidad y le dice al planificador de qué clase es cada una. Límites de fábrica de tareas simultáneas por unidad, sumando todas las categorías: SSD y unidades en memoria 6; disco mecánico, extraíble y óptico 1; red 2; desconocida 2. Hay tres niveles de urgencia y una tarea solo espera a las de su nivel o más urgentes: lo interactivo (abrir una carpeta, buscar) tiene siempre dos sitios como mínimo y no espera a nada más; copiar y mover esperan a lo interactivo y a otras transferencias, no al trabajo de fondo; el trabajo de fondo (indexar, tamaño de carpetas) espera a todo. No se interrumpe una tarea ya empezada. Los límites se cambian en la sección `[concurrencia]` del archivo de configuración (`hdd`, `ssd`, `extraible`, `red`, `optico`, `virtual`, `desconocido`); aún no hay pantalla de ajustes para ello.
 - Cada tarea lleva una prioridad (las seis de §3.3), una señal de cancelación cooperativa (`std::stop_token`) y un canal de progreso.
 - Los resultados vuelven al hilo de interfaz **por lotes** (p. ej. cada 50 ms o 500 elementos) para no inundarlo: así se cumplen "primeros elementos < 100 ms" y "bloqueo < 50 ms".
 - Toda excepción se captura en el límite de la tarea y se convierte en un `eu::core::Error` que viaja con el resultado (regla 6 de §25).

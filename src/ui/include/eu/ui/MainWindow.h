@@ -2,10 +2,13 @@
 #pragma once
 
 #include "eu/fs/DirectoryWatcher.h"
+#include "eu/fs/DeviceMap.h"
 #include "eu/fs/Volumes.h"
+#include "eu/index/IndexService.h"
 #include "eu/journal/Journal.h"
 #include "eu/tasks/Scheduler.h"
 #include "eu/ui/FileActions.h"
+#include "eu/ui/Locations.h"
 
 #include <QHash>
 #include <QMainWindow>
@@ -16,6 +19,7 @@
 
 class QAction;
 class QLabel;
+class QLineEdit;
 class QProgressBar;
 class QToolButton;
 class QSplitter;
@@ -44,7 +48,31 @@ public:
     BrowserPane *openTab(const QString &path);
     BrowserPane *currentPane() const;
     Sidebar *sidebar() const { return m_sidebar; }
+    /// Buscador de la barra superior.
+    QLineEdit *searchEdit() const { return m_searchEdit; }
     int tabCount() const;
+
+    /// Los índices de búsqueda de esta ventana.
+    index::IndexService *indexService() const { return m_indexService; }
+    /// Empieza a mantener los índices guardados en la configuración. Si
+    /// `mayAsk` y aún no se ha preguntado, muestra el asistente que propone
+    /// qué unidades indexar (SPEC §1).
+    void startIndexing(bool mayAsk);
+    /// Abre la ventana "Índice de búsqueda".
+    void showIndexDialog();
+
+    /// Opciones del buscador; son las del botón "Opciones" que tiene al lado.
+    void setSearchScope(SearchScope scope);
+    SearchScope searchScope() const { return m_searchScope; }
+    void setSearchInContent(bool inContent);
+    void setSearchCaseSensitive(bool caseSensitive);
+    /// Unidades para el alcance "las unidades que elija" (puntos de montaje).
+    /// Últimas búsquedas lanzadas, la más reciente primero.
+    QStringList recentSearches() const { return m_recentSearches; }
+    void setChosenSearchVolumes(const QStringList &roots) { m_chosenVolumes = roots; }
+    /// Sustituye la lista de unidades que usa el buscador. Para las pruebas,
+    /// que no deben recorrer los discos reales del equipo.
+    void setSearchVolumeSource(std::function<QList<fs::Volume>()> source) { m_searchVolumeSource = std::move(source); }
 
     /// Restaura pestañas y geometría de la sesión anterior. Si no hay sesión
     /// guardada, abre la carpeta personal.
@@ -78,6 +106,8 @@ public slots:
     void copySelection();
     void cutSelection();
     void paste();
+    /// Pega lo que hay en el portapapeles dentro de `destination`.
+    void pasteInto(const QString &destination);
     void trashSelection();
     void deleteSelectionPermanently();
     void undo();
@@ -103,10 +133,13 @@ private:
     void updateTabTitle(BrowserPane *pane);
     void saveSession();
     void navigateCurrentTo(const QString &path);
+    void runSearch();
+    void syncSearchBox();
 
     void createEditActions();
     void createProgressWidgets();
     void showContextMenu(BrowserPane *pane, const QPoint &globalPosition);
+    void showSidebarMenu(const QString &path, const QPoint &globalPosition);
     void updateEditActions();
     void copyToClipboard(bool cut);
     /// Copia o mueve `paths` a `destination` (pegar y soltar acaban aquí).
@@ -124,6 +157,7 @@ private:
     tasks::Scheduler &m_scheduler;
     fs::DirectoryWatcher m_watcher;
     fs::VolumeMonitor m_volumeMonitor;
+    fs::DeviceMap m_deviceMap;   ///< Dice al planificador en qué unidad está cada ruta.
 
     QTabWidget *m_tabs = nullptr;
     Sidebar *m_sidebar = nullptr;
@@ -158,6 +192,30 @@ private:
     QAction *m_showHiddenAction = nullptr;
     QAction *m_binaryUnitsAction = nullptr;
     QAction *m_folderSizesAction = nullptr;
+    QAction *m_filterAction = nullptr;
+    QAction *m_searchAction = nullptr;
+    QLineEdit *m_searchEdit = nullptr;
+    index::IndexService *m_indexService = nullptr;
+    QLabel *m_indexLabel = nullptr;   ///< "Indexando…" en la barra de estado.
+    QAction *m_indexAction = nullptr;
+    void runIndexWizard();
+    void saveIndexRoots();
+    void updateIndexLabel();
+    QToolButton *m_searchOptionsButton = nullptr;
+    QHash<int, QAction *> m_scopeActions;   ///< Por SearchScope.
+    QAction *m_searchInNameAction = nullptr;
+    QAction *m_searchInContentAction = nullptr;
+    QAction *m_searchCaseAction = nullptr;
+    SearchScope m_searchScope = SearchScope::Subfolders;
+    QStringList m_chosenVolumes;
+    std::function<QList<fs::Volume>()> m_searchVolumeSource;
+    QStringList m_recentSearches;
+    void rememberSearch(const QString &text);
+    void showRecentSearches();
+    void buildSearchOptions();
+    void updateSearchHints();
+    bool chooseSearchVolumes();
+    QList<fs::Volume> searchVolumes() const;
     QAction *m_editPathAction = nullptr;
 
     QAction *m_openAction = nullptr;

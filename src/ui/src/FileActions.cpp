@@ -53,7 +53,8 @@ void FileActions::cancelAll()
     }
 }
 
-quint64 FileActions::start(ActionKind kind, const QString &directory, tasks::Category category, Work work)
+quint64 FileActions::start(ActionKind kind, const QString &directory, tasks::Category category, Work work,
+                           const QStringList &devicePaths)
 {
     const quint64 id = ++m_lastId;
     ActionResult initial;
@@ -76,8 +77,8 @@ quint64 FileActions::start(ActionKind kind, const QString &directory, tasks::Cat
         ? tasks::Priority::ActiveTransfer
         : tasks::Priority::UserInteraction;
 
-    const tasks::TaskHandle handle = m_scheduler.submit(
-        category, priority, [self, journal, initial, work = std::move(work)](const tasks::CancelToken &cancel) {
+    const tasks::TaskHandle handle = m_scheduler.submitForPaths(
+        category, priority, devicePaths, [self, journal, initial, work = std::move(work)](const tasks::CancelToken &cancel) {
             Context context;
             context.journal = journal;
             context.cancel = cancel;
@@ -155,7 +156,7 @@ quint64 FileActions::copy(const QStringList &sources, const QString &destination
                  [sources, destinationDirectory, policy](const Context &context, ActionResult &result) {
         result.outcome = ops::Engine(context.journal)
                              .copy(sources, destinationDirectory, policy, context.cancel, context.progress);
-    });
+    }, QStringList(sources) << destinationDirectory);
 }
 
 quint64 FileActions::move(const QStringList &sources, const QString &destinationDirectory,
@@ -165,7 +166,7 @@ quint64 FileActions::move(const QStringList &sources, const QString &destination
                  [sources, destinationDirectory, policy](const Context &context, ActionResult &result) {
         result.outcome = ops::Engine(context.journal)
                              .move(sources, destinationDirectory, policy, context.cancel, context.progress);
-    });
+    }, QStringList(sources) << destinationDirectory);
 }
 
 quint64 FileActions::trash(const QStringList &paths)

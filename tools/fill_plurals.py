@@ -16,6 +16,12 @@ from pathlib import Path
 PLURALS = {
     "Cargando… %n elemento(s)": ("Cargando… %n elemento", "Cargando… %n elementos"),
     "%n elemento(s)": ("%n elemento", "%n elementos"),
+    "%n unidad(es)": ("%n unidad", "%n unidades"),
+    "%n resultado(s)": ("%n resultado", "%n resultados"),
+    "Buscando… %n resultado(s)": ("Buscando… %n resultado", "Buscando… %n resultados"),
+    "Búsqueda en pausa: %n resultado(s)": ("Búsqueda en pausa: %n resultado", "Búsqueda en pausa: %n resultados"),
+    "Búsqueda detenida: %n resultado(s)": ("Búsqueda detenida: %n resultado", "Búsqueda detenida: %n resultados"),
+    "Filtro: %1 de %n elemento(s)": ("Filtro: %1 de %n elemento", "Filtro: %1 de %n elementos"),
     " (%n oculto(s))": (" (%n oculto)", " (%n ocultos)"),
     " · %n seleccionado(s)": (" · %n seleccionado", " · %n seleccionados"),
     "%n elemento(s) listo(s) para mover: pega en la carpeta de destino.": (

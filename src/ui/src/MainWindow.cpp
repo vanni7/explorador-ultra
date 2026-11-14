@@ -1,24 +1,34 @@
 // Explorador Ultra — SPDX-License-Identifier: GPL-3.0-or-later
 #include "eu/ui/MainWindow.h"
 
+#include "eu/ui/Locations.h"
+
+#include "eu/core/SizeFormat.h"
 #include "eu/core/Version.h"
 #include "eu/ui/BrowserPane.h"
+#include "eu/trash/Trash.h"
 #include "eu/ui/FileClipboard.h"
+#include "eu/ui/IndexDialog.h"
 #include "eu/ui/PathBar.h"
 #include "eu/ui/Sidebar.h"
 #include "eu/ui/TrashDialog.h"
+#include "eu/ui/VolumesView.h"
 
 #include <QAction>
+#include <QActionGroup>
 #include <QApplication>
 #include <QCheckBox>
 #include <QClipboard>
 #include <QCloseEvent>
 #include <QDateTime>
+#include <QDialog>
+#include <QDialogButtonBox>
 #include <QDir>
 #include <QHBoxLayout>
 #include <QItemSelectionModel>
 #include <QLabel>
 #include <QLineEdit>
+#include <QListWidget>
 #include <QLocale>
 #include <QMenu>
 #include <QMenuBar>
@@ -28,12 +38,14 @@
 #include <QPushButton>
 #include <QSettings>
 #include <QSplitter>
+#include <QStandardPaths>
 #include <QStatusBar>
 #include <QStyle>
 #include <QTabBar>
 #include <QTabWidget>
 #include <QToolBar>
 #include <QToolButton>
+#include <QVBoxLayout>
 #include <QTreeView>
 
 namespace eu::ui {
@@ -48,9 +60,20 @@ QIcon themedIcon(const QString &name, QStyle::StandardPixmap fallback)
 } // namespace
 
 MainWindow::MainWindow(tasks::Scheduler &scheduler, std::shared_ptr<journal::Journal> journal, QWidget *parent)
-    : QMainWindow(parent), m_scheduler(scheduler)
+    : QMainWindow(parent), m_scheduler(scheduler), m_deviceMap(scheduler)
 {
+    // Concurrencia adaptada a cada unidad (SPEC §3.3): el planificador sabe
+    // de qué clase es el disco de cada tarea.
+    m_deviceMap.setVolumes(m_volumeMonitor.volumes());
+    connect(&m_volumeMonitor, &fs::VolumeMonitor::volumesChanged, this,
+            [this](const QList<fs::Volume> &volumes) { m_deviceMap.setVolumes(volumes); });
     m_actions = new FileActions(m_scheduler, std::move(journal), this);
+    // Índices de búsqueda: una base por unidad, junto a los demás datos de la
+    // aplicación. La carpeta de la papelera no se indexa (SPEC §10).
+    m_indexService = new index::IndexService(
+        m_scheduler, QStandardPaths::writableLocation(QStandardPaths::AppDataLocation) + QStringLiteral("/indice"),
+        this);
+    m_indexService->setExcludedNames({trash::trashFolderName()});
     setWindowTitle(core::applicationName());
     resize(1180, 720);
 
@@ -72,6 +95,10 @@ MainWindow::MainWindow(tasks::Scheduler &scheduler, std::shared_ptr<journal::Jou
     m_statusLabel = new QLabel(this);
     m_unitsLabel = new QLabel(this);
     statusBar()->addWidget(m_statusLabel, 1);
+    m_indexLabel = new QLabel(this);
+    m_indexLabel->hide();
+    statusBar()->addPermanentWidget(m_indexLabel);
+    connect(m_indexService, &index::IndexService::changed, this, &MainWindow::updateIndexLabel);
     statusBar()->addPermanentWidget(m_unitsLabel);
 
     createActions();
@@ -88,8 +115,15 @@ MainWindow::MainWindow(tasks::Scheduler &scheduler, std::shared_ptr<journal::Jou
 
     connect(m_tabs, &QTabWidget::currentChanged, this, &MainWindow::onCurrentTabChanged);
     connect(m_tabs, &QTabWidget::tabCloseRequested, this, &MainWindow::closeTab);
-    connect(m_sidebar, &Sidebar::placeActivated, this, &MainWindow::navigateCurrentTo);
+    // Elegir un lugar en el árbol no le quita el teclado: las flechas siguen
+    // moviéndose por el árbol, no por la lista de archivos.
+    connect(m_sidebar, &Sidebar::placeActivated, this, [this](const QString &path) {
+        if (BrowserPane *pane = currentPane()) {
+            pane->navigateTo(path);
+        }
+    });
     connect(m_sidebar, &Sidebar::filesDropped, this, &MainWindow::transfer);
+    connect(m_sidebar, &Sidebar::contextMenuRequested, this, &MainWindow::showSidebarMenu);
     m_sidebar->setMoveByDefaultRule([this](const QString &source, const QString &destination) {
         return movesByDefault(source, destination);
     });
@@ -178,7 +212,7 @@ void MainWindow::createActions()
             m_trashDialog->setSizeUnits(units);
         }
         for (int i = 0; i < m_tabs->count(); ++i) {
-            static_cast<BrowserPane *>(m_tabs->widget(i))->model()->setSizeUnits(units);
+            static_cast<BrowserPane *>(m_tabs->widget(i))->setSizeUnits(units);
         }
         updateStatus();
     });
@@ -190,6 +224,24 @@ void MainWindow::createActions()
         for (int i = 0; i < m_tabs->count(); ++i) {
             static_cast<BrowserPane *>(m_tabs->widget(i))->setFolderSizesEnabled(enabled);
         }
+    });
+
+    m_filterAction = new QAction(themedIcon(QStringLiteral("view-filter"), QStyle::SP_FileDialogContentsView),
+                                 tr("Filtrar esta carpeta"), this);
+    m_filterAction->setShortcut(QKeySequence(Qt::CTRL | Qt::Key_I));
+    m_filterAction->setToolTip(tr("Deja a la vista solo los elementos cuyo nombre coincide con lo que escribas"));
+    connect(m_filterAction, &QAction::triggered, this, [this] { if (auto *pane = currentPane()) pane->showFilter(); });
+
+    m_indexAction = new QAction(tr("Índice de búsqueda…"), this);
+    m_indexAction->setToolTip(tr("Elegir qué unidades se indexan para buscar en ellas al instante"));
+    connect(m_indexAction, &QAction::triggered, this, &MainWindow::showIndexDialog);
+
+    m_searchAction = new QAction(themedIcon(QStringLiteral("edit-find"), QStyle::SP_FileDialogContentsView),
+                                 tr("Buscar archivos y carpetas"), this);
+    m_searchAction->setShortcut(QKeySequence::Find);
+    connect(m_searchAction, &QAction::triggered, this, [this] {
+        m_searchEdit->setFocus(Qt::ShortcutFocusReason);
+        m_searchEdit->selectAll();
     });
 
     m_editPathAction = new QAction(tr("Escribir una ruta"), this);
@@ -208,6 +260,9 @@ void MainWindow::createActions()
 
     QMenu *viewMenu = menuBar()->addMenu(tr("&Ver"));
     viewMenu->addAction(m_refreshAction);
+    viewMenu->addAction(m_filterAction);
+    viewMenu->addAction(m_searchAction);
+    viewMenu->addAction(m_indexAction);
     viewMenu->addSeparator();
     viewMenu->addAction(m_showHiddenAction);
     viewMenu->addAction(m_binaryUnitsAction);
@@ -283,7 +338,7 @@ void MainWindow::createEditActions()
                                     tr("Seleccionar todo"), this);
     m_selectAllAction->setShortcut(QKeySequence::SelectAll);
     connect(m_selectAllAction, &QAction::triggered, this, [this] {
-        if (auto *pane = currentPane()) pane->view()->selectAll();
+        if (auto *pane = currentPane()) pane->selectAll();
     });
 
     m_showTrashAction = new QAction(themedIcon(QStringLiteral("user-trash-full"), QStyle::SP_TrashIcon),
@@ -391,17 +446,27 @@ void MainWindow::updateEditActions()
         return;   // aún se está construyendo la ventana
     }
     const BrowserPane *pane = currentPane();
-    const bool canModify = pane != nullptr && m_actions->isAvailable();
-    const qsizetype selected = pane ? pane->view()->selectionModel()->selectedRows().size() : 0;
+    // En la lista de unidades no hay carpeta donde crear, pegar ni filtrar.
+    // Tampoco en los resultados de una búsqueda, pero ahí sí se puede copiar,
+    // cortar o borrar lo encontrado.
+    const bool inFolder = pane != nullptr && pane->showsFolder();
+    const bool canModify = inFolder && m_actions->isAvailable();
+    const bool canRemove = pane != nullptr && m_actions->isAvailable();
+    m_filterAction->setEnabled(inFolder);
+    m_searchAction->setEnabled(pane != nullptr);
+    if (m_searchEdit != nullptr) {
+        m_searchEdit->setEnabled(m_searchAction->isEnabled());
+    }
+    const int selected = pane ? pane->selectedCount() : 0;
     const bool canPaste = !fileSelectionFrom(QGuiApplication::clipboard()->mimeData()).isEmpty();
 
     m_openAction->setEnabled(selected > 0);
     m_copyAction->setEnabled(selected > 0);
-    m_cutAction->setEnabled(canModify && selected > 0);
+    m_cutAction->setEnabled(canRemove && selected > 0);
     m_pasteAction->setEnabled(canModify && canPaste);
     m_renameAction->setEnabled(canModify && selected == 1);
-    m_trashAction->setEnabled(canModify && selected > 0);
-    m_deleteAction->setEnabled(canModify && selected > 0);
+    m_trashAction->setEnabled(canRemove && selected > 0);
+    m_deleteAction->setEnabled(canRemove && selected > 0);
     m_newFolderAction->setEnabled(canModify);
     m_newFileAction->setEnabled(canModify);
     m_undoAction->setEnabled(m_actions->isAvailable());
@@ -411,7 +476,24 @@ void MainWindow::updateEditActions()
 void MainWindow::showContextMenu(BrowserPane *pane, const QPoint &globalPosition)
 {
     QMenu menu(this);
-    if (!pane->view()->selectionModel()->selectedRows().isEmpty()) {
+    if (pane->showsSearch()) {
+        // Sobre los resultados: lo que tiene sentido hacer con lo encontrado.
+        if (pane->selectedCount() == 0) {
+            return;
+        }
+        menu.addAction(m_openAction);
+        QAction *openFolder = menu.addAction(tr("Abrir la carpeta que lo contiene"));
+        connect(openFolder, &QAction::triggered, pane, &BrowserPane::openContainingFolder);
+        menu.addSeparator();
+        menu.addAction(m_cutAction);
+        menu.addAction(m_copyAction);
+        menu.addSeparator();
+        menu.addAction(m_trashAction);
+        menu.addAction(m_deleteAction);
+        menu.exec(globalPosition);
+        return;
+    }
+    if (pane->selectedCount() > 0) {
         menu.addAction(m_openAction);
         menu.addSeparator();
         menu.addAction(m_cutAction);
@@ -436,7 +518,7 @@ void MainWindow::showContextMenu(BrowserPane *pane, const QPoint &globalPosition
 void MainWindow::newFolder()
 {
     BrowserPane *pane = currentPane();
-    if (pane == nullptr || !m_actions->isAvailable()) {
+    if (pane == nullptr || !pane->showsFolder() || !m_actions->isAvailable()) {
         return;
     }
     // Se crea ya con un nombre libre y se deja listo para escribir el definitivo.
@@ -448,7 +530,7 @@ void MainWindow::newFolder()
 void MainWindow::newFile()
 {
     BrowserPane *pane = currentPane();
-    if (pane == nullptr || !m_actions->isAvailable()) {
+    if (pane == nullptr || !pane->showsFolder() || !m_actions->isAvailable()) {
         return;
     }
     const quint64 id = m_actions->createFile(pane->currentPath(), pane->unusedName(tr("Nuevo archivo.txt")));
@@ -489,17 +571,48 @@ void MainWindow::cutSelection()
 void MainWindow::paste()
 {
     const BrowserPane *pane = currentPane();
-    if (pane == nullptr) {
-        return;
+    if (pane != nullptr && pane->showsFolder()) {
+        pasteInto(pane->currentPath());
     }
+}
+
+void MainWindow::pasteInto(const QString &destination)
+{
     const FileSelection selection = fileSelectionFrom(QGuiApplication::clipboard()->mimeData());
-    if (selection.isEmpty()) {
+    if (selection.isEmpty() || destination.isEmpty()) {
         return;
     }
-    transfer(selection.paths, pane->currentPath(), selection.cut);
+    transfer(selection.paths, destination, selection.cut);
     if (selection.cut) {
         // Lo cortado se pega una sola vez.
         QGuiApplication::clipboard()->clear();
+    }
+}
+
+void MainWindow::showSidebarMenu(const QString &path, const QPoint &globalPosition)
+{
+    QMenu menu(this);
+    QAction *open = menu.addAction(m_openAction->icon(), tr("Abrir"));
+    QAction *openInTab = menu.addAction(m_newTabAction->icon(), tr("Abrir en una pestaña nueva"));
+    menu.addSeparator();
+    // No se reutiliza la acción "Pegar" del menú Edición: aquella pega en la
+    // carpeta de la pestaña; esta, en la carpeta del árbol sobre la que se pulsó.
+    QAction *pasteHere = menu.addAction(m_pasteAction->icon(), tr("Pegar en esta carpeta"));
+    pasteHere->setEnabled(m_actions->isAvailable()
+                          && !fileSelectionFrom(QGuiApplication::clipboard()->mimeData()).isEmpty());
+    menu.addSeparator();
+    QAction *copyPath = menu.addAction(tr("Copiar la ruta"));
+
+    const QAction *chosen = menu.exec(globalPosition);
+    if (chosen == open) {
+        navigateCurrentTo(path);
+    } else if (chosen == openInTab) {
+        openTab(path);
+    } else if (chosen == pasteHere) {
+        pasteInto(path);
+    } else if (chosen == copyPath) {
+        QGuiApplication::clipboard()->setText(QDir::toNativeSeparators(path));
+        statusBar()->showMessage(tr("Ruta copiada al portapapeles."), 4000);
     }
 }
 
@@ -778,7 +891,7 @@ void MainWindow::onActionFinished(const ActionResult &result)
         } else {
             // La vigilancia de carpetas suele avisar sola; esto cubre los
             // sistemas de archivos donde no avisa (red, algunos USB).
-            pane->refresh();
+            pane->contentMayHaveChanged();
         }
     }
     if (result.id == m_renameAfterCreateId) {
@@ -913,13 +1026,39 @@ void MainWindow::createToolBar()
     toolBar->addWidget(m_pathBar);
     connect(m_editPathAction, &QAction::triggered, m_pathBar, &PathBar::startEditing);
 
-    // La búsqueda llega en la Fase 2. Se muestra deshabilitada y rotulada como
-    // tal: ningún control aparenta funcionar sin hacerlo (SPEC §25.1).
-    auto *search = new QLineEdit(toolBar);
-    search->setPlaceholderText(tr("Buscar (próximamente)"));
-    search->setEnabled(false);
-    search->setFixedWidth(220);
-    toolBar->addWidget(search);
+    // Buscador: busca en la carpeta de la pestaña y en sus subcarpetas, con
+    // la misma sintaxis que el filtro (docs/SEARCH_SYNTAX.md).
+    m_searchEdit = new QLineEdit(toolBar);
+    m_searchEdit->setToolTip(tr("Escribe y pulsa Intro. Ejemplos: factura 2025 · *.pdf · ext:jpg size:>5MB"));
+    m_searchEdit->setAccessibleName(tr("Buscar"));
+    m_searchEdit->setClearButtonEnabled(true);
+    m_searchEdit->setFixedWidth(260);
+    m_searchEdit->addAction(m_searchAction->icon(), QLineEdit::LeadingPosition);
+    // Flecha al final del buscador (o tecla Abajo): las últimas búsquedas.
+    auto *recent = new QAction(themedIcon(QStringLiteral("go-down"), QStyle::SP_ArrowDown),
+                               tr("Búsquedas recientes (flecha abajo)"), m_searchEdit);
+    recent->setShortcut(QKeySequence(Qt::Key_Down));
+    recent->setShortcutContext(Qt::WidgetShortcut);
+    m_searchEdit->addAction(recent, QLineEdit::TrailingPosition);
+    connect(recent, &QAction::triggered, this, &MainWindow::showRecentSearches);
+    toolBar->addWidget(m_searchEdit);
+    connect(m_searchEdit, &QLineEdit::returnPressed, this, &MainWindow::runSearch);
+    m_searchOptionsButton = new QToolButton(toolBar);
+    m_searchOptionsButton->setText(tr("Opciones"));
+    m_searchOptionsButton->setToolTip(tr("Opciones de búsqueda: dónde buscar, en el nombre o en el contenido, "
+                                         "y si se distinguen las mayúsculas"));
+    m_searchOptionsButton->setAccessibleName(tr("Opciones de búsqueda"));
+    m_searchOptionsButton->setPopupMode(QToolButton::InstantPopup);
+    toolBar->addWidget(m_searchOptionsButton);
+    buildSearchOptions();
+    // Esc devuelve el teclado a la lista.
+    auto *leaveSearch = new QAction(m_searchEdit);
+    leaveSearch->setShortcut(QKeySequence(Qt::Key_Escape));
+    leaveSearch->setShortcutContext(Qt::WidgetShortcut);
+    m_searchEdit->addAction(leaveSearch);
+    connect(leaveSearch, &QAction::triggered, this, [this] {
+        if (auto *pane = currentPane()) pane->focusContent();
+    });
 
     toolBar->addAction(m_newTabAction);
     toolBar->addAction(m_showTrashAction);
@@ -930,14 +1069,18 @@ BrowserPane *MainWindow::openTab(const QString &path)
     auto *pane = new BrowserPane(m_scheduler, m_watcher, m_tabs);
     pane->setShowHidden(m_showHiddenAction->isChecked());
     pane->setFolderSizesEnabled(m_folderSizesAction->isChecked());
-    pane->model()->setSizeUnits(m_binaryUnitsAction->isChecked() ? core::SizeUnits::Binary
+    pane->setSizeUnits(m_binaryUnitsAction->isChecked() ? core::SizeUnits::Binary
                                                                 : core::SizeUnits::Decimal);
+
+    pane->setIndexResolver([this](const QString &folder) { return m_indexService->indexFor(folder); });
 
     connect(pane, &BrowserPane::pathChanged, this, [this, pane] {
         updateTabTitle(pane);
         if (pane == currentPane()) {
             m_pathBar->setPath(pane->currentPath());
             m_sidebar->setCurrentPath(pane->currentPath());
+            syncSearchBox();
+            updateEditActions();
         }
     });
     connect(pane, &BrowserPane::historyChanged, this, &MainWindow::updateNavigationActions);
@@ -964,7 +1107,7 @@ BrowserPane *MainWindow::openTab(const QString &path)
     const int index = m_tabs->addTab(pane, QString());
     pane->navigateTo(path);
     m_tabs->setCurrentIndex(index);
-    pane->view()->setFocus();
+    pane->focusContent();
     return pane;
 }
 
@@ -1004,7 +1147,367 @@ void MainWindow::navigateCurrentTo(const QString &path)
 {
     if (BrowserPane *pane = currentPane()) {
         pane->navigateTo(path);
-        pane->view()->setFocus();
+        pane->focusContent();
+    }
+}
+
+void MainWindow::buildSearchOptions()
+{
+    auto *menu = new QMenu(m_searchOptionsButton);
+    m_searchOptionsButton->setMenu(menu);
+
+    menu->addSection(tr("Dónde buscar"));
+    auto *scopes = new QActionGroup(menu);
+    const auto addScope = [&](SearchScope scope, const QString &text) {
+        QAction *action = menu->addAction(text);
+        action->setCheckable(true);
+        action->setChecked(scope == m_searchScope);
+        scopes->addAction(action);
+        m_scopeActions.insert(int(scope), action);
+        connect(action, &QAction::triggered, this, [this, scope] { setSearchScope(scope); });
+    };
+    addScope(SearchScope::Folder, tr("Solo en esta carpeta"));
+    addScope(SearchScope::Subfolders, tr("En esta carpeta y sus subcarpetas"));
+    addScope(SearchScope::Volume, tr("En toda esta unidad"));
+    addScope(SearchScope::AllVolumes, tr("En todas las unidades"));
+    addScope(SearchScope::ChosenVolumes, tr("En las unidades que elija…"));
+    // Elegir unidades pide cuáles; si se cancela, se queda el alcance anterior.
+    disconnect(m_scopeActions.value(int(SearchScope::ChosenVolumes)), &QAction::triggered, this, nullptr);
+    connect(m_scopeActions.value(int(SearchScope::ChosenVolumes)), &QAction::triggered, this, [this] {
+        if (chooseSearchVolumes()) {
+            setSearchScope(SearchScope::ChosenVolumes);
+        } else {
+            m_scopeActions.value(int(m_searchScope))->setChecked(true);
+        }
+    });
+
+    menu->addSection(tr("Qué se compara"));
+    auto *targets = new QActionGroup(menu);
+    m_searchInNameAction = menu->addAction(tr("El nombre"));
+    m_searchInNameAction->setCheckable(true);
+    m_searchInNameAction->setChecked(true);
+    targets->addAction(m_searchInNameAction);
+    m_searchInContentAction = menu->addAction(tr("El contenido (archivos de texto)"));
+    m_searchInContentAction->setCheckable(true);
+    m_searchInContentAction->setToolTip(tr("Busca las palabras dentro de los archivos de texto de hasta 20 MB. "
+                                           "Todavía no lee PDF ni documentos de oficina."));
+    targets->addAction(m_searchInContentAction);
+    connect(targets, &QActionGroup::triggered, this, &MainWindow::updateSearchHints);
+
+    menu->addSeparator();
+    m_searchCaseAction = menu->addAction(tr("Distinguir mayúsculas y minúsculas"));
+    menu->addSeparator();
+    menu->addAction(m_indexAction);
+    m_searchCaseAction->setCheckable(true);
+    connect(m_searchCaseAction, &QAction::toggled, this, &MainWindow::updateSearchHints);
+    menu->setToolTipsVisible(true);
+    updateSearchHints();
+}
+
+void MainWindow::startIndexing(bool mayAsk)
+{
+    QSettings settings;
+    const QStringList roots = settings.value(QStringLiteral("index/roots")).toStringList();
+    for (const QString &root : roots) {
+        m_indexService->addRoot(root);
+    }
+    if (mayAsk && !settings.value(QStringLiteral("index/asked"), false).toBool()) {
+        // Con la ventana ya a la vista, no antes.
+        QTimer::singleShot(0, this, &MainWindow::runIndexWizard);
+    }
+}
+
+void MainWindow::saveIndexRoots()
+{
+    QSettings().setValue(QStringLiteral("index/roots"), m_indexService->roots());
+}
+
+void MainWindow::runIndexWizard()
+{
+    QDialog dialog(this);
+    dialog.setWindowTitle(tr("¿Crear un índice para buscar al instante?"));
+    auto *layout = new QVBoxLayout(&dialog);
+    auto *intro = new QLabel(
+        tr("Explorador Ultra puede anotar los nombres de los archivos de tus unidades para que las búsquedas "
+           "en una unidad entera tarden décimas de segundo en vez de minutos.\n\n"
+           "El índice se crea en segundo plano, se puede pausar, se guarda solo en este equipo y no incluye el "
+           "contenido de los archivos. Es opcional: sin él todo funciona igual, solo que más despacio.\n\n"
+           "Marca las unidades que quieras indexar:"), &dialog);
+    intro->setWordWrap(true);
+    layout->addWidget(intro);
+    auto *list = new QListWidget(&dialog);
+    for (const fs::Volume &volume : searchVolumes()) {
+        auto *item = new QListWidgetItem(
+            iconForVolume(volume),
+            tr("%1 — %2 (%3)").arg(volume.displayName, QDir::toNativeSeparators(volume.rootPath),
+                                   core::formatSize(volume.totalBytes)), list);
+        item->setData(Qt::UserRole, volume.rootPath);
+        item->setFlags(item->flags() | Qt::ItemIsUserCheckable);
+        // De fábrica, los discos fijos. Lo extraíble, de red u óptico, solo si se pide.
+        const bool fixedDisk = volume.kind == fs::DeviceKind::Ssd || volume.kind == fs::DeviceKind::Hdd
+            || volume.kind == fs::DeviceKind::Unknown;
+        item->setCheckState(fixedDisk ? Qt::Checked : Qt::Unchecked);
+    }
+    layout->addWidget(list);
+    auto *later = new QLabel(tr("Puedes cambiarlo cuando quieras en Ver → Índice de búsqueda."), &dialog);
+    later->setWordWrap(true);
+    layout->addWidget(later);
+    auto *buttons = new QDialogButtonBox(&dialog);
+    QPushButton *accept = buttons->addButton(tr("Indexar las marcadas"), QDialogButtonBox::AcceptRole);
+    QPushButton *postpone = buttons->addButton(tr("Ahora no"), QDialogButtonBox::RejectRole);
+    QPushButton *never = buttons->addButton(tr("No, y no volver a preguntar"), QDialogButtonBox::DestructiveRole);
+    accept->setDefault(true);
+    layout->addWidget(buttons);
+    enum Answer { Postpone, Accept, Never };
+    Answer answer = Postpone;
+    connect(accept, &QPushButton::clicked, &dialog, [&] { answer = Accept; dialog.accept(); });
+    connect(postpone, &QPushButton::clicked, &dialog, [&] { answer = Postpone; dialog.reject(); });
+    connect(never, &QPushButton::clicked, &dialog, [&] { answer = Never; dialog.reject(); });
+    dialog.resize(560, 420);
+    dialog.exec();
+
+    if (answer == Postpone) {
+        return;   // se volverá a proponer en el próximo arranque
+    }
+    QSettings().setValue(QStringLiteral("index/asked"), true);
+    if (answer == Accept) {
+        for (int row = 0; row < list->count(); ++row) {
+            if (list->item(row)->checkState() == Qt::Checked) {
+                m_indexService->addRoot(list->item(row)->data(Qt::UserRole).toString());
+            }
+        }
+        saveIndexRoots();
+    }
+}
+
+void MainWindow::showIndexDialog()
+{
+    IndexDialog dialog(*m_indexService, [this] { return searchVolumes(); }, this);
+    connect(&dialog, &IndexDialog::rootsChanged, this, &MainWindow::saveIndexRoots);
+    dialog.exec();
+    // Quien abre esta ventana ya ha decidido: el asistente no hace falta.
+    QSettings().setValue(QStringLiteral("index/asked"), true);
+}
+
+void MainWindow::updateIndexLabel()
+{
+    QStringList working;
+    for (const index::RootStatus &status : m_indexService->status()) {
+        if (status.state == index::RootStatus::State::Building
+            || status.state == index::RootStatus::State::Updating) {
+            working.append(tr("%1: %2").arg(QDir::toNativeSeparators(status.root), indexStateText(status)));
+        }
+    }
+    if (m_indexService->isPaused() && m_indexService->isBusy()) {
+        m_indexLabel->setText(tr("Índice en pausa"));
+    } else {
+        m_indexLabel->setText(working.isEmpty() ? QString() : tr("Índice — %1").arg(working.first()));
+    }
+    m_indexLabel->setToolTip(working.join(QLatin1Char('\n')));
+    m_indexLabel->setVisible(!m_indexLabel->text().isEmpty());
+}
+
+void MainWindow::rememberSearch(const QString &text)
+{
+    m_recentSearches.removeAll(text);
+    m_recentSearches.prepend(text);
+    while (m_recentSearches.size() > 15) {
+        m_recentSearches.removeLast();
+    }
+}
+
+void MainWindow::showRecentSearches()
+{
+    QMenu menu(this);
+    if (m_recentSearches.isEmpty()) {
+        menu.addAction(tr("Aún no hay búsquedas recientes"))->setEnabled(false);
+    }
+    for (const QString &text : std::as_const(m_recentSearches)) {
+        QAction *action = menu.addAction(QString(text).replace(QLatin1Char('&'), QStringLiteral("&&")));
+        connect(action, &QAction::triggered, this, [this, text] {
+            m_searchEdit->setText(text);
+            runSearch();   // con las opciones y en la carpeta de ahora
+        });
+    }
+    if (!m_recentSearches.isEmpty()) {
+        menu.addSeparator();
+        connect(menu.addAction(tr("Borrar las búsquedas recientes")), &QAction::triggered, this,
+                [this] { m_recentSearches.clear(); });
+    }
+    menu.setMinimumWidth(m_searchEdit->width());
+    menu.exec(m_searchEdit->mapToGlobal(QPoint(0, m_searchEdit->height())));
+}
+
+void MainWindow::setSearchScope(SearchScope scope)
+{
+    m_searchScope = scope;
+    if (QAction *action = m_scopeActions.value(int(scope))) {
+        action->setChecked(true);
+    }
+    updateSearchHints();
+}
+
+void MainWindow::setSearchInContent(bool inContent)
+{
+    (inContent ? m_searchInContentAction : m_searchInNameAction)->setChecked(true);
+    updateSearchHints();
+}
+
+void MainWindow::setSearchCaseSensitive(bool caseSensitive)
+{
+    m_searchCaseAction->setChecked(caseSensitive);
+}
+
+void MainWindow::updateSearchHints()
+{
+    if (m_searchEdit == nullptr || m_searchCaseAction == nullptr) {
+        return;
+    }
+    // El propio buscador dice qué va a hacer, para no tener que abrir el menú.
+    QString where;
+    switch (m_searchScope) {
+    case SearchScope::Folder:        where = tr("Buscar solo en esta carpeta"); break;
+    case SearchScope::Subfolders:    where = tr("Buscar aquí y en subcarpetas"); break;
+    case SearchScope::Volume:        where = tr("Buscar en toda la unidad"); break;
+    case SearchScope::AllVolumes:    where = tr("Buscar en todas las unidades"); break;
+    case SearchScope::ChosenVolumes: where = tr("Buscar en las unidades elegidas"); break;
+    }
+    if (m_searchInContentAction->isChecked()) {
+        where += tr(", en el contenido");
+    }
+    m_searchEdit->setPlaceholderText(where + tr(" (Ctrl+F)"));
+    const bool changed = m_searchScope != SearchScope::Subfolders || m_searchInContentAction->isChecked()
+        || m_searchCaseAction->isChecked();
+    // Con opciones distintas de las habituales, el botón lo avisa.
+    m_searchOptionsButton->setText(changed ? tr("Opciones •") : tr("Opciones"));
+}
+
+QList<fs::Volume> MainWindow::searchVolumes() const
+{
+    return m_searchVolumeSource ? m_searchVolumeSource() : m_volumeMonitor.volumes();
+}
+
+bool MainWindow::chooseSearchVolumes()
+{
+    QDialog dialog(this);
+    dialog.setWindowTitle(tr("Unidades donde buscar"));
+    auto *layout = new QVBoxLayout(&dialog);
+    layout->addWidget(new QLabel(tr("Marca las unidades en las que quieres buscar:"), &dialog));
+    auto *list = new QListWidget(&dialog);
+    for (const fs::Volume &volume : searchVolumes()) {
+        auto *item = new QListWidgetItem(
+            tr("%1 — %2").arg(volume.displayName, QDir::toNativeSeparators(volume.rootPath)), list);
+        item->setData(Qt::UserRole, volume.rootPath);
+        item->setFlags(item->flags() | Qt::ItemIsUserCheckable);
+        item->setCheckState(m_chosenVolumes.contains(volume.rootPath) ? Qt::Checked : Qt::Unchecked);
+    }
+    layout->addWidget(list);
+    auto *buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dialog);
+    buttons->button(QDialogButtonBox::Ok)->setText(tr("Aceptar"));
+    buttons->button(QDialogButtonBox::Cancel)->setText(tr("Cancelar"));
+    connect(buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
+    connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+    layout->addWidget(buttons);
+    if (dialog.exec() != QDialog::Accepted) {
+        return false;
+    }
+    QStringList chosen;
+    for (int row = 0; row < list->count(); ++row) {
+        if (list->item(row)->checkState() == Qt::Checked) {
+            chosen.append(list->item(row)->data(Qt::UserRole).toString());
+        }
+    }
+    if (chosen.isEmpty()) {
+        return false;
+    }
+    m_chosenVolumes = chosen;
+    return true;
+}
+
+void MainWindow::runSearch()
+{
+    BrowserPane *pane = currentPane();
+    const QString text = m_searchEdit->text().trimmed();
+    if (pane == nullptr || text.isEmpty()) {
+        return;
+    }
+    SearchSpec spec;
+    spec.query = text;
+    spec.caseSensitive = m_searchCaseAction->isChecked();
+    spec.inContent = m_searchInContentAction->isChecked();
+    // Desde unos resultados se busca donde se buscó la primera vez.
+    spec.origin = pane->showsSearch() ? searchRootOf(pane->currentPath()) : pane->currentPath();
+    spec.scope = m_searchScope;
+    // En la lista de unidades no hay carpeta: se busca en las unidades.
+    if (isVolumesLocation(spec.origin) && spec.scope != SearchScope::ChosenVolumes) {
+        spec.scope = SearchScope::AllVolumes;
+    }
+
+    const QList<fs::Volume> volumes = searchVolumes();
+    switch (spec.scope) {
+    case SearchScope::Folder:
+    case SearchScope::Subfolders:
+        spec.roots = QStringList{spec.origin};
+        break;
+    case SearchScope::Volume: {
+        // La unidad de la carpeta: el punto de montaje más largo que la contiene.
+        QString best;
+        for (const fs::Volume &volume : volumes) {
+            const QString root = volume.rootPath;
+            const QString prefix = root.endsWith(QLatin1Char('/')) ? root : root + QLatin1Char('/');
+            if ((spec.origin == root || spec.origin.startsWith(prefix)) && root.size() > best.size()) {
+                best = root;
+            }
+        }
+        if (!best.isEmpty()) {
+            spec.roots = QStringList{best};
+        }
+        break;
+    }
+    case SearchScope::AllVolumes:
+        for (const fs::Volume &volume : volumes) {
+            spec.roots.append(volume.rootPath);
+        }
+        break;
+    case SearchScope::ChosenVolumes:
+        for (const fs::Volume &volume : volumes) {
+            if (m_chosenVolumes.contains(volume.rootPath)) {
+                spec.roots.append(volume.rootPath);   // solo las que siguen conectadas
+            }
+        }
+        break;
+    }
+    if (spec.roots.isEmpty()) {
+        statusBar()->showMessage(tr("No se puede buscar: no hay ninguna unidad conectada para ese alcance."), 10000);
+        return;
+    }
+
+    // Una consulta mal escrita se explica aquí, sin salir de la carpeta.
+    search::QueryOptions queryOptions;
+    queryOptions.caseSensitive = spec.caseSensitive;
+    queryOptions.termsInContent = spec.inContent;
+    const core::Result<search::Query> parsedQuery = search::Query::parse(text, queryOptions);
+    if (!parsedQuery.ok()) {
+        statusBar()->showMessage(tr("No se puede buscar: %1").arg(parsedQuery.error().message), 10000);
+        return;
+    }
+    rememberSearch(text);
+    pane->search(spec);
+    pane->focusContent();
+}
+
+void MainWindow::syncSearchBox()
+{
+    // El buscador enseña la consulta de la pestaña que se está viendo; fuera
+    // de unos resultados queda vacío.
+    const BrowserPane *pane = currentPane();
+    if (m_searchEdit == nullptr || m_searchEdit->hasFocus()) {
+        return;
+    }
+    // Al pasar a una carpeta el texto se queda: lo normal es querer repetir
+    // la misma búsqueda en otro sitio. Se borra con la X del buscador.
+    if (pane != nullptr && pane->showsSearch()) {
+        m_searchEdit->setText(searchQueryOf(pane->currentPath()));
     }
 }
 
@@ -1014,6 +1517,7 @@ void MainWindow::onCurrentTabChanged()
         m_pathBar->setPath(pane->currentPath());
         m_sidebar->setCurrentPath(pane->currentPath());
     }
+    syncSearchBox();
     updateNavigationActions();
     updateStatus();
     updateEditActions();
@@ -1043,12 +1547,16 @@ void MainWindow::updateTabTitle(BrowserPane *pane)
         return;
     }
     const QString path = pane->currentPath();
-    QString title = QDir(path).dirName();
+    QString title = pane->showsVolumes() ? tr("Unidades")
+        : pane->showsSearch() ? tr("Buscar: %1").arg(searchQueryOf(path)) : QDir(path).dirName();
     if (title.isEmpty()) {
         title = QDir::toNativeSeparators(path);   // raíces: "/" o "C:\"
     }
     m_tabs->setTabText(index, title);
-    m_tabs->setTabToolTip(index, QDir::toNativeSeparators(path));
+    m_tabs->setTabToolTip(index, pane->showsVolumes() ? title
+                                 : pane->showsSearch()
+                                     ? tr("%1 en %2").arg(title, pane->searchWhere())
+                                     : QDir::toNativeSeparators(path));
     if (pane == currentPane()) {
         setWindowTitle(QStringLiteral("%1 — %2").arg(title, core::applicationName()));
     }
@@ -1062,6 +1570,10 @@ void MainWindow::restoreSession()
     m_showHiddenAction->setChecked(settings.value(QStringLiteral("view/showHidden"), false).toBool());
     m_binaryUnitsAction->setChecked(settings.value(QStringLiteral("view/binaryUnits"), false).toBool());
     m_folderSizesAction->setChecked(settings.value(QStringLiteral("view/folderSizes"), false).toBool());
+    // El alcance y "en el contenido" no se guardan: una búsqueda en todos los
+    // discos no debe heredarse sin querer de la sesión anterior.
+    m_searchCaseAction->setChecked(settings.value(QStringLiteral("search/caseSensitive"), false).toBool());
+    m_recentSearches = settings.value(QStringLiteral("search/recent")).toStringList();
 
     const QStringList paths = settings.value(QStringLiteral("session/tabs")).toStringList();
     for (const QString &path : paths) {
@@ -1086,10 +1598,14 @@ void MainWindow::saveSession()
     settings.setValue(QStringLiteral("view/showHidden"), m_showHiddenAction->isChecked());
     settings.setValue(QStringLiteral("view/binaryUnits"), m_binaryUnitsAction->isChecked());
     settings.setValue(QStringLiteral("view/folderSizes"), m_folderSizesAction->isChecked());
+    settings.setValue(QStringLiteral("search/caseSensitive"), m_searchCaseAction->isChecked());
+    settings.setValue(QStringLiteral("search/recent"), m_recentSearches);
 
     QStringList paths;
     for (int i = 0; i < m_tabs->count(); ++i) {
-        paths.append(static_cast<BrowserPane *>(m_tabs->widget(i))->currentPath());
+        // Unos resultados no se guardan: al volver se abre la carpeta donde se buscó.
+        const QString path = static_cast<BrowserPane *>(m_tabs->widget(i))->currentPath();
+        paths.append(isSearchLocation(path) ? searchRootOf(path) : path);
     }
     settings.setValue(QStringLiteral("session/tabs"), paths);
     settings.setValue(QStringLiteral("session/currentTab"), m_tabs->currentIndex());
