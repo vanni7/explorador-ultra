@@ -85,6 +85,12 @@ jobs:
       - name: Pruebas
         run: ctest --preset ${{ matrix.preset }}
 
+      # Si una prueba falla sin dejar salida (el proceso murió de golpe), se
+      # repite sola y con todo detalle: así queda el código de salida a la vista.
+      - name: Repetir las pruebas fallidas con detalle
+        if: failure()
+        run: ctest --preset ${{ matrix.preset }} --rerun-failed --output-on-failure -VV
+
       - name: Arranque real de la aplicación (smoke test)
         shell: bash
         env:
