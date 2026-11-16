@@ -257,6 +257,126 @@ private slots:
         QTest::qWait(300);
         QCOMPARE(QDir(work.filePath(QStringLiteral("origen"))).entryList(QDir::Files).size(), 500);
     }
+
+    void transferQueueOrderPauseCancelAndRetry()
+    {
+        QTemporaryDir data;
+        QTemporaryDir work;
+        FileActions actions(m_scheduler, openJournal(data));
+        Collector collector(actions);
+        QStringList sources;
+        for (const QString &name : {QStringLiteral("a.bin"), QStringLiteral("b.bin"), QStringLiteral("c.bin")}) {
+            QFile file(work.filePath(name));
+            QVERIFY(file.open(QIODevice::WriteOnly));
+            file.write(QByteArray(8 * 1024 * 1024, name.at(0).toLatin1()));
+            sources.append(work.filePath(name));
+        }
+        const QString destination = work.filePath(QStringLiteral("destino"));
+        QVERIFY(QDir().mkpath(destination));
+
+        // De una en una: la primera empieza y las otras esperan.
+        QVERIFY(actions.sequentialTransfers());
+        const quint64 a = actions.copy({sources[0]}, destination, ops::CollisionPolicy::AutoRename);
+        actions.pauseTransfer(a);   // antes de que lea nada
+        const quint64 b = actions.copy({sources[1]}, destination, ops::CollisionPolicy::AutoRename);
+        const quint64 c = actions.copy({sources[2]}, destination, ops::CollisionPolicy::AutoRename);
+        QList<TransferInfo> queue = actions.transfers();
+        QCOMPARE(queue.size(), 3);
+        QCOMPARE(queue[0].state, TransferInfo::State::Paused);
+        QCOMPARE(queue[1].state, TransferInfo::State::Queued);
+        QCOMPARE(queue[2].state, TransferInfo::State::Queued);
+        QCOMPARE(actions.runningCount(), 3);
+        QVERIFY(queue[0].description.contains(QStringLiteral("a.bin")));
+        // En pausa no avanza.
+        QTest::qWait(300);
+        QVERIFY(!QFileInfo::exists(destination + QStringLiteral("/a.bin")));
+        // La última pasa delante de la segunda.
+        actions.prioritizeTransfer(c);
+        queue = actions.transfers();
+        QCOMPARE(queue[1].id, c);
+        QCOMPARE(queue[2].id, b);
+
+        actions.resumeTransfer(a);
+        ActionResult result;
+        QVERIFY(collector.waitFor(b, &result));
+        QVERIFY(result.outcome.ok());
+        QCOMPARE(collector.results.size(), 3);
+        QCOMPARE(collector.results[0].id, a);
+        QCOMPARE(collector.results[1].id, c);   // la priorizada, antes
+        QCOMPARE(collector.results[2].id, b);
+        for (const TransferInfo &info : actions.transfers()) {
+            QCOMPARE(info.state, TransferInfo::State::Finished);
+            QCOMPARE(info.progress.bytesDone, 8 * 1024 * 1024);
+        }
+        QCOMPARE(actions.overallTransfer().progress.bytesTotal, 0);   // nada activo
+        actions.clearFinishedTransfers();
+        QVERIFY(actions.transfers().isEmpty());
+
+        // Cancelar en pausa y reintentar: termina en el mismo sitio, sin duplicar.
+        const QString other = work.filePath(QStringLiteral("otro"));
+        QVERIFY(QDir().mkpath(other));
+        const quint64 d = actions.copy(sources, other, ops::CollisionPolicy::AutoRename);
+        actions.pauseTransfer(d);
+        actions.cancelTransfer(d);
+        QVERIFY(collector.waitFor(d, &result));
+        QVERIFY(result.outcome.cancelled);
+        QCOMPARE(actions.transfers().first().state, TransferInfo::State::Cancelled);
+        QVERIFY(actions.transfers().first().canRetry);
+        const quint64 again = actions.retryTransfer(d);
+        QVERIFY(again != 0);
+        QCOMPARE(actions.retryTransfer(d), quint64(0));   // una sola vez
+        QVERIFY(collector.waitFor(again, &result));
+        QVERIFY2(result.outcome.ok(), qPrintable(describe(result)));
+        QCOMPARE(QDir(other).entryList(QDir::Files), (QStringList{QStringLiteral("a.bin"), QStringLiteral("b.bin"),
+                                                                  QStringLiteral("c.bin")}));
+
+        // Cancelar una que espera: no llega a empezar y se puede poner otra vez.
+        const quint64 e = actions.copy({sources[0]}, other, ops::CollisionPolicy::AutoRename);
+        actions.pauseTransfer(e);
+        const quint64 f = actions.copy({sources[1]}, other, ops::CollisionPolicy::AutoRename);
+        actions.cancelTransfer(f);
+        TransferInfo cancelledInfo;
+        for (const TransferInfo &info : actions.transfers()) {
+            if (info.id == f) {
+                cancelledInfo = info;
+            }
+        }
+        QCOMPARE(cancelledInfo.state, TransferInfo::State::Cancelled);
+        actions.cancelTransfer(e);
+        QVERIFY(collector.waitFor(e, &result));
+        const quint64 g = actions.retryTransfer(f);
+        QVERIFY(collector.waitFor(g, &result));
+        QVERIFY(QFileInfo::exists(other + QStringLiteral("/b (2).bin")));
+    }
+
+    void parallelTransfersRunTogether()
+    {
+        QTemporaryDir data;
+        QTemporaryDir work;
+        FileActions actions(m_scheduler, openJournal(data));
+        Collector collector(actions);
+        actions.setSequentialTransfers(false);
+        for (const QString &name : {QStringLiteral("a.bin"), QStringLiteral("b.bin")}) {
+            QFile file(work.filePath(name));
+            QVERIFY(file.open(QIODevice::WriteOnly));
+            file.write(QByteArray(1024 * 1024, 'x'));
+        }
+        QVERIFY(QDir().mkpath(work.filePath(QStringLiteral("d1"))));
+        QVERIFY(QDir().mkpath(work.filePath(QStringLiteral("d2"))));
+        const quint64 a = actions.copy({work.filePath(QStringLiteral("a.bin"))}, work.filePath(QStringLiteral("d1")),
+                                       ops::CollisionPolicy::AutoRename);
+        actions.pauseTransfer(a);
+        const quint64 b = actions.copy({work.filePath(QStringLiteral("b.bin"))}, work.filePath(QStringLiteral("d2")),
+                                       ops::CollisionPolicy::AutoRename);
+        // La segunda no espera a la primera, que sigue en pausa.
+        ActionResult result;
+        QVERIFY(collector.waitFor(b, &result));
+        QVERIFY(result.outcome.ok());
+        QCOMPARE(actions.transfers().first().state, TransferInfo::State::Paused);
+        actions.resumeTransfer(a);
+        QVERIFY(collector.waitFor(a, &result));
+        QVERIFY(result.outcome.ok());
+    }
 };
 
 QTEST_GUILESS_MAIN(TestFileActions)

@@ -12,7 +12,9 @@
 #include <QStringList>
 
 #include <functional>
+#include <atomic>
 #include <memory>
+#include <vector>
 
 namespace eu::ui {
 
@@ -46,6 +48,27 @@ struct ActionResult
     QString undoneDescription;
     /// Solo en Deshacer: no había ninguna operación que se pudiera deshacer.
     bool nothingToUndo = false;
+    /// Se canceló antes de empezar: no llegó a tocar nada.
+    bool neverRan = false;
+};
+
+/// Cómo va una copia o un movimiento de la cola de transferencias (SPEC §13).
+struct TransferInfo
+{
+    enum class State { Queued, Running, Paused, Finished, Failed, Cancelled };
+
+    quint64 id = 0;
+    ActionKind kind = ActionKind::Copy;
+    QString description;        ///< "Copiar 3 elementos a «Fotos»".
+    State state = State::Queued;
+    ops::Progress progress;
+    double bytesPerSecond = 0;  ///< Media de los últimos segundos; 0 si no se mueve.
+    qint64 secondsLeft = -1;    ///< -1: no se sabe.
+    QString problem;            ///< Resumen de lo que falló.
+    bool canRetry = false;
+    bool verifies = false;      ///< Comprueba cada copia con su hash.
+
+    bool isActive() const { return state == State::Queued || state == State::Running || state == State::Paused; }
 };
 
 /// Puente entre la interfaz y el motor de operaciones.
@@ -70,8 +93,26 @@ public:
     bool isAvailable() const { return m_journal != nullptr; }
 
     /// Número de acciones en curso o en cola.
-    int runningCount() const { return int(m_running.size()); }
-    bool isBusy() const { return !m_running.isEmpty(); }
+    int runningCount() const;
+    bool isBusy() const { return runningCount() > 0; }
+
+    /// La cola de transferencias (copiar y mover), en su orden.
+    QList<TransferInfo> transfers() const;
+    /// Suma de las transferencias activas: avance, velocidad y tiempo restante.
+    TransferInfo overallTransfer() const;
+    void pauseTransfer(quint64 id);
+    void resumeTransfer(quint64 id);
+    void cancelTransfer(quint64 id);
+    /// Vuelve a poner en la cola lo que quedó sin terminar. Devuelve su id (0 si no hay nada).
+    quint64 retryTransfer(quint64 id);
+    /// La pasa a la primera de las que esperan.
+    void prioritizeTransfer(quint64 id);
+    /// Quita de la lista las que ya acabaron.
+    void clearFinishedTransfers();
+    /// true (de fábrica): una transferencia detrás de otra. false: todas a la
+    /// vez (el planificador sigue sin juntar dos en el mismo disco lento).
+    void setSequentialTransfers(bool sequential);
+    bool sequentialTransfers() const { return m_sequential; }
 
     quint64 createFolder(const QString &parentDirectory, const QString &name);
     quint64 createFile(const QString &parentDirectory, const QString &name);
@@ -116,6 +157,8 @@ signals:
     void finished(const eu::ui::ActionResult &result);
     /// Cambió runningCount().
     void runningCountChanged(int count);
+    /// Cambió algo de la cola de transferencias (estado, avance, orden).
+    void transfersChanged();
     /// Hay operaciones que no terminaron porque la aplicación se cerró de golpe.
     void interruptedOperationsFound(const QList<eu::journal::Operation> &operations);
     /// Contenido de la papelera, del más reciente al más antiguo.
@@ -134,11 +177,28 @@ private:
     /// planificador no lance dos transferencias a la vez al mismo disco lento).
     quint64 start(ActionKind kind, const QString &directory, tasks::Category category, Work work,
                   const QStringList &devicePaths = {});
+    void launch(quint64 id, ActionKind kind, const QString &directory, tasks::Category category, Work work,
+                const QStringList &devicePaths);
     void onFinished(const ActionResult &result);
+    void onProgress(quint64 id, const ops::Progress &progress);
+    /// Cancela una tarea y, si no llega a empezar (el planificador no ejecuta
+    /// las canceladas), da la acción por terminada igualmente.
+    void cancelTask(quint64 id);
+
+    using TransferRun = std::function<ops::Outcome(const ops::TransferOptions &, const Context &)>;
+    struct Transfer;
+    quint64 queueTransfer(ActionKind kind, const QString &description, const QString &directory,
+                          const QStringList &devicePaths, ops::TransferOptions options, TransferRun run);
+    void startQueuedTransfers();
+    Transfer *transferById(quint64 id);
 
     tasks::Scheduler &m_scheduler;
     std::shared_ptr<journal::Journal> m_journal;
     QHash<quint64, tasks::TaskHandle> m_running;
+    QHash<quint64, ActionResult> m_initial;   ///< Para dar por terminada una que no llegó a empezar.
+    QHash<quint64, std::shared_ptr<std::atomic<bool>>> m_ran;
+    std::vector<std::unique_ptr<Transfer>> m_transfers;   ///< En el orden de la cola.
+    bool m_sequential = true;
     quint64 m_lastId = 0;
     /// Operaciones que ya se intentó deshacer sin conseguirlo del todo: no se
     /// vuelven a intentar, para que Deshacer no se quede atascado en ellas.
