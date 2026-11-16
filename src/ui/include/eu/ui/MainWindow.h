@@ -4,6 +4,7 @@
 #include "eu/fs/DirectoryWatcher.h"
 #include "eu/fs/DeviceMap.h"
 #include "eu/fs/Volumes.h"
+#include "eu/index/ContentIndexService.h"
 #include "eu/index/IndexService.h"
 #include "eu/thumbs/ThumbnailService.h"
 #include "eu/journal/Journal.h"
@@ -58,12 +59,14 @@ public:
 
     /// Los índices de búsqueda de esta ventana.
     index::IndexService *indexService() const { return m_indexService; }
+    index::ContentIndexService *contentIndexService() const { return m_contentIndexService; }
     /// Empieza a mantener los índices guardados en la configuración. Si
     /// `mayAsk` y aún no se ha preguntado, muestra el asistente que propone
     /// qué unidades indexar (SPEC §1).
     void startIndexing(bool mayAsk);
     /// Abre la ventana "Índice de búsqueda".
     void showIndexDialog();
+    void showContentIndexDialog();
 
     /// Miniaturas: la caché y quien las genera, comunes a todas las pestañas.
     thumbs::ThumbnailService *thumbnailService() const { return m_thumbnailService; }
@@ -217,6 +220,8 @@ private:
     QAction *m_searchAction = nullptr;
     QLineEdit *m_searchEdit = nullptr;
     index::IndexService *m_indexService = nullptr;
+    index::ContentIndexService *m_contentIndexService = nullptr;
+    QAction *m_contentIndexAction = nullptr;
     std::shared_ptr<thumbs::ThumbnailCache> m_thumbnailCache;
     thumbs::ThumbnailService *m_thumbnailService = nullptr;
     QAction *m_detailsAction = nullptr;
@@ -243,6 +248,7 @@ private:
     void runIndexWizard();
     void saveIndexRoots();
     void updateIndexLabel();
+    void saveContentIndexRoots();
     QToolButton *m_searchOptionsButton = nullptr;
     QHash<int, QAction *> m_scopeActions;   ///< Por SearchScope.
     QAction *m_searchInNameAction = nullptr;

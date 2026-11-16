@@ -1129,7 +1129,22 @@ private slots:
         QVERIFY(searchFor(QStringLiteral("riso libros")));
         QCOMPARE(results->count(), 1);
         QCOMPARE(results->hitAt(0).entry.name, QStringLiteral("apuntes.txt"));
-        QVERIFY(pane->searchInfo().contains(QStringLiteral("archivos leídos")));
+        QVERIFY2(pane->searchInfo().contains(QStringLiteral("documentos leídos: ")), qPrintable(pane->searchInfo()));
+        QVERIFY(!pane->searchInfo().contains(QStringLiteral("documentos leídos: 0")));
+        // Con índice de contenido de la carpeta, lo mismo sin abrir el archivo.
+        window.contentIndexService()->addRoot(books);
+        QVERIFY(QTest::qWaitFor([&] {
+            const auto all = window.contentIndexService()->status();
+            return !all.isEmpty() && all.first().state == index::ContentRootStatus::State::Ready
+                && !window.contentIndexService()->isBusy();
+        }, 30000));
+        QVERIFY(searchFor(QStringLiteral("riso libros")));
+        QCOMPARE(results->count(), 1);
+        QCOMPARE(results->hitAt(0).entry.name, QStringLiteral("apuntes.txt"));
+        QVERIFY2(pane->searchInfo().contains(QStringLiteral("documentos leídos: 0")), qPrintable(pane->searchInfo()));
+        QVERIFY(pane->searchInfo().contains(QStringLiteral("del índice de contenido")));
+        QVERIFY(!results->hitAt(0).snippet.isEmpty());
+        window.contentIndexService()->removeRoot(books);
         window.setSearchInContent(false);
         // El filtro content: hace lo mismo sin cambiar de modo.
         QVERIFY(searchFor(QStringLiteral("content:\"nota sobre riso\"")));

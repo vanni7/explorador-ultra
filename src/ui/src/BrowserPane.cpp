@@ -1030,6 +1030,10 @@ void BrowserPane::startSearch()
         return thumbs::extractTextIsolated(path, cancel);
     };
     m_searchReadsContent = parsedQuery.value().usesContent();
+    // Lo que ya tiene guardado el índice de contenido no se vuelve a leer.
+    if (m_searchReadsContent && m_contentCacheResolver) {
+        options.contentCache = m_contentCacheResolver(spec.roots);
+    }
     // La columna del fragmento, solo cuando se busca en el contenido.
     m_resultsView->setColumnHidden(SearchResultsModel::SnippetColumn, !m_searchReadsContent);
     // Con fragmento, es él quien se estira; sin él, la carpeta.
@@ -1225,8 +1229,10 @@ void BrowserPane::updateSearchInfo()
             : tr("Resultados del índice, sin comprobar en el disco: %1").arg(where);
     }
     if (m_searchReadsContent) {
-        text += tr(" · archivos leídos: %1 (solo texto, hasta 20 MB)")
-                    .arg(QLocale().toString(m_searchProgress.filesRead));
+        text += tr(" · documentos leídos: %1").arg(QLocale().toString(m_searchProgress.filesRead));
+        if (m_searchProgress.textsFromIndex > 0) {
+            text += tr(" · del índice de contenido: %1").arg(QLocale().toString(m_searchProgress.textsFromIndex));
+        }
     }
     if (spec.caseSensitive) {
         text += tr(" · distingue mayúsculas");

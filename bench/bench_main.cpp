@@ -9,6 +9,7 @@
 //   eu-bench walk    <carpeta> [carpeta…]   recorre los árboles a la vez (un hilo cada uno)
 //   eu-bench yield   <archivo-grande> <carpeta>   listar mientras se lee, cediendo o no el disco
 //   eu-bench grep    <carpeta> <texto>  busca el texto dentro de los documentos (aislado)
+//   eu-bench cindex  <carpeta> <texto>  crea el índice de contenido y busca con él
 //   eu-bench thumbs  <carpeta> [lado]   miniaturas de una carpeta, en el proceso y aisladas
 //   eu-bench index   <carpeta> <archivo.db> [consulta…]   construye el índice y busca en él
 //
@@ -19,6 +20,7 @@
 #include "eu/fs/DirectoryLister.h"
 #include "eu/fs/Volumes.h"
 #include "eu/index/Index.h"
+#include "eu/index/ContentIndex.h"
 #include "eu/search/Searcher.h"
 #include "eu/thumbs/Isolated.h"
 #include "eu/thumbs/Thumbnail.h"
@@ -33,6 +35,7 @@
 #include <QFileInfo>
 #include <QString>
 #include <QStringList>
+#include <QTemporaryDir>
 #include <QTextStream>
 
 #include <algorithm>
@@ -491,6 +494,67 @@ int commandGrep(const QString &folder, const QString &text)
     return 0;
 }
 
+/// Crea el índice de contenido de una carpeta (en una base temporal), dice
+/// cuánto ocupa y busca con él, comparando con la búsqueda sin índice.
+int commandContentIndex(const QString &folder, const QString &text)
+{
+    QTemporaryDir data;
+    const QString database = data.filePath(QStringLiteral("contenido.db"));
+    const auto opened = eu::index::ContentIndex::open(database, folder);
+    if (!opened.ok()) {
+        out() << "ERROR: " << opened.error().message << '\n';
+        return 1;
+    }
+    const auto isolated = [](const QString &path, const eu::tasks::CancelToken &cancel) {
+        return eu::thumbs::extractTextIsolated(path, cancel);
+    };
+    eu::index::ContentSyncOptions syncOptions;
+    syncOptions.textProvider = isolated;
+    QElapsedTimer timer;
+    timer.start();
+    const auto synced = opened.value().sync(syncOptions, {});
+    if (!synced.ok()) {
+        out() << "ERROR: " << synced.error().message << '\n';
+        return 1;
+    }
+    qint64 bytes = 0;
+    for (const QString &suffix : {QString(), QStringLiteral("-wal")}) {
+        bytes += QFileInfo(database + suffix).size();
+    }
+    const eu::index::ContentIndexInfo info = opened.value().info();
+    report(QStringLiteral("índice de contenido: crear"), timer.nsecsElapsed(),
+           QStringLiteral("%1 documentos (%2 con texto, %3 sin); %4 millones de caracteres; base %5 MB")
+               .arg(info.documents).arg(info.withText).arg(synced.value().failed)
+               .arg(double(info.textChars) / 1e6, 0, 'f', 1).arg(double(bytes) / 1e6, 0, 'f', 1));
+    timer.restart();
+    const auto again = opened.value().sync(syncOptions, {});
+    report(QStringLiteral("índice de contenido: repasar sin cambios"), timer.nsecsElapsed(),
+           QStringLiteral("%1 documentos vistos, %2 leídos").arg(again.value().found).arg(again.value().read));
+
+    const auto query = eu::search::Query::parse(QStringLiteral("content:\"%1\"").arg(text));
+    for (const bool withIndex : {true, false}) {
+        eu::search::SearchOptions options;
+        options.textProvider = isolated;
+        if (withIndex) {
+            options.contentCache = [index = opened.value()] { return eu::index::ContentIndex::cacheFor({index}); };
+        }
+        timer.restart();
+        qint64 firstNs = -1;
+        const eu::search::SearchSummary summary = eu::search::searchTree(
+            {folder}, query.value(), options, {}, nullptr,
+            [&](std::vector<eu::search::Hit> &&hits, const eu::search::SearchProgress &) {
+                if (firstNs < 0 && !hits.empty()) {
+                    firstNs = timer.nsecsElapsed();
+                }
+            });
+        report(QStringLiteral("buscar «%1» %2").arg(text, withIndex ? QStringLiteral("con índice") : QStringLiteral("sin índice")),
+               timer.nsecsElapsed(),
+               QStringLiteral("%1 resultados; %2 leídos del disco; %3 del índice")
+                   .arg(summary.progress.hits).arg(summary.progress.filesRead).arg(summary.progress.textsFromIndex));
+    }
+    return 0;
+}
+
 /// Genera las miniaturas de los archivos de una carpeta dos veces: en este
 /// proceso y en el auxiliar aislado, para saber cuánto cuesta aislar.
 int commandThumbs(const QString &folder, int side)
@@ -607,6 +671,9 @@ int main(int argc, char *argv[])
     }
     if (command == QStringLiteral("grep") && arguments.size() == 4) {
         return commandGrep(QDir::cleanPath(arguments[2]), arguments[3]);
+    }
+    if (command == QStringLiteral("cindex") && arguments.size() == 4) {
+        return commandContentIndex(QDir::cleanPath(arguments[2]), arguments[3]);
     }
     if (command == QStringLiteral("thumbs") && arguments.size() >= 3) {
         return commandThumbs(QDir::cleanPath(arguments[2]), arguments.size() >= 4 ? arguments[3].toInt() : 256);

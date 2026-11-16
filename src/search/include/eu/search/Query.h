@@ -82,6 +82,10 @@ public:
     /// Los textos que se buscan dentro de los archivos (para mostrar un
     /// fragmento con la coincidencia), en el orden de la consulta.
     QStringList contentTerms() const { return m_contentTerms; }
+    /// Los textos que todo resultado tiene que contener por fuerza (los de un
+    /// `content:` que no está negado ni es una alternativa de un OR). Sirven
+    /// para descartar de antemano, con el índice de contenido, lo que no los tiene.
+    QStringList requiredContentTerms() const { return m_requiredContentTerms; }
     Qt::CaseSensitivity caseSensitivity() const { return m_caseSensitivity; }
 
     /// Textos de los que el nombre de todo elemento que cumpla la consulta
@@ -106,6 +110,7 @@ private:
     QString m_text;
     bool m_usesContent = false;
     QStringList m_contentTerms;
+    QStringList m_requiredContentTerms;
     Qt::CaseSensitivity m_caseSensitivity = Qt::CaseInsensitive;
     QStringList m_nameHints;
 };

@@ -1220,6 +1220,38 @@ core::Result<Query> Query::parse(const QString &text, const QueryOptions &option
             }
         };
         collect(*query.m_root, false);
+        // Obligatorios: en un AND, los de cualquier hijo; en un OR, solo los
+        // que exigen todas sus ramas; bajo un NOT, ninguno.
+        const std::function<QStringList(const Query::Node &)> required = [&](const Query::Node &node) {
+            QStringList terms;
+            switch (node.kind) {
+            case Kind::Content:
+                if (!node.text.isEmpty()) {
+                    terms.append(node.text);
+                }
+                break;
+            case Kind::And:
+                for (const NodePtr &child : node.children) {
+                    terms += required(*child);
+                }
+                break;
+            case Kind::Or:
+                for (size_t i = 0; i < node.children.size(); ++i) {
+                    const QStringList branch = required(*node.children[i]);
+                    if (i == 0) {
+                        terms = branch;
+                    } else {
+                        terms.removeIf([&](const QString &term) { return !branch.contains(term); });
+                    }
+                }
+                break;
+            default:
+                break;
+            }
+            terms.removeDuplicates();
+            return terms;
+        };
+        query.m_requiredContentTerms = required(*query.m_root);
     }
     query.m_nameHints = query.m_root != nullptr ? nameHintsOf(*query.m_root) : QStringList();
     return query;

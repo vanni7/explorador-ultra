@@ -50,8 +50,8 @@ QString childPath(const QString &directory, const QString &name)
 class FileContent : public ContentSource
 {
 public:
-    FileContent(QString path, const SearchOptions &options, const tasks::CancelToken &cancel)
-        : m_path(std::move(path)), m_options(options), m_cancel(cancel)
+    FileContent(QString path, const SearchOptions &options, ContentCache *cache, const tasks::CancelToken &cancel)
+        : m_path(std::move(path)), m_options(options), m_cache(cache), m_cancel(cancel)
     {
     }
 
@@ -65,6 +65,7 @@ public:
     }
 
     bool wasOpened() const { return m_opened; }
+    bool cameFromIndex() const { return m_fromIndex; }
 
 private:
     bool load()
@@ -80,6 +81,18 @@ private:
         if (source == content::TextSource::Plain && info.size() > m_options.maxContentBytes) {
             return false;
         }
+        if (m_cache != nullptr) {
+            switch (m_cache->lookup(m_path, info.size(), info.lastModified().toMSecsSinceEpoch(), &m_text)) {
+            case ContentCache::Lookup::Text:
+                m_fromIndex = true;
+                return true;
+            case ContentCache::Lookup::Absent:
+                m_fromIndex = true;
+                return false;
+            case ContentCache::Lookup::Unknown:
+                break;
+            }
+        }
         m_opened = true;
         const core::Result<QString> text = m_options.textProvider ? m_options.textProvider(m_path, m_cancel)
                                                                   : content::extractText(m_path, m_cancel);
@@ -92,11 +105,13 @@ private:
 
     QString m_path;
     const SearchOptions &m_options;
+    ContentCache *m_cache = nullptr;
     const tasks::CancelToken &m_cancel;
     QString m_text;
     bool m_loaded = false;
     bool m_ok = false;
     bool m_opened = false;
+    bool m_fromIndex = false;
 };
 
 struct PendingFolder
@@ -169,6 +184,14 @@ SearchSummary searchTree(const QStringList &roots, const Query &query, const Sea
     listOptions.batchSize = 2000;
 
     const bool readsContent = query.usesContent();
+    // Los textos guardados del índice de contenido, si los hay.
+    std::unique_ptr<ContentCache> contentCache;
+    if (readsContent && options.contentCache) {
+        contentCache = options.contentCache();
+        if (contentCache) {
+            contentCache->prepare(query.requiredContentTerms(), query.caseSensitivity());
+        }
+    }
 
     while (!pending.empty() && !summary.truncated) {
         if (pause != nullptr) {
@@ -213,13 +236,15 @@ SearchSummary searchTree(const QStringList &roots, const Query &query, const Sea
                     if (cancel.isCancelled()) {
                         return;
                     }
-                    FileContent content(childPath(folder.path, entry.name), options, cancel);
+                    FileContent content(childPath(folder.path, entry.name), options, contentCache.get(), cancel);
                     matched = query.matches(itemFrom(entry), &content);
                     if (content.wasOpened()) {
                         ++progress.filesRead;
                         deliver(false);
+                    } else if (content.cameFromIndex()) {
+                        ++progress.textsFromIndex;
                     }
-                    if (matched && content.wasOpened() && content.text() != nullptr) {
+                    if (matched && (content.wasOpened() || content.cameFromIndex()) && content.text() != nullptr) {
                         // El trozo con la primera coincidencia, para enseñarlo.
                         for (const QString &term : query.contentTerms()) {
                             const content::Snippet snippet =

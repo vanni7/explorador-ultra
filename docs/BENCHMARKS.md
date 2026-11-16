@@ -149,6 +149,18 @@ El coste es arrancar el auxiliar una vez por hilo y pasar cada imagen por un PNG
 
 Unos 0,4 s por libro: es sacar el texto entero de cada PDF. Repetir la búsqueda cuesta lo mismo; para eso es el índice de texto completo (paso 2c).
 
+### Índice de contenido (FTS5 con trigramas, 16-nov)
+`eu-bench cindex <carpeta> <texto>`, misma carpeta de 48 PDF:
+
+| Qué | Resultado |
+|---|---|
+| Crear el índice | 21,1 s; 48 documentos, 10 millones de caracteres; base de 32 MB |
+| Repasarlo sin cambios | 2 ms (solo compara tamaño y fecha) |
+| Buscar «felicidad» con índice | **25 ms**, 42 resultados, ningún documento leído del disco |
+| La misma búsqueda sin índice | 19,4 s, 42 resultados |
+
+La base ocupa unas 3 veces el texto guardado (los trigramas). Por eso la ventana recomienda carpetas de documentos y no unidades enteras.
+
 ### No medido todavía (pendiente)
 - Tiempo de apertura real de una carpeta en Archivos de GNOME (no hay forma fiable de automatizarlo; `gio list` es una aproximación de su motor, no de su interfaz).
 - Caché fría, HDD, USB y unidades de red.

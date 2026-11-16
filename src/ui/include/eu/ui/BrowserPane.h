@@ -88,6 +88,11 @@ public:
     /// búsquedas que el índice puede contestar salen de él, al instante.
     using IndexResolver = std::function<std::optional<index::Index>(const QString &)>;
     void setIndexResolver(IndexResolver resolver) { m_indexResolver = std::move(resolver); }
+    /// Da, para las carpetas de una búsqueda, cómo consultar el texto ya
+    /// guardado de sus documentos (índice de contenido). Opcional.
+    using ContentCacheResolver =
+        std::function<std::function<std::unique_ptr<search::ContentCache>()>(const QStringList &)>;
+    void setContentCacheResolver(ContentCacheResolver resolver) { m_contentCacheResolver = std::move(resolver); }
     /// true si los resultados a la vista salieron del índice y no se han
     /// comprobado en el disco.
     bool searchFromIndex() const { return m_searchFromIndex; }
@@ -256,6 +261,7 @@ private:
     QPushButton *m_searchAgainButton = nullptr;
     QPushButton *m_searchVerifyButton = nullptr;
     IndexResolver m_indexResolver;
+    ContentCacheResolver m_contentCacheResolver;
     bool m_searchFromIndex = false;
     bool m_searchForceDisk = false;   ///< La próxima búsqueda no usa el índice.
     tasks::TaskHandle m_searchTask;

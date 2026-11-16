@@ -11,6 +11,7 @@
 
 #include <condition_variable>
 #include <functional>
+#include <memory>
 #include <mutex>
 #include <vector>
 
@@ -38,7 +39,28 @@ struct SearchProgress
     qint64 hits = 0;                ///< Resultados encontrados hasta ahora.
     qint64 unreadableFolders = 0;   ///< Carpetas que no se pudieron leer (permisos…).
     qint64 filesRead = 0;           ///< Archivos abiertos para mirar su contenido.
+    qint64 textsFromIndex = 0;      ///< Archivos cuyo texto vino del índice de contenido.
     QString currentFolder;          ///< La que se está leyendo.
+};
+
+/// Textos ya sacados y guardados (el índice de contenido, SPEC §6.5). La
+/// búsqueda lo consulta antes de leer un documento: si lo tiene al día, no
+/// hace falta abrirlo. Se crea, se usa y se destruye en el hilo de la búsqueda.
+class ContentCache
+{
+public:
+    enum class Lookup {
+        Unknown,   ///< No lo tiene, o no al día: hay que leer el archivo.
+        Text,      ///< Lo tiene al día; el texto va en `text`.
+        Absent,    ///< Lo tiene al día y sabe que no sirve: no contiene lo
+                   ///< obligatorio, o no tiene texto.
+    };
+
+    virtual ~ContentCache() = default;
+    /// Antes de recorrer. `required`: textos que todo resultado debe contener.
+    virtual void prepare(const QStringList &required, Qt::CaseSensitivity sensitivity) = 0;
+    /// Para un archivo con este tamaño y fecha de modificación.
+    virtual Lookup lookup(const QString &path, qint64 size, qint64 modifiedMs, QString *text) = 0;
 };
 
 struct SearchOptions
@@ -58,6 +80,9 @@ struct SearchOptions
     /// este proceso con content::extractText. La interfaz pone uno que lee
     /// los documentos en el proceso auxiliar (un PDF dañado no la cierra).
     std::function<core::Result<QString>(const QString &, const tasks::CancelToken &)> textProvider;
+    /// Crea, en el hilo de la búsqueda, la consulta a los textos guardados.
+    /// Vacío o nulo: se lee todo del disco. Los resultados son los mismos.
+    std::function<std::unique_ptr<ContentCache>()> contentCache;
     /// Tope de resultados. Al alcanzarlo la búsqueda termina y se marca
     /// `truncated`: una consulta que lo cumple todo no debe agotar la memoria.
     qint64 maxHits = 200000;

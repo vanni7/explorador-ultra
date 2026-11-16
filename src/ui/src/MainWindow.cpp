@@ -9,6 +9,8 @@
 #include "eu/ui/BrowserPane.h"
 #include "eu/trash/Trash.h"
 #include "eu/ui/FileClipboard.h"
+#include "eu/thumbs/Isolated.h"
+#include "eu/ui/ContentIndexDialog.h"
 #include "eu/ui/IndexDialog.h"
 #include "eu/ui/PathBar.h"
 #include "eu/ui/InlinePlayer.h"
@@ -77,6 +79,15 @@ MainWindow::MainWindow(tasks::Scheduler &scheduler, std::shared_ptr<journal::Jou
         m_scheduler, QStandardPaths::writableLocation(QStandardPaths::AppDataLocation) + QStringLiteral("/indice"),
         this);
     m_indexService->setExcludedNames({trash::trashFolderName()});
+    // Índices de contenido (SPEC §6.5): el texto de los documentos de las
+    // carpetas elegidas, sacado en el proceso auxiliar.
+    m_contentIndexService = new index::ContentIndexService(
+        m_scheduler, QStandardPaths::writableLocation(QStandardPaths::AppDataLocation) + QStringLiteral("/indice"),
+        this);
+    m_contentIndexService->setExcludedNames({trash::trashFolderName()});
+    m_contentIndexService->setTextProvider([](const QString &path, const tasks::CancelToken &cancel) {
+        return thumbs::extractTextIsolated(path, cancel);
+    });
     // Miniaturas: en la carpeta de caché del sistema (se puede borrar sin
     // perder nada), con 256 MB como mucho en memoria (SPEC §5.5).
     // Topes configurables en el archivo de configuración, sección [miniaturas]:
@@ -128,6 +139,7 @@ MainWindow::MainWindow(tasks::Scheduler &scheduler, std::shared_ptr<journal::Jou
     m_indexLabel->hide();
     statusBar()->addPermanentWidget(m_indexLabel);
     connect(m_indexService, &index::IndexService::changed, this, &MainWindow::updateIndexLabel);
+    connect(m_contentIndexService, &index::ContentIndexService::changed, this, &MainWindow::updateIndexLabel);
     statusBar()->addPermanentWidget(m_unitsLabel);
 
     createActions();
@@ -265,6 +277,10 @@ void MainWindow::createActions()
     m_indexAction = new QAction(tr("Índice de búsqueda…"), this);
     m_indexAction->setToolTip(tr("Elegir qué unidades se indexan para buscar en ellas al instante"));
     connect(m_indexAction, &QAction::triggered, this, &MainWindow::showIndexDialog);
+    m_contentIndexAction = new QAction(tr("Índice de contenido…"), this);
+    m_contentIndexAction->setToolTip(tr("Elegir carpetas de documentos cuyo texto se guarda para buscar dentro "
+                                        "de ellos al instante"));
+    connect(m_contentIndexAction, &QAction::triggered, this, &MainWindow::showContentIndexDialog);
 
     m_searchAction = new QAction(themedIcon(QStringLiteral("edit-find"), QStyle::SP_FileDialogContentsView),
                                  tr("Buscar archivos y carpetas"), this);
@@ -342,6 +358,7 @@ void MainWindow::createActions()
     viewMenu->addAction(m_filterAction);
     viewMenu->addAction(m_searchAction);
     viewMenu->addAction(m_indexAction);
+    viewMenu->addAction(m_contentIndexAction);
     viewMenu->addSeparator();
     viewMenu->addAction(m_showHiddenAction);
     viewMenu->addAction(m_binaryUnitsAction);
@@ -1266,6 +1283,8 @@ BrowserPane *MainWindow::openTab(const QString &path)
                                                                 : core::SizeUnits::Decimal);
 
     pane->setIndexResolver([this](const QString &folder) { return m_indexService->indexFor(folder); });
+    pane->setContentCacheResolver(
+        [this](const QStringList &roots) { return m_contentIndexService->cacheFactory(roots); });
     pane->setThumbnailService(m_thumbnailService);
     pane->setThumbnailSize(m_thumbnailSize);
     pane->setInlinePlayer(m_inlinePlayer);
@@ -1407,6 +1426,7 @@ void MainWindow::buildSearchOptions()
     m_searchCaseAction = menu->addAction(tr("Distinguir mayúsculas y minúsculas"));
     menu->addSeparator();
     menu->addAction(m_indexAction);
+    menu->addAction(m_contentIndexAction);
     m_searchCaseAction->setCheckable(true);
     connect(m_searchCaseAction, &QAction::toggled, this, &MainWindow::updateSearchHints);
     menu->setToolTipsVisible(true);
@@ -1419,6 +1439,9 @@ void MainWindow::startIndexing(bool mayAsk)
     const QStringList roots = settings.value(QStringLiteral("index/roots")).toStringList();
     for (const QString &root : roots) {
         m_indexService->addRoot(root);
+    }
+    for (const QString &root : settings.value(QStringLiteral("contenido/carpetas")).toStringList()) {
+        m_contentIndexService->addRoot(root);
     }
     if (mayAsk && !settings.value(QStringLiteral("index/asked"), false).toBool()) {
         // Con la ventana ya a la vista, no antes.
@@ -1489,6 +1512,27 @@ void MainWindow::runIndexWizard()
     }
 }
 
+void MainWindow::saveContentIndexRoots()
+{
+    QSettings().setValue(QStringLiteral("contenido/carpetas"), m_contentIndexService->roots());
+}
+
+void MainWindow::showContentIndexDialog()
+{
+    BrowserPane *pane = currentPane();
+    // La carpeta a la vista; si es una búsqueda, la carpeta donde se buscó.
+    QString folder = pane != nullptr ? pane->currentPath() : QString();
+    if (isSearchLocation(folder)) {
+        folder = searchSpecOf(folder).origin;
+    }
+    if (isVirtualLocation(folder)) {
+        folder.clear();
+    }
+    ContentIndexDialog dialog(*m_contentIndexService, folder, this);
+    connect(&dialog, &ContentIndexDialog::rootsChanged, this, &MainWindow::saveContentIndexRoots);
+    dialog.exec();
+}
+
 void MainWindow::showIndexDialog()
 {
     IndexDialog dialog(*m_indexService, [this] { return searchVolumes(); }, this);
@@ -1505,6 +1549,13 @@ void MainWindow::updateIndexLabel()
         if (status.state == index::RootStatus::State::Building
             || status.state == index::RootStatus::State::Updating) {
             working.append(tr("%1: %2").arg(QDir::toNativeSeparators(status.root), indexStateText(status)));
+        }
+    }
+    for (const index::ContentRootStatus &status : m_contentIndexService->status()) {
+        if (status.state == index::ContentRootStatus::State::Building
+            || status.state == index::ContentRootStatus::State::Updating) {
+            working.append(tr("contenido de %1: %2")
+                               .arg(QDir::toNativeSeparators(status.root), contentIndexStateText(status)));
         }
     }
     if (m_indexService->isPaused() && m_indexService->isBusy()) {
