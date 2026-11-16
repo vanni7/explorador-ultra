@@ -3,6 +3,8 @@
 
 #include <QCoreApplication>
 #include <QDateTime>
+#include <QStandardPaths>
+#include <QCryptographicHash>
 #include <QDir>
 #include <QDirIterator>
 #include <QFile>
@@ -103,6 +105,44 @@ QString safeRelativePath(const QString &insidePath)
         parts.append(piece);
     }
     return parts.join(QLatin1Char('/'));
+}
+
+core::Result<QString> extractEntryToTemp(const QString &archivePath, const QString &inner,
+                                         const tasks::CancelToken &cancel)
+{
+    const QFileInfo info(archivePath);
+    const QString key = archivePath + QLatin1Char('\n') + QString::number(info.size()) + QLatin1Char('\n')
+        + QString::number(info.lastModified().toMSecsSinceEpoch()) + QLatin1Char('\n') + inner;
+    const QString folder = QStandardPaths::writableLocation(QStandardPaths::TempLocation)
+        + QStringLiteral("/explorador-ultra-comprimidos/")
+        + QString::fromLatin1(QCryptographicHash::hash(key.toUtf8(), QCryptographicHash::Sha1).toHex().left(16));
+    const QString safe = safeRelativePath(inner);
+    if (safe.isEmpty()) {
+        return core::Error{core::ErrorCode::InvalidName, tr("Ruta no válida dentro del comprimido"), inner, 0};
+    }
+    // Solo el nombre del archivo, sin sus carpetas de dentro.
+    const QString target = folder + QLatin1Char('/') + safe.section(QLatin1Char('/'), -1);
+    if (QFileInfo(target).isFile()) {
+        return target;
+    }
+    QDir().mkpath(folder);
+    ExtractOptions options;
+    options.only = QStringList{inner};
+    const qsizetype slash = inner.lastIndexOf(QLatin1Char('/'));
+    if (slash > 0) {
+        options.stripPrefix = inner.left(slash);
+    }
+    const core::Result<ExtractResult> extracted = extractArchive(archivePath, folder, options, cancel);
+    if (!extracted.ok()) {
+        return extracted.error();
+    }
+    if (!QFileInfo(target).isFile()) {
+        return core::Error{core::ErrorCode::NotFound,
+                           extracted.value().skipped.isEmpty() ? tr("No está en el comprimido")
+                                                               : extracted.value().skipped.first(),
+                           inner, 0};
+    }
+    return target;
 }
 
 #ifndef EU_HAVE_LIBARCHIVE

@@ -1502,37 +1502,17 @@ void BrowserPane::openInsideArchive(const QString &location)
 {
     const QString archivePath = archivePathOf(location);
     const QString inner = archiveInnerOf(location);
-    // Cada archivo abierto, en su propia carpeta temporal: dos con el mismo
-    // nombre de comprimidos distintos no se pisan.
-    const QString folder = QStandardPaths::writableLocation(QStandardPaths::TempLocation)
-        + QStringLiteral("/explorador-ultra-abiertos/")
-        + QString::fromLatin1(QCryptographicHash::hash((archivePath + QLatin1Char('\n') + inner).toUtf8(),
-                                                       QCryptographicHash::Sha1)
-                                  .toHex()
-                                  .left(12));
     const QPointer<BrowserPane> self(this);
     m_scheduler.submitForPaths(tasks::Category::General, tasks::Priority::UserInteraction, {archivePath},
-                               [self, archivePath, inner, folder](const tasks::CancelToken &cancel) {
-        const QString target = folder + QLatin1Char('/') + inner;
-        QString problem;
-        if (!QFileInfo::exists(target)) {
-            QDir().mkpath(folder);
-            archive::ExtractOptions options;
-            options.only = QStringList{inner};
-            const core::Result<archive::ExtractResult> extracted =
-                archive::extractArchive(archivePath, folder, options, cancel);
-            if (!extracted.ok()) {
-                problem = extracted.error().message;
-            } else if (!extracted.value().skipped.isEmpty()) {
-                problem = extracted.value().skipped.first();
-            }
-        }
-        QMetaObject::invokeMethod(qApp, [self, target, problem] {
+                               [self, archivePath, inner, location](const tasks::CancelToken &cancel) {
+        // Se saca a una carpeta temporal propia y se abre con su programa.
+        const core::Result<QString> extracted = archive::extractEntryToTemp(archivePath, inner, cancel);
+        QMetaObject::invokeMethod(qApp, [self, extracted, location] {
             if (!self) {
                 return;
             }
-            if (!problem.isEmpty() || !QDesktopServices::openUrl(QUrl::fromLocalFile(target))) {
-                emit self->openFailed(target);
+            if (!extracted.ok() || !QDesktopServices::openUrl(QUrl::fromLocalFile(extracted.value()))) {
+                emit self->openFailed(location);
             }
         }, Qt::QueuedConnection);
     });

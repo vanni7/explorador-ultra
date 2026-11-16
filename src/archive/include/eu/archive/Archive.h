@@ -105,6 +105,13 @@ core::Result<ExtractResult> extractArchive(const QString &archivePath, const QSt
 core::Status createArchive(const QString &outputPath, Format format, const QStringList &sources,
                            const tasks::CancelToken &cancel, const ProgressCallback &progress = {});
 
+/// Saca una sola entrada a una carpeta temporal propia y devuelve dónde quedó.
+/// La carpeta depende del comprimido (ruta, tamaño y fecha) y de la entrada:
+/// pedirla otra vez no vuelve a extraer, y si el comprimido cambia se extrae
+/// de nuevo. Sirve para abrir o previsualizar algo de dentro.
+core::Result<QString> extractEntryToTemp(const QString &archivePath, const QString &inner,
+                                         const tasks::CancelToken &cancel);
+
 /// La ruta interna, limpia y segura para extraer: sin "." ni "..", sin "/"
 /// inicial ni letra de unidad, con "/" como separador. Vacía si no es segura.
 QString safeRelativePath(const QString &insidePath);
