@@ -52,6 +52,8 @@ jobs:
         uses: jurplel/install-qt-action@v4
         with:
           version: ${{ env.QT_VERSION }}
+          # Fase 3: reproducir en las miniaturas, PDF y más formatos de imagen.
+          modules: 'qtmultimedia qtpdf qtimageformats'
           cache: true
 
       # aqtinstall (lo que usa install-qt-action) no encuentra Qt 6.12 para
