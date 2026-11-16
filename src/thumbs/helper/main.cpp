@@ -30,6 +30,16 @@
 #include <sys/resource.h>
 #endif
 
+// Con los sanitizadores (solo en pruebas) no se pone límite de memoria: ASan
+// reserva una "memoria sombra" de varios TB que ya lo superaría al arrancar.
+#if defined(__SANITIZE_ADDRESS__) || defined(__SANITIZE_THREAD__)
+#define EU_UNDER_SANITIZER 1
+#elif defined(__has_feature)
+#if __has_feature(address_sanitizer) || __has_feature(thread_sanitizer)
+#define EU_UNDER_SANITIZER 1
+#endif
+#endif
+
 namespace {
 
 void reply(const QJsonObject &object)
@@ -45,7 +55,7 @@ int main(int argc, char *argv[])
 {
     // Sin ventanas: solo se pinta en imágenes (las fuentes sí hacen falta).
     qputenv("QT_QPA_PLATFORM", "offscreen");
-#ifdef Q_OS_UNIX
+#if defined(Q_OS_UNIX) && !defined(EU_UNDER_SANITIZER)
     // Un archivo hecho para agotar la memoria no se lleva el equipo por
     // delante: este proceso no puede usar más de 3 GB. RLIMIT_DATA y no
     // RLIMIT_AS: el lector de PDF reserva mucho espacio de direcciones que no
