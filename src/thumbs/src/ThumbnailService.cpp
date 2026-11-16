@@ -1,6 +1,8 @@
 // Explorador Ultra — SPDX-License-Identifier: GPL-3.0-or-later
 #include "eu/thumbs/ThumbnailService.h"
 
+#include "eu/thumbs/Isolated.h"
+
 #include <QCoreApplication>
 #include <QPointer>
 
@@ -47,7 +49,8 @@ ThumbnailCache::Entry ThumbnailService::request(const ThumbnailRequest &request)
         tasks::Category::Thumbnails, priority, {request.path},
         [self, cache, request, key, id](const tasks::CancelToken &cancel) {
             if (cache->load(request).state == ThumbnailCache::State::Missing) {
-                const core::Result<QImage> image = renderThumbnail(request, cancel);
+                // En el proceso auxiliar: un archivo dañado no cierra la aplicación.
+                const core::Result<QImage> image = renderThumbnailIsolated(request, cancel);
                 if (image.ok()) {
                     cache->store(request, image.value());
                 } else if (image.error().code != core::ErrorCode::Cancelled) {

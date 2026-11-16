@@ -2,6 +2,7 @@
 #include "eu/ui/PreviewPanel.h"
 
 #include "eu/meta/Metadata.h"
+#include "eu/thumbs/Isolated.h"
 #include "eu/thumbs/Thumbnail.h"
 
 #include <QApplication>
@@ -263,7 +264,7 @@ void PreviewPanel::startLoading()
                     loaded.problem = file.errorString();
                 }
             } else if (source != thumbs::ThumbnailSource::None) {
-                const core::Result<QImage> picture = thumbs::renderThumbnail(request, cancel);
+                const core::Result<QImage> picture = thumbs::renderThumbnailIsolated(request, cancel);
                 if (picture.ok()) {
                     loaded.picture = picture.value();
                 } else if (picture.error().code != core::ErrorCode::Cancelled) {

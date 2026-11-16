@@ -68,3 +68,10 @@ add_dependencies(test_ops_engine eu-crash-helper)
 if(TARGET test_ui_main_window)
     add_dependencies(test_ui_main_window eu-crash-helper)
 endif()
+
+# Las pruebas de miniaturas y de la ventana usan el proceso auxiliar.
+foreach(test_name test_thumbs test_ui_main_window)
+    if(TARGET ${test_name})
+        add_dependencies(${test_name} eu-thumbnailer)
+    endif()
+endforeach()

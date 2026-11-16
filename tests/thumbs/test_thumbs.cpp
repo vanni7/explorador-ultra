@@ -1,6 +1,7 @@
 // Explorador Ultra — SPDX-License-Identifier: GPL-3.0-or-later
 #include "eu/thumbs/Thumbnail.h"
 #include "eu/thumbs/ThumbnailCache.h"
+#include "eu/thumbs/Isolated.h"
 #include "eu/thumbs/ThumbnailService.h"
 #include "../../src/thumbs/src/OfficeThumbnail.h"
 #include "../support/TestMedia.h"
@@ -23,6 +24,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <thread>
 #include <cstring>
 
 using namespace eu;
@@ -117,6 +119,14 @@ private:
     QString file(const QString &name) const { return m_dir.filePath(name); }
 
 private slots:
+    void initTestCase()
+    {
+        // Ganchos del auxiliar, solo para estas pruebas: se cierra o se cuelga
+        // con los archivos que llevan estas marcas en el nombre.
+        qputenv("EU_THUMBNAILER_CRASH_ON", "__revienta__");
+        qputenv("EU_THUMBNAILER_HANG_ON", "__cuelga__");
+    }
+
     void knowsWhichFilesHaveAThumbnail()
     {
         QCOMPARE(thumbnailSourceFor(QStringLiteral("foto.JPG")), ThumbnailSource::Image);
@@ -463,6 +473,59 @@ private slots:
         writeBytes(file(QStringLiteral("falsa.cr2")), QByteArray(5000, 'r'));
         QVERIFY(!renderThumbnail(requestFor(file(QStringLiteral("falsa.cr2"))), {}).ok());
 #endif
+    }
+
+    void isolatedDecodingSurvivesCrashesAndHangs()
+    {
+        QVERIFY2(hasThumbnailHelper(), "eu-thumbnailer debería estar junto a las pruebas");
+        QVERIFY(testImage(300, 200).save(file(QStringLiteral("aislada.png"))));
+        auto thumbnail = renderThumbnailIsolated(requestFor(file(QStringLiteral("aislada.png")), 128), {});
+        QVERIFY2(thumbnail.ok(), thumbnail.ok() ? "" : qPrintable(thumbnail.error().message));
+        QCOMPARE(thumbnail.value().size(), QSize(128, 85));
+        QVERIFY(isReddish(thumbnail.value().pixel(10, 40)));
+
+        // Un archivo que cierra el decodificador: aquí solo es un error…
+        QVERIFY(testImage(50, 50).save(file(QStringLiteral("x__revienta__.png"))));
+        const auto crashed = renderThumbnailIsolated(requestFor(file(QStringLiteral("x__revienta__.png"))), {});
+        QVERIFY(!crashed.ok());
+        QCOMPARE(crashed.error().code, core::ErrorCode::Corrupted);
+        // …y el siguiente funciona (se arrancó otro auxiliar).
+        QVERIFY(renderThumbnailIsolated(requestFor(file(QStringLiteral("aislada.png"))), {}).ok());
+
+        // Uno que lo deja colgado: se corta al tiempo máximo.
+        setThumbnailHelperTimeout(std::chrono::milliseconds(1500));
+        QVERIFY(testImage(50, 50).save(file(QStringLiteral("x__cuelga__.png"))));
+        QElapsedTimer timer;
+        timer.start();
+        const auto hung = renderThumbnailIsolated(requestFor(file(QStringLiteral("x__cuelga__.png"))), {});
+        QVERIFY(!hung.ok());
+        QCOMPARE(hung.error().code, core::ErrorCode::Timeout);
+        QVERIFY(timer.elapsed() < 6000);
+        setThumbnailHelperTimeout(std::chrono::seconds(30));
+        QVERIFY(renderThumbnailIsolated(requestFor(file(QStringLiteral("aislada.png"))), {}).ok());
+
+        // Cancelar mientras el auxiliar está ocupado sale enseguida.
+        tasks::CancelSource source;
+        std::thread canceller([&source] {
+            std::this_thread::sleep_for(std::chrono::milliseconds(300));
+            source.cancel();
+        });
+        timer.restart();
+        const auto cancelled = renderThumbnailIsolated(requestFor(file(QStringLiteral("x__cuelga__.png"))),
+                                                       source.token());
+        canceller.join();
+        QVERIFY(!cancelled.ok());
+        QCOMPARE(cancelled.error().code, core::ErrorCode::Cancelled);
+        QVERIFY(timer.elapsed() < 3000);
+
+        // El servicio usa el auxiliar: el archivo que lo cierra queda como fallido.
+        auto shared = std::make_shared<ThumbnailCache>(QString());
+        ThumbnailService service(m_scheduler, shared);
+        QSignalSpy ready(&service, &ThumbnailService::ready);
+        const ThumbnailRequest bad = requestFor(file(QStringLiteral("x__revienta__.png")));
+        service.request(bad);
+        QVERIFY(ready.wait(10000));
+        QCOMPARE(service.request(bad).state, ThumbnailCache::State::Failed);
     }
 
     void cacheKeepsThumbnailsInMemoryAndOnDisk()

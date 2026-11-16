@@ -5,9 +5,11 @@ add_library(eu_thumbs STATIC
     src/MediaThumbnail.h
     src/OfficeThumbnail.cpp
     src/OfficeThumbnail.h
+    src/Isolated.cpp
     src/Thumbnail.cpp
     src/ThumbnailCache.cpp
     src/ThumbnailService.cpp
+    include/eu/thumbs/Isolated.h
     include/eu/thumbs/Thumbnail.h
     include/eu/thumbs/ThumbnailCache.h
     include/eu/thumbs/ThumbnailService.h)
@@ -31,3 +33,10 @@ if(EU_LIBRAW_FOUND)
     target_link_libraries(eu_thumbs PRIVATE PkgConfig::EU_LIBRAW)
     target_compile_definitions(eu_thumbs PUBLIC EU_HAVE_LIBRAW)
 endif()
+
+# El proceso auxiliar que decodifica de forma aislada (Isolated.h). Va junto
+# al ejecutable principal (build/<preset>/bin).
+qt_add_executable(eu-thumbnailer helper/main.cpp)
+set_target_properties(eu-thumbnailer PROPERTIES WIN32_EXECUTABLE FALSE MACOSX_BUNDLE FALSE)
+target_link_libraries(eu-thumbnailer PRIVATE eu::thumbs Qt6::Gui)
+eu_target_defaults(eu-thumbnailer)
