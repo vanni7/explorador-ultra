@@ -1,0 +1,11 @@
+# Supresiones de ThreadSanitizer (solo para el preset "tsan").
+#
+# Qt no está compilado con TSan: lo que pasa dentro de sus bibliotecas no se
+# ve como atómico aunque lo sea. Aquí solo se calla lo comprobado:
+#
+# QObject::~QObject libera el contador de referencias débiles (el de QPointer)
+# con una operación atómica dentro de Qt, mientras otro hilo suelta su copia
+# de un QPointer (atómica, en nuestro binario). TSan solo ve una de las dos
+# como atómica e informa de una carrera que no existe (test_ui_file_actions,
+# destroyingWhileBusyIsSafe, intermitente).
+race:QObject::~QObject

@@ -31,9 +31,11 @@ struct Gate
 
     TaskFunction task()
     {
-        return [this](const CancelToken &) {
+        // También sale si se cancela: así, si una prueba falla a medias, el
+        // planificador puede cerrarse sin esperar para siempre.
+        return [this](const CancelToken &cancel) {
             entered = true;
-            while (!open) {
+            while (!open && !cancel.isCancelled()) {
                 std::this_thread::sleep_for(1ms);
             }
         };
@@ -450,6 +452,21 @@ private slots:
 
     void longTasksGiveASlowDiskToWhatTheUserIsWaitingFor()
     {
+        // Todo lo que usan las tareas se declara antes que el planificador:
+        // si una comprobación falla y la prueba sale, el planificador se
+        // destruye primero (cancela y espera) y nada queda usando variables
+        // ya destruidas.
+        std::atomic<int> blocks{0};
+        std::atomic<bool> stop{false};
+        Gate listing;
+        Gate memoryListing;
+        const auto copy = [&](const CancelToken &cancel) {
+            while (!stop && !cancel.isCancelled()) {
+                cancel.yieldToInteractive(5s);
+                ++blocks;
+                std::this_thread::sleep_for(1ms);   // en Windows dura hasta ~15 ms
+            }
+        };
         Scheduler scheduler;
         const QString hdd = QStringLiteral("hdd");
         const QString memory = QStringLiteral("tmpfs");
@@ -457,30 +474,20 @@ private slots:
         scheduler.setDeviceClass(memory, DeviceClass::Virtual);
 
         // Una "copia" que avanza a bloques y cede entre bloque y bloque.
-        std::atomic<int> blocks{0};
-        std::atomic<bool> stop{false};
-        const auto copy = [&](const CancelToken &cancel) {
-            while (!stop && !cancel.isCancelled()) {
-                cancel.yieldToInteractive(5s);
-                ++blocks;
-                std::this_thread::sleep_for(1ms);
-            }
-        };
         TaskHandle onHdd = scheduler.submit(Category::Transfer, Priority::ActiveTransfer, {hdd}, copy);
-        QTRY_VERIFY(blocks > 10);
+        QTRY_VERIFY_WITH_TIMEOUT(blocks > 10, 5000);
 
         // Mientras se abre una carpeta de ese disco, la copia no avanza…
-        Gate listing;
         TaskHandle list = scheduler.submit(Category::Listing, Priority::VisibleNavigation, {hdd}, listing.task());
         listing.waitUntilEntered();
-        std::this_thread::sleep_for(30ms);
+        std::this_thread::sleep_for(60ms);   // la copia termina el bloque que tenía empezado
         const int paused = blocks;
-        std::this_thread::sleep_for(150ms);
+        std::this_thread::sleep_for(200ms);
         QVERIFY(blocks - paused <= 1);
         // …y sigue en cuanto termina.
         listing.open = true;
         QVERIFY(list.waitFor(5s));
-        QTRY_VERIFY(blocks > paused + 10);
+        QTRY_VERIFY_WITH_TIMEOUT(blocks > paused + 10, 5000);
         stop = true;
         QVERIFY(onHdd.waitFor(5s));
 
@@ -488,13 +495,11 @@ private slots:
         stop = false;
         blocks = 0;
         TaskHandle inMemory = scheduler.submit(Category::Transfer, Priority::ActiveTransfer, {memory}, copy);
-        Gate memoryListing;
         TaskHandle list2 = scheduler.submit(Category::Listing, Priority::VisibleNavigation, {memory},
                                             memoryListing.task());
         memoryListing.waitUntilEntered();
         const int before = blocks;
-        std::this_thread::sleep_for(150ms);
-        QVERIFY(blocks - before > 10);
+        QTRY_VERIFY_WITH_TIMEOUT(blocks > before + 10, 5000);
         memoryListing.open = true;
         stop = true;
         QVERIFY(list2.waitFor(5s) && inMemory.waitFor(5s));
@@ -502,11 +507,12 @@ private slots:
 
     void yieldingNeverStarvesALongTask()
     {
-        Scheduler scheduler;
-        const QString hdd = QStringLiteral("hdd");
-        scheduler.setDeviceClass(hdd, DeviceClass::Hdd);
         std::atomic<int> blocks{0};
         std::atomic<bool> stop{false};
+        Gate endless;   // alguien navegando sin parar
+        Scheduler scheduler;   // después de lo que usan las tareas (ver la prueba anterior)
+        const QString hdd = QStringLiteral("hdd");
+        scheduler.setDeviceClass(hdd, DeviceClass::Hdd);
         TaskHandle copy = scheduler.submit(Category::Transfer, Priority::ActiveTransfer, {hdd},
                                            [&](const CancelToken &cancel) {
             while (!stop && !cancel.isCancelled()) {
@@ -515,17 +521,13 @@ private slots:
                 std::this_thread::sleep_for(1ms);
             }
         });
-        QTRY_VERIFY(blocks > 5);
+        QTRY_VERIFY_WITH_TIMEOUT(blocks > 5, 5000);
 
-        Gate endless;   // alguien navegando sin parar
-        // Pase lo que pase en la prueba, la tarea interminable se suelta al
-        // salir: si no, el planificador esperaría por ella para siempre.
-        const std::unique_ptr<Gate, void (*)(Gate *)> release(&endless, [](Gate *gate) { gate->open = true; });
         TaskHandle list = scheduler.submit(Category::Listing, Priority::UserInteraction, {hdd}, endless.task());
         endless.waitUntilEntered();
         // Tras 100 ms cediendo, trabaja un segundo sin ceder.
         const int before = blocks;
-        QTRY_VERIFY_WITH_TIMEOUT(blocks > before + 20, 2000);
+        QTRY_VERIFY_WITH_TIMEOUT(blocks > before + 20, 5000);
         // Y cancelar mientras cede sale enseguida.
         copy.cancel();
         QVERIFY(copy.waitFor(1s));

@@ -33,6 +33,8 @@ Un módulo solo puede depender de módulos de capas inferiores. Solo la capa 5 u
 | 5 | `ui`, `app` | todo lo anterior, Qt Widgets |
 | aparte | `indexsvc-win` | solo `core`; proceso separado, habla con `index` por *named pipe* |
 
+Nota de implementación (Fase 3): `thumbs` (miniaturas, caché, servicio y el cliente del proceso auxiliar) y `meta` (metadatos por tipo) no usan Widgets. La previsualización de §3.1 no es un módulo aparte: el panel (`ui/PreviewPanel`) usa `thumbs` para las imágenes y `meta` para los datos. Lo que decodifica archivos (Qt Image I/O, PDFium, FFmpeg, LibRaw, libarchive, Exiv2) corre en el proceso auxiliar `eu-thumbnailer`, uno por hilo de miniaturas, que habla JSON por su entrada y salida estándar; si se cierra o se cuelga, solo se pierde ese archivo. La reproducción en la miniatura (`ui/InlinePlayer`, Qt Multimedia) es una por ventana.
+
 Nota de implementación (Fase 2): `index` depende de `search`, y no al revés como dice la tabla. El índice evalúa la misma `search::Query` que la búsqueda directa y entrega los mismos `search::Hit`, de modo que una consulta da lo mismo por los dos caminos; quien elige entre índice y disco es la interfaz (`BrowserPane`). `index` contiene `Index` (la base SQLite de una unidad: sincronización por diferencias y búsqueda), `TreeWatcher` (inotify, ReadDirectoryChangesW o FSEvents) e `IndexService` (qué unidades se indexan y el trabajo en segundo plano).
 
 Nota de implementación: `ops` contiene las operaciones elementales (`FileOps`) y el motor (`Engine`). Como el motor usa la papelera y la papelera usa las operaciones elementales, el motor se compila como biblioteca aparte (`eu_ops_engine`), después de `eu_trash`.

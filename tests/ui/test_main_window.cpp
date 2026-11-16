@@ -6,7 +6,11 @@
 #include "eu/ui/PathBar.h"
 #include "eu/ui/SearchResultsModel.h"
 #include "eu/ui/IndexDialog.h"
+#include "eu/ui/InlinePlayer.h"
+#include "../support/TestMedia.h"
+#include "eu/ui/PreviewPanel.h"
 #include "eu/ui/Sidebar.h"
+#include "eu/ui/ThumbnailView.h"
 #include "eu/ui/TrashDialog.h"
 #include "eu/ui/VolumesView.h"
 
@@ -1221,6 +1225,236 @@ private slots:
         QVERIFY(service->roots().isEmpty());
         QVERIFY(searchFor(QStringLiteral("playa")));
         QVERIFY(!pane->searchFromIndex());
+    }
+
+    void thumbnailViewKeepsTheSelectionAndShowsImages()
+    {
+        QTemporaryDir data;
+        QTemporaryDir directory;
+        for (const QString &name : {QStringLiteral("playa.png"), QStringLiteral("monte.png")}) {
+            QImage image(300, 200, QImage::Format_RGB32);
+            image.fill(Qt::darkGreen);
+            QVERIFY(image.save(directory.filePath(name)));
+        }
+        writeFile(directory.filePath(QStringLiteral("notas.txt")), 10);
+        QVERIFY(QDir(directory.path()).mkdir(QStringLiteral("carpeta")));
+
+        MainWindow window(m_scheduler, openJournal(data));
+        BrowserPane *pane = window.openTab(directory.path());
+        QVERIFY(waitReady(pane));
+        window.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&window));
+        selectNames(pane, {QStringLiteral("playa.png")});
+        QCOMPARE(pane->selectedCount(), 1);
+
+        // Ctrl+2 cambia a miniaturas sin perder la carpeta ni la selección.
+        window.setViewMode(BrowserPane::ViewMode::Thumbnails);
+        QCOMPARE(pane->viewMode(), BrowserPane::ViewMode::Thumbnails);
+        ThumbnailView *thumbnails = pane->thumbnailView();
+        QVERIFY(thumbnails->isVisible());
+        QVERIFY(!pane->view()->isVisible());
+        QCOMPARE(pane->fileView(), static_cast<QAbstractItemView *>(thumbnails));
+        QCOMPARE(pane->selectedCount(), 1);
+        QCOMPARE(thumbnails->selectionModel()->selectedRows().size(), 1);
+        QCOMPARE(thumbnails->model()->rowCount(), 4);
+
+        // Las miniaturas de lo que se ve se generan solas, en segundo plano.
+        thumbs::ThumbnailService *service = window.thumbnailService();
+        const auto stateOf = [&](const QString &name) {
+            const QFileInfo info(directory.filePath(name));
+            thumbs::ThumbnailRequest request;
+            request.path = QDir::cleanPath(info.filePath());
+            request.size = info.size();
+            request.modifiedMs = info.lastModified().toMSecsSinceEpoch();
+            request.maxSide = 256;   // 160 px lógicos con escala 1, redondeado al escalón
+            return service->cache().lookupMemory(request).state;
+        };
+        QTRY_COMPARE_WITH_TIMEOUT(stateOf(QStringLiteral("playa.png")), thumbs::ThumbnailCache::State::Ready, 10000);
+        QTRY_COMPARE_WITH_TIMEOUT(stateOf(QStringLiteral("monte.png")), thumbs::ThumbnailCache::State::Ready, 10000);
+        QTRY_COMPARE_WITH_TIMEOUT(service->pendingCount(), 0, 10000);   // también la carpeta y el texto
+
+        // Seleccionar aquí, con el ratón y con Mayús+flecha, cuenta igual que en detalles.
+        const int montoRow = pane->model()->rowOfName(QStringLiteral("monte.png"));
+        const QRect montoRect = thumbnails->visualRect(pane->model()->index(montoRow, 0));
+        QTest::mouseClick(thumbnails->viewport(), Qt::LeftButton, Qt::NoModifier, montoRect.center());
+        QCOMPARE(pane->selectedCount(), 1);
+        QTest::keyClick(thumbnails, Qt::Key_Right, Qt::ShiftModifier);
+        QCOMPARE(pane->selectedCount(), 2);
+        selectNames(pane, {QStringLiteral("playa.png")});
+
+        // Cambiar el tamaño no pierde nada.
+        window.setThumbnailSize(96);
+        QCOMPARE(thumbnails->thumbnailSize(), 96);
+
+        // Renombrar también funciona aquí, con el nombre sin extensión seleccionado.
+        window.renameSelection();
+        QTRY_VERIFY(thumbnails->findChild<QLineEdit *>() != nullptr);
+        auto *editor = thumbnails->findChild<QLineEdit *>();
+        QTRY_COMPARE(editor->selectedText(), QStringLiteral("playa"));
+        editor->setText(QStringLiteral("costa.png"));
+        QTest::keyClick(editor, Qt::Key_Return);
+        QTRY_VERIFY_WITH_TIMEOUT(QFileInfo::exists(directory.filePath(QStringLiteral("costa.png"))), 10000);
+        QVERIFY(waitIdle(window));
+
+        // De vuelta a detalles (Ctrl+1), con lo renombrado seleccionado.
+        window.setViewMode(BrowserPane::ViewMode::Details);
+        QVERIFY(pane->view()->isVisible());
+        // La lista se vuelve a leer tras renombrar: se espera a que lo haga.
+        QTRY_COMPARE_WITH_TIMEOUT(pane->model()->entryAt(pane->view()->currentIndex().row()).name,
+                                  QStringLiteral("costa.png"), 10000);
+        QCOMPARE(pane->selectedCount(), 1);
+
+        // Una pestaña nueva hereda la vista de la activa.
+        window.setViewMode(BrowserPane::ViewMode::Thumbnails);
+        BrowserPane *second = window.openTab(directory.path());
+        QCOMPARE(second->viewMode(), BrowserPane::ViewMode::Thumbnails);
+    }
+
+    void previewPanelShowsDataAndContent()
+    {
+        QTemporaryDir data;
+        QTemporaryDir directory;
+        QImage image(400, 300, QImage::Format_RGB32);
+        image.fill(Qt::darkBlue);
+        QVERIFY(image.save(directory.filePath(QStringLiteral("mar.png"))));
+        {
+            QFile text(directory.filePath(QStringLiteral("notas.txt")));
+            QVERIFY(text.open(QIODevice::WriteOnly));
+            text.write("Primera línea\nSegunda línea\n");
+        }
+        {
+            QFile markdown(directory.filePath(QStringLiteral("LEEME.md")));
+            QVERIFY(markdown.open(QIODevice::WriteOnly));
+            markdown.write("# Título grande\n\nUn párrafo con **negrita**.\n");
+        }
+        writeFile(directory.filePath(QStringLiteral("datos.bin")), 100);
+
+        MainWindow window(m_scheduler, openJournal(data));
+        BrowserPane *pane = window.openTab(directory.path());
+        QVERIFY(waitReady(pane));
+        window.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&window));
+        PreviewPanel *panel = window.previewPanel();
+        QVERIFY(panel->isVisible());
+        QCOMPARE(panel->shown(), PreviewPanel::Shown::Nothing);   // nada seleccionado aún
+
+        // Una foto: sus datos arriba y la imagen abajo.
+        selectNames(pane, {QStringLiteral("mar.png")});
+        QCOMPARE(panel->title(), QStringLiteral("mar.png"));
+        QTRY_COMPARE_WITH_TIMEOUT(panel->shown(), PreviewPanel::Shown::Picture, 10000);
+        QVERIFY(!panel->isLoading());
+        QCOMPARE(panel->fieldValue(QStringLiteral("Dimensiones")), QStringLiteral("400 × 300 píxeles"));
+        QVERIFY(panel->fieldValue(QStringLiteral("Tamaño")).contains(QStringLiteral("bytes")));
+        QCOMPARE(panel->picture().size(), QSize(400, 300));   // no se agranda
+
+        // Un texto se ve como texto; un Markdown, ya formateado.
+        selectNames(pane, {QStringLiteral("notas.txt")});
+        QTRY_COMPARE_WITH_TIMEOUT(panel->shown(), PreviewPanel::Shown::Text, 10000);
+        QVERIFY(panel->text().startsWith(QStringLiteral("Primera línea")));
+        selectNames(pane, {QStringLiteral("LEEME.md")});
+        QTRY_COMPARE_WITH_TIMEOUT(panel->shown(), PreviewPanel::Shown::Markdown, 10000);
+        QVERIFY(panel->text().contains(QStringLiteral("Título grande")));
+        QVERIFY(!panel->text().contains(QLatin1Char('#')));
+
+        // Lo que no tiene vista previa lo dice, y enseña igual sus datos.
+        selectNames(pane, {QStringLiteral("datos.bin")});
+        QTRY_COMPARE_WITH_TIMEOUT(panel->shown(), PreviewPanel::Shown::Message, 10000);
+        QTRY_VERIFY(!panel->isLoading());
+        QVERIFY(panel->fieldValue(QStringLiteral("Tamaño")).contains(QStringLiteral("100")));
+
+        // Al recorrer deprisa, solo cuenta el último.
+        selectNames(pane, {QStringLiteral("mar.png")});
+        selectNames(pane, {QStringLiteral("notas.txt")});
+        QTRY_COMPARE_WITH_TIMEOUT(panel->shown(), PreviewPanel::Shown::Text, 10000);
+        QCOMPARE(panel->title(), QStringLiteral("notas.txt"));
+
+        // Varios seleccionados: lo dice y muestra el actual.
+        selectNames(pane, {QStringLiteral("mar.png"), QStringLiteral("notas.txt")});
+        QTRY_VERIFY(panel->fieldValue(QStringLiteral("Selección")).startsWith(QStringLiteral("2 elementos")));
+
+        // Alt+P lo oculta y vuelve a mostrar.
+        window.setPreviewVisible(false);
+        QVERIFY(!panel->isVisible());
+        window.setPreviewVisible(true);
+        QVERIFY(panel->isVisible());
+    }
+
+    void videosPlayInsideTheirThumbnail()
+    {
+#ifndef EU_HAVE_FFMPEG
+        QSKIP("Sin FFmpeg no se puede fabricar el video de prueba.");
+#else
+        if (!InlinePlayer::isAvailable()) {
+            QSKIP("Compilado sin Qt Multimedia.");
+        }
+        QTemporaryDir data;
+        QTemporaryDir directory;
+        QVERIFY(eu::testsupport::writeColorVideo(directory.filePath(QStringLiteral("a-paseo.mov")),
+                                                 {{Qt::red, 30}, {Qt::blue, 30}}, 10, QSize(160, 120)));
+        QVERIFY(eu::testsupport::writeColorVideo(directory.filePath(QStringLiteral("b-fiesta.mov")),
+                                                 {{Qt::green, 40}}, 10, QSize(160, 120)));
+        writeFile(directory.filePath(QStringLiteral("c-notas.txt")), 10);
+
+        MainWindow window(m_scheduler, openJournal(data));
+        BrowserPane *pane = window.openTab(directory.path());
+        QVERIFY(waitReady(pane));
+        window.setViewMode(BrowserPane::ViewMode::Thumbnails);
+        window.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&window));
+        ThumbnailView *thumbnails = pane->thumbnailView();
+        InlinePlayer *player = window.inlinePlayer();
+        const auto rectOf = [&](const QString &name) {
+            return thumbnails->visualRect(pane->model()->index(pane->model()->rowOfName(name), 0));
+        };
+        QVERIFY(thumbnails->isPlayableRow(pane->model()->rowOfName(QStringLiteral("a-paseo.mov"))));
+        QVERIFY(!thumbnails->isPlayableRow(pane->model()->rowOfName(QStringLiteral("c-notas.txt"))));
+
+        // Clic en ▶: se reproduce dentro de la miniatura, en silencio y sin seleccionarlo.
+        const QPoint button = thumbnails->playButtonRect(rectOf(QStringLiteral("a-paseo.mov"))).center();
+        QTest::mouseMove(thumbnails->viewport(), button);
+        QTest::mouseClick(thumbnails->viewport(), Qt::LeftButton, Qt::NoModifier, button);
+        QVERIFY(player->isPlaying());
+        QCOMPARE(player->path(), QDir::cleanPath(directory.filePath(QStringLiteral("a-paseo.mov"))));
+        QVERIFY(!player->isAudio());
+        QCOMPARE(pane->selectedCount(), 0);
+        QTRY_VERIFY_WITH_TIMEOUT(!player->frame().isNull() || !player->error().isEmpty(), 10000);
+        QVERIFY2(player->error().isEmpty(), qPrintable(player->error()));
+
+        // Otro clic en el botón (ahora ■) lo para.
+        QTest::mouseClick(thumbnails->viewport(), Qt::LeftButton, Qt::NoModifier, button);
+        QVERIFY(!player->isPlaying());
+
+        // Al sacar el puntero de la miniatura, se para.
+        QTest::mouseClick(thumbnails->viewport(), Qt::LeftButton, Qt::NoModifier, button);
+        QVERIFY(player->isPlaying());
+        QTest::mouseMove(thumbnails->viewport(), rectOf(QStringLiteral("c-notas.txt")).center());
+        QTRY_VERIFY(!player->isPlaying());
+
+        // Con el teclado: barra espaciadora sobre el elemento con el cursor.
+        thumbnails->setFocus();
+        selectNames(pane, {QStringLiteral("b-fiesta.mov")});
+        QTest::keyClick(thumbnails, Qt::Key_Space);
+        QVERIFY(player->isPlaying());
+        QVERIFY(player->path().endsWith(QStringLiteral("b-fiesta.mov")));
+        // Mover el ratón no lo para (lo empezó el teclado); mover el cursor, sí.
+        QTest::mouseMove(thumbnails->viewport(), rectOf(QStringLiteral("c-notas.txt")).center());
+        QVERIFY(player->isPlaying());
+        QTest::keyClick(thumbnails, Qt::Key_Right);
+        QTRY_VERIFY(!player->isPlaying());
+
+        // Desactivado en el menú Ver: no hay botón ni barra espaciadora que valga.
+        pane->setInlinePlaybackEnabled(false);
+        selectNames(pane, {QStringLiteral("b-fiesta.mov")});
+        QTest::keyClick(thumbnails, Qt::Key_Space);
+        QVERIFY(!player->isPlaying());
+        pane->setInlinePlaybackEnabled(true);
+
+        // Al cambiar de carpeta, lo que sonaba se para.
+        QTest::keyClick(thumbnails, Qt::Key_Space);
+        QVERIFY(player->isPlaying());
+        pane->navigateTo(data.path());
+        QTRY_VERIFY(!player->isPlaying());
+#endif
     }
 
     void searchCanBePausedAndStopped()

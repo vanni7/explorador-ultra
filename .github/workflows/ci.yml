@@ -35,7 +35,9 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y ninja-build libgl1-mesa-dev libxkbcommon-dev \
             libxkbcommon-x11-0 libxcb-cursor0 libxcb-icccm4 libxcb-image0 \
-            libxcb-keysyms1 libxcb-render-util0 libxcb-xinerama0 libxcb-xkb1 libfontconfig1
+            libxcb-keysyms1 libxcb-render-util0 libxcb-xinerama0 libxcb-xkb1 libfontconfig1 \
+            pkg-config libavformat-dev libavcodec-dev libswscale-dev libavutil-dev \
+            libarchive-dev libraw-dev libexiv2-dev
 
       - name: Ninja (macOS)
         if: runner.os == 'macOS'
@@ -50,6 +52,8 @@ jobs:
         uses: jurplel/install-qt-action@v4
         with:
           version: ${{ env.QT_VERSION }}
+          # Fase 3: reproducir en las miniaturas, PDF y más formatos de imagen.
+          modules: 'qtmultimedia qtpdf qtimageformats'
           cache: true
 
       # aqtinstall (lo que usa install-qt-action) no encuentra Qt 6.12 para
@@ -87,6 +91,18 @@ jobs:
 
       # Si una prueba falla sin dejar salida (el proceso murió de golpe), se
       # repite sola y con todo detalle: así queda el código de salida a la vista.
+      # Lo que escribió cada prueba que falló (tests/CMakeLists.txt lo guarda
+      # en un archivo además de en la salida).
+      - name: Informes de las pruebas que fallaron
+        if: failure()
+        shell: bash
+        run: |
+          for log in build/${{ matrix.preset }}/test-logs/*.txt; do
+            if grep -q -E "^FAIL!|^QFATAL|Totals: .* [1-9][0-9]* failed" "$log"; then
+              echo "::group::$log"; cat "$log"; echo "::endgroup::"
+            fi
+          done
+
       - name: Repetir las pruebas fallidas con detalle
         if: failure()
         run: ctest --preset ${{ matrix.preset }} --rerun-failed --output-on-failure -VV

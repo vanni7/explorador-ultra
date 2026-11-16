@@ -10,6 +10,8 @@
 #include "eu/ui/FileClipboard.h"
 #include "eu/ui/IndexDialog.h"
 #include "eu/ui/PathBar.h"
+#include "eu/ui/InlinePlayer.h"
+#include "eu/ui/PreviewPanel.h"
 #include "eu/ui/Sidebar.h"
 #include "eu/ui/TrashDialog.h"
 #include "eu/ui/VolumesView.h"
@@ -74,6 +76,27 @@ MainWindow::MainWindow(tasks::Scheduler &scheduler, std::shared_ptr<journal::Jou
         m_scheduler, QStandardPaths::writableLocation(QStandardPaths::AppDataLocation) + QStringLiteral("/indice"),
         this);
     m_indexService->setExcludedNames({trash::trashFolderName()});
+    // Miniaturas: en la carpeta de caché del sistema (se puede borrar sin
+    // perder nada), con 256 MB como mucho en memoria (SPEC §5.5).
+    // Topes configurables en el archivo de configuración, sección [miniaturas]:
+    // memoriaMB (256 de fábrica, SPEC §5.5) y discoMB (1024).
+    {
+        const QSettings settings;
+        const qint64 memoryMb = std::max<qint64>(16, settings.value(QStringLiteral("miniaturas/memoriaMB"), 256).toLongLong());
+        const qint64 diskMb = std::max<qint64>(16, settings.value(QStringLiteral("miniaturas/discoMB"), 1024).toLongLong());
+        m_thumbnailCache = std::make_shared<thumbs::ThumbnailCache>(
+            QStandardPaths::writableLocation(QStandardPaths::CacheLocation) + QStringLiteral("/miniaturas"),
+            memoryMb * 1024 * 1024);
+        // La caché en disco no crece sin límite: al arrancar, y en segundo
+        // plano, se borra lo más antiguo de lo que sobre.
+        m_scheduler.submit(tasks::Category::General, tasks::Priority::Background,
+                           [cache = m_thumbnailCache, diskMb](const tasks::CancelToken &) {
+            cache->pruneDisk(diskMb * 1024 * 1024);
+        });
+    }
+    m_thumbnailService = new thumbs::ThumbnailService(m_scheduler, m_thumbnailCache, this);
+    // Un solo reproductor para toda la ventana: nunca suenan dos a la vez.
+    m_inlinePlayer = new InlinePlayer(this);
     setWindowTitle(core::applicationName());
     resize(1180, 720);
 
@@ -87,8 +110,13 @@ MainWindow::MainWindow(tasks::Scheduler &scheduler, std::shared_ptr<journal::Jou
     m_splitter = new QSplitter(Qt::Horizontal, this);
     m_splitter->addWidget(m_sidebar);
     m_splitter->addWidget(m_tabs);
+    // Panel derecho: metadatos y vista previa de lo que tiene el cursor.
+    m_previewPanel = new PreviewPanel(m_scheduler, this);
+    m_previewPanel->setMinimumWidth(180);
+    m_splitter->addWidget(m_previewPanel);
     m_splitter->setStretchFactor(0, 0);
     m_splitter->setStretchFactor(1, 1);
+    m_splitter->setStretchFactor(2, 0);
     m_splitter->setSizes({230, 950});
     setCentralWidget(m_splitter);
 
@@ -214,6 +242,7 @@ void MainWindow::createActions()
         for (int i = 0; i < m_tabs->count(); ++i) {
             static_cast<BrowserPane *>(m_tabs->widget(i))->setSizeUnits(units);
         }
+        m_previewPanel->setSizeUnits(units);
         updateStatus();
     });
 
@@ -244,6 +273,40 @@ void MainWindow::createActions()
         m_searchEdit->selectAll();
     });
 
+    m_inlinePlaybackAction = new QAction(tr("Reproducir video y audio en las miniaturas"), this);
+    m_inlinePlaybackAction->setCheckable(true);
+    m_inlinePlaybackAction->setChecked(InlinePlayer::isAvailable());
+    m_inlinePlaybackAction->setEnabled(InlinePlayer::isAvailable());
+    m_inlinePlaybackAction->setToolTip(InlinePlayer::isAvailable()
+                                           ? tr("Botón ▶ sobre los videos y audios, o barra espaciadora")
+                                           : tr("Esta compilación no incluye Qt Multimedia"));
+    connect(m_inlinePlaybackAction, &QAction::toggled, this, [this](bool enabled) {
+        for (int i = 0; i < m_tabs->count(); ++i) {
+            static_cast<BrowserPane *>(m_tabs->widget(i))->setInlinePlaybackEnabled(enabled);
+        }
+    });
+
+    m_previewAction = new QAction(tr("Panel de previsualización"), this);
+    m_previewAction->setShortcut(QKeySequence(Qt::ALT | Qt::Key_P));
+    m_previewAction->setCheckable(true);
+    m_previewAction->setChecked(true);
+    m_previewAction->setToolTip(tr("Muestra a la derecha los datos y una vista previa de lo seleccionado"));
+    connect(m_previewAction, &QAction::toggled, this, &MainWindow::setPreviewVisible);
+
+    // Vistas de la carpeta (SPEC §5.3). Cada pestaña recuerda la suya.
+    auto *viewModes = new QActionGroup(this);
+    m_detailsAction = new QAction(themedIcon(QStringLiteral("view-list-details"), QStyle::SP_FileDialogDetailedView),
+                                  tr("Detalles"), viewModes);
+    m_detailsAction->setShortcut(QKeySequence(Qt::CTRL | Qt::Key_1));
+    m_detailsAction->setCheckable(true);
+    m_detailsAction->setChecked(true);
+    m_thumbnailsAction = new QAction(themedIcon(QStringLiteral("view-list-icons"), QStyle::SP_FileDialogListView),
+                                     tr("Miniaturas"), viewModes);
+    m_thumbnailsAction->setShortcut(QKeySequence(Qt::CTRL | Qt::Key_2));
+    m_thumbnailsAction->setCheckable(true);
+    connect(m_detailsAction, &QAction::triggered, this, [this] { setViewMode(BrowserPane::ViewMode::Details); });
+    connect(m_thumbnailsAction, &QAction::triggered, this, [this] { setViewMode(BrowserPane::ViewMode::Thumbnails); });
+
     m_editPathAction = new QAction(tr("Escribir una ruta"), this);
     m_editPathAction->setShortcuts({QKeySequence(Qt::CTRL | Qt::Key_L), QKeySequence(Qt::ALT | Qt::Key_D)});
 
@@ -259,6 +322,21 @@ void MainWindow::createActions()
     fileMenu->addAction(quitAction);
 
     QMenu *viewMenu = menuBar()->addMenu(tr("&Ver"));
+    viewMenu->addAction(m_detailsAction);
+    viewMenu->addAction(m_thumbnailsAction);
+    QMenu *sizeMenu = viewMenu->addMenu(tr("Tamaño de las miniaturas"));
+    auto *sizes = new QActionGroup(sizeMenu);
+    for (const auto &[size, name] : {std::pair{96, tr("Pequeñas")}, std::pair{160, tr("Medianas")},
+                                     std::pair{256, tr("Grandes")}}) {
+        QAction *action = sizeMenu->addAction(name);
+        action->setCheckable(true);
+        sizes->addAction(action);
+        m_thumbnailSizeActions.insert(size, action);
+        connect(action, &QAction::triggered, this, [this, size = size] { setThumbnailSize(size); });
+    }
+    viewMenu->addAction(m_previewAction);
+    viewMenu->addAction(m_inlinePlaybackAction);
+    viewMenu->addSeparator();
     viewMenu->addAction(m_refreshAction);
     viewMenu->addAction(m_filterAction);
     viewMenu->addAction(m_searchAction);
@@ -1060,6 +1138,9 @@ void MainWindow::createToolBar()
         if (auto *pane = currentPane()) pane->focusContent();
     });
 
+    toolBar->addSeparator();
+    toolBar->addAction(m_detailsAction);
+    toolBar->addAction(m_thumbnailsAction);
     toolBar->addAction(m_newTabAction);
     toolBar->addAction(m_showTrashAction);
 }
@@ -1073,6 +1154,16 @@ BrowserPane *MainWindow::openTab(const QString &path)
                                                                 : core::SizeUnits::Decimal);
 
     pane->setIndexResolver([this](const QString &folder) { return m_indexService->indexFor(folder); });
+    pane->setThumbnailService(m_thumbnailService);
+    pane->setThumbnailSize(m_thumbnailSize);
+    pane->setInlinePlayer(m_inlinePlayer);
+    pane->setInlinePlaybackEnabled(m_inlinePlaybackAction->isChecked());
+    // Una pestaña nueva se abre con la vista que se está usando.
+    if (BrowserPane *current = currentPane()) {
+        pane->setViewMode(current->viewMode());
+    } else if (m_thumbnailsAction->isChecked()) {
+        pane->setViewMode(BrowserPane::ViewMode::Thumbnails);
+    }
 
     connect(pane, &BrowserPane::pathChanged, this, [this, pane] {
         updateTabTitle(pane);
@@ -1084,6 +1175,11 @@ BrowserPane *MainWindow::openTab(const QString &path)
         }
     });
     connect(pane, &BrowserPane::historyChanged, this, &MainWindow::updateNavigationActions);
+    connect(pane, &BrowserPane::currentItemChanged, this, [this, pane] {
+        if (pane == currentPane()) {
+            updatePreview();
+        }
+    });
     connect(pane, &BrowserPane::statusChanged, this, [this, pane] {
         if (pane == currentPane()) {
             updateStatus();
@@ -1511,8 +1607,82 @@ void MainWindow::syncSearchBox()
     }
 }
 
+void MainWindow::setViewMode(BrowserPane::ViewMode mode)
+{
+    if (BrowserPane *pane = currentPane()) {
+        pane->setViewMode(mode);
+    }
+    syncViewActions();
+}
+
+void MainWindow::setThumbnailSize(int size)
+{
+    m_thumbnailSize = size;
+    for (int i = 0; i < m_tabs->count(); ++i) {
+        static_cast<BrowserPane *>(m_tabs->widget(i))->setThumbnailSize(size);
+    }
+    syncViewActions();
+}
+
+void MainWindow::syncViewActions()
+{
+    const BrowserPane *pane = currentPane();
+    const bool thumbnails = pane != nullptr && pane->viewMode() == BrowserPane::ViewMode::Thumbnails;
+    (thumbnails ? m_thumbnailsAction : m_detailsAction)->setChecked(true);
+    if (QAction *size = m_thumbnailSizeActions.value(m_thumbnailSize)) {
+        size->setChecked(true);
+    }
+}
+
+void MainWindow::showEvent(QShowEvent *event)
+{
+    QMainWindow::showEvent(event);
+    if (m_firstShowDone) {
+        return;
+    }
+    m_firstShowDone = true;
+    // Anchos de fábrica de los tres paneles, ya con el tamaño real de la
+    // ventana (antes de mostrarla no se conoce y el panel derecho quedaba a 0).
+    if (!m_splitterRestored) {
+        const int total = std::max(m_splitter->width(), 900);
+        m_splitter->setSizes({220, total - 220 - 300, 300});
+    }
+}
+
+void MainWindow::setPreviewVisible(bool visible)
+{
+    if (m_previewAction->isChecked() != visible) {
+        m_previewAction->setChecked(visible);   // vuelve aquí por la señal
+        return;
+    }
+    m_previewPanel->setVisible(visible);
+    updatePreview();
+}
+
+void MainWindow::updatePreview()
+{
+    if (m_previewPanel == nullptr || !m_previewPanel->isVisibleTo(this)) {
+        return;   // oculto: no se lee nada del disco
+    }
+    const BrowserPane *pane = currentPane();
+    const BrowserPane::CurrentItem item = pane != nullptr ? pane->currentItem() : BrowserPane::CurrentItem();
+    if (!item.valid) {
+        m_previewPanel->clear(item.selectedCount > 1 ? tr("%1 elementos seleccionados").arg(item.selectedCount)
+                                                     : QString());
+        return;
+    }
+    PreviewItem preview;
+    preview.path = item.path;
+    preview.entry = item.entry;
+    preview.typeText = item.typeText;
+    preview.selectedCount = item.selectedCount;
+    m_previewPanel->showItem(preview);
+}
+
 void MainWindow::onCurrentTabChanged()
 {
+    syncViewActions();
+    updatePreview();
     if (BrowserPane *pane = currentPane()) {
         m_pathBar->setPath(pane->currentPath());
         m_sidebar->setCurrentPath(pane->currentPath());
@@ -1564,17 +1734,8 @@ void MainWindow::updateTabTitle(BrowserPane *pane)
 
 void MainWindow::restoreSession()
 {
+    loadPreferences();
     QSettings settings;
-    restoreGeometry(settings.value(QStringLiteral("window/geometry")).toByteArray());
-    m_splitter->restoreState(settings.value(QStringLiteral("window/splitter")).toByteArray());
-    m_showHiddenAction->setChecked(settings.value(QStringLiteral("view/showHidden"), false).toBool());
-    m_binaryUnitsAction->setChecked(settings.value(QStringLiteral("view/binaryUnits"), false).toBool());
-    m_folderSizesAction->setChecked(settings.value(QStringLiteral("view/folderSizes"), false).toBool());
-    // El alcance y "en el contenido" no se guardan: una búsqueda en todos los
-    // discos no debe heredarse sin querer de la sesión anterior.
-    m_searchCaseAction->setChecked(settings.value(QStringLiteral("search/caseSensitive"), false).toBool());
-    m_recentSearches = settings.value(QStringLiteral("search/recent")).toStringList();
-
     const QStringList paths = settings.value(QStringLiteral("session/tabs")).toStringList();
     for (const QString &path : paths) {
         // Si la carpeta ya no existe, la pestaña lo indica y ofrece reintentar;
@@ -1590,14 +1751,45 @@ void MainWindow::restoreSession()
     updateStatus();
 }
 
+void MainWindow::loadPreferences()
+{
+    QSettings settings;
+    restoreGeometry(settings.value(QStringLiteral("window/geometry")).toByteArray());
+    // "splitter3": la disposición con el panel de previsualización. La antigua,
+    // de dos paneles, dejaría el nuevo con ancho cero; se ignora.
+    m_splitterRestored = m_splitter->restoreState(settings.value(QStringLiteral("window/splitter3")).toByteArray());
+    m_showHiddenAction->setChecked(settings.value(QStringLiteral("view/showHidden"), false).toBool());
+    m_binaryUnitsAction->setChecked(settings.value(QStringLiteral("view/binaryUnits"), false).toBool());
+    m_folderSizesAction->setChecked(settings.value(QStringLiteral("view/folderSizes"), false).toBool());
+    setThumbnailSize(settings.value(QStringLiteral("view/thumbnailSize"), 160).toInt());
+    m_previewAction->setChecked(settings.value(QStringLiteral("view/preview"), true).toBool());
+    if (InlinePlayer::isAvailable()) {
+        m_inlinePlaybackAction->setChecked(settings.value(QStringLiteral("view/inlinePlayback"), true).toBool());
+    }
+
+    const bool thumbnails = settings.value(QStringLiteral("view/mode")).toString() == QLatin1String("miniaturas");
+    (thumbnails ? m_thumbnailsAction : m_detailsAction)->setChecked(true);
+    // El alcance y "en el contenido" no se guardan: una búsqueda en todos los
+    // discos no debe heredarse sin querer de la sesión anterior.
+    m_searchCaseAction->setChecked(settings.value(QStringLiteral("search/caseSensitive"), false).toBool());
+    m_recentSearches = settings.value(QStringLiteral("search/recent")).toStringList();
+}
+
 void MainWindow::saveSession()
 {
     QSettings settings;
     settings.setValue(QStringLiteral("window/geometry"), saveGeometry());
-    settings.setValue(QStringLiteral("window/splitter"), m_splitter->saveState());
+    settings.setValue(QStringLiteral("window/splitter3"), m_splitter->saveState());
     settings.setValue(QStringLiteral("view/showHidden"), m_showHiddenAction->isChecked());
     settings.setValue(QStringLiteral("view/binaryUnits"), m_binaryUnitsAction->isChecked());
     settings.setValue(QStringLiteral("view/folderSizes"), m_folderSizesAction->isChecked());
+    settings.setValue(QStringLiteral("view/thumbnailSize"), m_thumbnailSize);
+    settings.setValue(QStringLiteral("view/preview"), m_previewAction->isChecked());
+    if (InlinePlayer::isAvailable()) {
+        settings.setValue(QStringLiteral("view/inlinePlayback"), m_inlinePlaybackAction->isChecked());
+    }
+    settings.setValue(QStringLiteral("view/mode"),
+                      m_thumbnailsAction->isChecked() ? QStringLiteral("miniaturas") : QStringLiteral("detalles"));
     settings.setValue(QStringLiteral("search/caseSensitive"), m_searchCaseAction->isChecked());
     settings.setValue(QStringLiteral("search/recent"), m_recentSearches);
 

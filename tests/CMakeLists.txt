@@ -1,16 +1,33 @@
 # Cada módulo tiene su propia carpeta de pruebas (Qt Test, ver ADR-0004).
+set(EU_TEST_LOGS "${CMAKE_BINARY_DIR}/test-logs")
+file(MAKE_DIRECTORY "${EU_TEST_LOGS}")
+
 function(eu_add_test name)
     qt_add_executable(${name} ${ARGN})
-    target_link_libraries(${name} PRIVATE eu::core eu::tasks eu::fs eu::search eu::index eu::journal eu::ops eu::trash eu::ops_engine eu::ui Qt6::Test)
+    target_link_libraries(${name} PRIVATE eu::core eu::tasks eu::fs eu::search eu::index eu::thumbs eu::meta eu::journal eu::ops eu::trash eu::ops_engine eu::ui Qt6::Test)
     eu_target_defaults(${name})
     # Los límites de tiempo solo tienen sentido en compilaciones optimizadas:
     # con sanitizers o en Debug todo va muchas veces más lento.
     if(NOT EU_SANITIZER AND NOT CMAKE_BUILD_TYPE STREQUAL "Debug")
         target_compile_definitions(${name} PRIVATE EU_CHECK_TIMINGS)
     endif()
-    add_test(NAME ${name} COMMAND ${name})
+    # Programa de consola también en Windows (qt_standard_project_setup los
+    # hace de ventana): si no, la CI no recoge lo que escribe la prueba y un
+    # fallo queda sin explicar.
+    set_target_properties(${name} PROPERTIES WIN32_EXECUTABLE FALSE MACOSX_BUNDLE FALSE)
+    # El informe va a la salida y también a build/<preset>/test-logs: si la
+    # salida se pierde (ha pasado en el Windows de la CI), queda el archivo.
+    add_test(NAME ${name} COMMAND ${name} -o "${EU_TEST_LOGS}/${name}.txt,txt" -o "-,txt")
     # Las pruebas no necesitan pantalla: así corren igual en la CI.
-    set_tests_properties(${name} PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+    # QT_QPA_PLATFORM: las pruebas no necesitan pantalla.
+    # QTEST_FUNCTION_TIMEOUT: Qt corta a los 5 min cada función de prueba; la
+    # de 100 000 archivos se acerca a eso en las máquinas lentas de la CI.
+    set_tests_properties(${name} PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QTEST_FUNCTION_TIMEOUT=900000")
+    if(EU_SANITIZER MATCHES "thread")
+        # Falsos avisos dentro de Qt, que no está instrumentado (ver tsan.supp).
+        set_property(TEST ${name} APPEND PROPERTY ENVIRONMENT
+                     "TSAN_OPTIONS=suppressions=${CMAKE_CURRENT_SOURCE_DIR}/tsan.supp")
+    endif()
 endfunction()
 
 eu_add_test(test_core_natural_compare core/test_natural_compare.cpp)
@@ -33,7 +50,11 @@ eu_add_test(test_ui_file_actions ui/test_file_actions.cpp)
 # Las pruebas que crean una QApplication no se ejecutan con TSan: Qt y libdbus
 # no están compilados con ese detector y dan avisos falsos dentro de sus
 # propias bibliotecas. TSan sigue cubriendo core, tasks, fs, journal, ops y trash.
+# Miniaturas y metadatos tampoco: Qt reparte el escalado de imágenes en su
+# propio grupo de hilos, sin instrumentar, y TSan da carreras dentro de Qt.
 if(NOT EU_SANITIZER MATCHES "thread")
+    eu_add_test(test_thumbs thumbs/test_thumbs.cpp)
+    eu_add_test(test_meta meta/test_meta.cpp)
     eu_add_test(test_ui_directory_model ui/test_directory_model.cpp)
     eu_add_test(test_ui_main_window ui/test_main_window.cpp)
 endif()
@@ -43,6 +64,7 @@ eu_add_test(test_trash trash/test_trash.cpp)
 
 # Programa auxiliar que se mata a mitad de una operación (pruebas de recuperación).
 qt_add_executable(eu-crash-helper ops/crash_helper.cpp)
+set_target_properties(eu-crash-helper PROPERTIES WIN32_EXECUTABLE FALSE MACOSX_BUNDLE FALSE)
 target_link_libraries(eu-crash-helper PRIVATE eu::ops_engine Qt6::Core)
 eu_target_defaults(eu-crash-helper)
 
@@ -51,3 +73,10 @@ add_dependencies(test_ops_engine eu-crash-helper)
 if(TARGET test_ui_main_window)
     add_dependencies(test_ui_main_window eu-crash-helper)
 endif()
+
+# Las pruebas de miniaturas y de la ventana usan el proceso auxiliar.
+foreach(test_name test_thumbs test_ui_main_window)
+    if(TARGET ${test_name})
+        add_dependencies(${test_name} eu-thumbnailer)
+    endif()
+endforeach()

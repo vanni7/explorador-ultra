@@ -5,8 +5,10 @@
 #include "eu/fs/DeviceMap.h"
 #include "eu/fs/Volumes.h"
 #include "eu/index/IndexService.h"
+#include "eu/thumbs/ThumbnailService.h"
 #include "eu/journal/Journal.h"
 #include "eu/tasks/Scheduler.h"
+#include "eu/ui/BrowserPane.h"
 #include "eu/ui/FileActions.h"
 #include "eu/ui/Locations.h"
 
@@ -30,6 +32,8 @@ namespace eu::ui {
 class BrowserPane;
 class PathBar;
 class Sidebar;
+class InlinePlayer;
+class PreviewPanel;
 class TrashDialog;
 
 /// Ventana principal: barra superior, panel de lugares y pestañas de exploración.
@@ -61,6 +65,18 @@ public:
     /// Abre la ventana "Índice de búsqueda".
     void showIndexDialog();
 
+    /// Miniaturas: la caché y quien las genera, comunes a todas las pestañas.
+    thumbs::ThumbnailService *thumbnailService() const { return m_thumbnailService; }
+    /// Panel derecho de previsualización y metadatos.
+    PreviewPanel *previewPanel() const { return m_previewPanel; }
+    void setPreviewVisible(bool visible);
+    /// El reproductor de las miniaturas (uno por ventana).
+    InlinePlayer *inlinePlayer() const { return m_inlinePlayer; }
+
+    /// Vista de la pestaña activa (y de las que se abran después).
+    void setViewMode(BrowserPane::ViewMode mode);
+    void setThumbnailSize(int size);
+
     /// Opciones del buscador; son las del botón "Opciones" que tiene al lado.
     void setSearchScope(SearchScope scope);
     SearchScope searchScope() const { return m_searchScope; }
@@ -77,6 +93,10 @@ public:
     /// Restaura pestañas y geometría de la sesión anterior. Si no hay sesión
     /// guardada, abre la carpeta personal.
     void restoreSession();
+    /// Lee las preferencias guardadas (vista, ocultos, unidades de tamaño…)
+    /// sin abrir pestañas. restoreSession() ya lo hace; hay que llamarlo
+    /// cuando la ventana se abre directamente en una carpeta.
+    void loadPreferences();
 
     FileActions *fileActions() const { return m_actions; }
 
@@ -121,6 +141,7 @@ signals:
 
 protected:
     void closeEvent(QCloseEvent *event) override;
+    void showEvent(QShowEvent *event) override;
 
 private:
     void createActions();
@@ -196,6 +217,20 @@ private:
     QAction *m_searchAction = nullptr;
     QLineEdit *m_searchEdit = nullptr;
     index::IndexService *m_indexService = nullptr;
+    std::shared_ptr<thumbs::ThumbnailCache> m_thumbnailCache;
+    thumbs::ThumbnailService *m_thumbnailService = nullptr;
+    QAction *m_detailsAction = nullptr;
+    QAction *m_thumbnailsAction = nullptr;
+    QHash<int, QAction *> m_thumbnailSizeActions;   ///< Por tamaño en píxeles.
+    int m_thumbnailSize = 160;
+    void syncViewActions();
+    bool m_splitterRestored = false;   ///< Había una disposición guardada de los paneles.
+    bool m_firstShowDone = false;
+    PreviewPanel *m_previewPanel = nullptr;
+    InlinePlayer *m_inlinePlayer = nullptr;
+    QAction *m_inlinePlaybackAction = nullptr;
+    QAction *m_previewAction = nullptr;
+    void updatePreview();
     QLabel *m_indexLabel = nullptr;   ///< "Indexando…" en la barra de estado.
     QAction *m_indexAction = nullptr;
     void runIndexWizard();

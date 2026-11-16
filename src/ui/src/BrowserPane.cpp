@@ -1,5 +1,6 @@
 // Explorador Ultra — SPDX-License-Identifier: GPL-3.0-or-later
 #include "eu/ui/BrowserPane.h"
+#include "eu/ui/ThumbnailView.h"
 
 #include <utility>
 
@@ -371,10 +372,27 @@ BrowserPane::BrowserPane(tasks::Scheduler &scheduler, fs::DirectoryWatcher &watc
     messageLayout->addWidget(m_retryButton, 0, Qt::AlignHCenter);
     messageLayout->addStretch();
 
+    // Vista de miniaturas: mismo modelo y misma selección que la detallada.
+    m_thumbView = new ThumbnailView(m_model, this);
+    {
+        QItemSelectionModel *own = m_thumbView->selectionModel();
+        m_thumbView->setSelectionModel(m_view->selectionModel());
+        delete own;
+    }
+    m_thumbView->onDrop = fileView->onDrop;
+    m_thumbView->onEditingStarted = [this] { m_editing = true; };
+    connect(m_thumbView->itemDelegate(), &QAbstractItemDelegate::closeEditor, this, &BrowserPane::onEditingFinished);
+    m_thumbView->setContextMenuPolicy(Qt::CustomContextMenu);
+    connect(m_thumbView, &QWidget::customContextMenuRequested, this, [this](const QPoint &position) {
+        emit contextMenuRequested(m_thumbView->viewport()->mapToGlobal(position));
+    });
+    connect(m_thumbView, &QAbstractItemView::activated, this, &BrowserPane::onActivated);
+
     auto *stackHost = new QWidget(this);
     m_stack = new QStackedLayout(stackHost);
     m_stack->setContentsMargins(0, 0, 0, 0);
     m_stack->addWidget(m_view);
+    m_stack->addWidget(m_thumbView);
     m_stack->addWidget(m_messagePage);
 
     // Lista de unidades: lo que se ve en la ubicación "Unidades".
@@ -493,7 +511,7 @@ BrowserPane::BrowserPane(tasks::Scheduler &scheduler, fs::DirectoryWatcher &watc
     connect(m_filterEdit, &QLineEdit::textChanged, this, &BrowserPane::applyFilterText);
     connect(closeFilter, &QToolButton::clicked, this, &BrowserPane::hideFilter);
     // Intro o flecha abajo: pasar a la lista filtrada. Esc: quitar el filtro.
-    connect(m_filterEdit, &QLineEdit::returnPressed, this, [this] { m_view->setFocus(); });
+    connect(m_filterEdit, &QLineEdit::returnPressed, this, [this] { this->fileView()->setFocus(); });
     auto *escape = new QAction(m_filterEdit);
     escape->setShortcut(QKeySequence(Qt::Key_Escape));
     escape->setShortcutContext(Qt::WidgetShortcut);
@@ -501,6 +519,13 @@ BrowserPane::BrowserPane(tasks::Scheduler &scheduler, fs::DirectoryWatcher &watc
     connect(escape, &QAction::triggered, this, &BrowserPane::hideFilter);
 
     connect(m_view, &QTreeView::activated, this, &BrowserPane::onActivated);
+    connect(m_view->selectionModel(), &QItemSelectionModel::currentChanged, this, &BrowserPane::currentItemChanged);
+    connect(m_view->selectionModel(), &QItemSelectionModel::selectionChanged, this, &BrowserPane::currentItemChanged);
+    connect(m_resultsView->selectionModel(), &QItemSelectionModel::currentChanged, this,
+            &BrowserPane::currentItemChanged);
+    connect(m_resultsView->selectionModel(), &QItemSelectionModel::selectionChanged, this,
+            &BrowserPane::currentItemChanged);
+    connect(this, &BrowserPane::pathChanged, this, &BrowserPane::currentItemChanged);
     connect(m_view->selectionModel(), &QItemSelectionModel::selectionChanged, this, &BrowserPane::statusChanged);
     connect(m_model, &DirectoryModel::stateChanged, this, &BrowserPane::onModelStateChanged);
     connect(m_model, &DirectoryModel::contentReplaced, this, &BrowserPane::restoreSelection);
@@ -517,9 +542,90 @@ BrowserPane::BrowserPane(tasks::Scheduler &scheduler, fs::DirectoryWatcher &watc
     });
 }
 
+BrowserPane::CurrentItem BrowserPane::currentItem() const
+{
+    CurrentItem item;
+    if (showsVolumes()) {
+        return item;
+    }
+    if (showsSearch()) {
+        const QModelIndex current = m_resultsView->selectionModel()->currentIndex();
+        item.selectedCount = int(m_resultsView->selectionModel()->selectedRows().size());
+        if (!current.isValid() || current.row() >= m_resultsModel->count() || item.selectedCount == 0) {
+            return item;
+        }
+        const search::Hit &hit = m_resultsModel->hitAt(current.row());
+        item.valid = true;
+        item.path = hit.path();
+        item.entry = hit.entry;
+        item.typeText = m_resultsModel->index(current.row(), SearchResultsModel::TypeColumn).data().toString();
+        return item;
+    }
+    const QModelIndex current = m_view->selectionModel()->currentIndex();
+    item.selectedCount = int(m_view->selectionModel()->selectedRows().size());
+    if (!current.isValid() || current.row() >= m_model->rowCount() || item.selectedCount == 0
+        || m_model->state() != DirectoryModel::State::Ready) {
+        return item;
+    }
+    item.valid = true;
+    item.path = m_model->filePath(current.row());
+    item.entry = m_model->entryAt(current.row());
+    item.typeText = m_model->index(current.row(), int(Column::Type)).data().toString();
+    return item;
+}
+
+QAbstractItemView *BrowserPane::fileView() const
+{
+    return m_viewMode == ViewMode::Thumbnails ? static_cast<QAbstractItemView *>(m_thumbView)
+                                              : static_cast<QAbstractItemView *>(m_view);
+}
+
+void BrowserPane::setViewMode(ViewMode mode)
+{
+    if (mode == m_viewMode) {
+        return;
+    }
+    QWidget *shown = m_stack->currentWidget();
+    const bool wasShowingFiles = shown == m_view || shown == m_thumbView;
+    const bool hadFocus = m_view->hasFocus() || m_thumbView->hasFocus();
+    m_viewMode = mode;
+    if (wasShowingFiles) {
+        m_stack->setCurrentWidget(fileView());
+    }
+    // Lo seleccionado sigue a la vista.
+    const QModelIndex current = m_view->selectionModel()->currentIndex();
+    if (current.isValid()) {
+        fileView()->scrollTo(current);
+    }
+    if (hadFocus) {
+        fileView()->setFocus();
+    }
+}
+
+void BrowserPane::setThumbnailService(thumbs::ThumbnailService *service)
+{
+    m_thumbView->setThumbnailService(service);
+}
+
+void BrowserPane::setThumbnailSize(int size)
+{
+    m_thumbView->setThumbnailSize(size);
+}
+
+void BrowserPane::setInlinePlayer(InlinePlayer *player)
+{
+    m_thumbView->setInlinePlayer(player);
+}
+
+void BrowserPane::setInlinePlaybackEnabled(bool enabled)
+{
+    m_thumbView->setPlaybackEnabled(enabled);
+}
+
 void BrowserPane::setMoveByDefaultRule(MoveByDefaultRule rule)
 {
-    static_cast<FileView *>(m_view)->moveByDefault = std::move(rule);
+    static_cast<FileView *>(m_view)->moveByDefault = rule;
+    m_thumbView->moveByDefault = std::move(rule);
 }
 
 BrowserPane::~BrowserPane()
@@ -633,7 +739,7 @@ void BrowserPane::changePath(const QString &path, const QString &nameToSelect)
         m_volumesTimer.start();
     } else {
         m_volumesTimer.stop();
-        m_stack->setCurrentWidget(m_view);
+        m_stack->setCurrentWidget(fileView());
         m_model->setPath(path);
         // setPath vacía el modelo; lo que haya que seleccionar se fija después.
         m_selectedNames = nameToSelect.isEmpty() ? QStringList() : QStringList{nameToSelect};
@@ -700,7 +806,7 @@ void BrowserPane::focusContent()
     } else if (showsSearch()) {
         m_resultsView->setFocus();
     } else {
-        m_view->setFocus();
+        fileView()->setFocus();
     }
 }
 
@@ -1113,7 +1219,7 @@ void BrowserPane::hideFilter()
     m_filterEdit->clear();   // quita el filtro (applyFilterText con texto vacío)
     m_filterBar->hide();
     if (hadFocus) {
-        m_view->setFocus();
+        fileView()->setFocus();
     }
 }
 
@@ -1182,7 +1288,7 @@ void BrowserPane::startRename()
     }
     const QModelIndex nameIndex = m_model->index(current.row(), int(Column::Name));
     m_view->setCurrentIndex(nameIndex);
-    m_view->edit(nameIndex);
+    fileView()->edit(nameIndex);
 }
 
 void BrowserPane::selectWhenAvailable(const QStringList &names, bool editFirst)
@@ -1219,12 +1325,12 @@ bool BrowserPane::applyPendingSelection()
     }
     const QModelIndex first = m_model->index(rows.first(), int(Column::Name));
     selection->setCurrentIndex(first, QItemSelectionModel::NoUpdate);
-    m_view->scrollTo(first);
+    fileView()->scrollTo(first);
     const bool edit = m_pendingEdit;
     m_pendingNames.clear();
     m_pendingEdit = false;
     if (edit) {
-        m_view->edit(first);
+        fileView()->edit(first);
     }
     emit statusChanged();
     return true;
@@ -1278,11 +1384,11 @@ void BrowserPane::onModelStateChanged(DirectoryModel::State state)
             }
             m_watchedPath = m_watcher.watch(m_model->path()) ? m_model->path() : QString();
         }
-        m_stack->setCurrentWidget(m_view);
+        m_stack->setCurrentWidget(fileView());
         break;
     case DirectoryModel::State::Loading:
     case DirectoryModel::State::Empty:
-        m_stack->setCurrentWidget(m_view);
+        m_stack->setCurrentWidget(fileView());
         break;
     }
     emit statusChanged();
@@ -1324,7 +1430,7 @@ void BrowserPane::restoreSelection()
     const int currentRow = m_currentName.isEmpty() ? -1 : m_model->rowOfName(m_currentName);
     if (currentRow >= 0) {
         selection->setCurrentIndex(m_model->index(currentRow, 0), QItemSelectionModel::NoUpdate);
-        m_view->scrollTo(m_model->index(currentRow, 0));
+        fileView()->scrollTo(m_model->index(currentRow, 0));
     }
     emit statusChanged();
 }

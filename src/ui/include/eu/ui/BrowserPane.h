@@ -2,6 +2,7 @@
 #pragma once
 
 #include "eu/fs/Volumes.h"
+#include "eu/fs/Entry.h"
 #include "eu/index/Index.h"
 #include "eu/search/Searcher.h"
 #include "eu/ui/Locations.h"
@@ -18,13 +19,21 @@ class QLabel;
 class QLineEdit;
 class QPushButton;
 class QStackedLayout;
+class QAbstractItemView;
 class QTreeView;
 
 namespace eu::fs {
 class DirectoryWatcher;
 }
 
+namespace eu::thumbs {
+class ThumbnailService;
+}
+
 namespace eu::ui {
+
+class InlinePlayer;
+class ThumbnailView;
 
 class SearchResultsModel;
 class VolumesView;
@@ -91,6 +100,32 @@ public:
     void selectAll();
     DirectoryModel *model() const { return m_model; }
     QTreeView *view() const { return m_view; }
+
+    /// Cómo se ve el contenido de una carpeta (SPEC §5.3). Las dos vistas
+    /// comparten la selección: al cambiar se conservan la carpeta y lo
+    /// seleccionado.
+    enum class ViewMode { Details, Thumbnails };
+    void setViewMode(ViewMode mode);
+    ViewMode viewMode() const { return m_viewMode; }
+    ThumbnailView *thumbnailView() const { return m_thumbView; }
+    /// La vista de archivos que se usa ahora (detallada o miniaturas).
+    QAbstractItemView *fileView() const;
+    void setThumbnailService(thumbs::ThumbnailService *service);
+
+    /// El elemento que tiene el cursor (en la carpeta o en unos resultados),
+    /// para el panel de previsualización. `valid` es false si no hay ninguno.
+    struct CurrentItem
+    {
+        bool valid = false;
+        QString path;
+        fs::Entry entry;
+        QString typeText;
+        int selectedCount = 0;
+    };
+    CurrentItem currentItem() const;
+    void setThumbnailSize(int size);
+    void setInlinePlayer(InlinePlayer *player);
+    void setInlinePlaybackEnabled(bool enabled);
 
     bool canGoBack() const { return !m_backHistory.isEmpty(); }
     bool canGoForward() const { return !m_forwardHistory.isEmpty(); }
@@ -164,6 +199,8 @@ signals:
     void contextMenuRequested(const QPoint &globalPosition);
     /// Se soltaron archivos (de esta u otra aplicación) sobre `destination`.
     void filesDropped(const QStringList &paths, const QString &destination, bool move);
+    /// Cambió el elemento con el cursor o lo seleccionado.
+    void currentItemChanged();
 
 private:
     void changePath(const QString &path, const QString &nameToSelect);
@@ -189,6 +226,8 @@ private:
     DirectoryModel *m_model = nullptr;
     fs::DirectoryWatcher &m_watcher;
     QTreeView *m_view = nullptr;
+    ThumbnailView *m_thumbView = nullptr;
+    ViewMode m_viewMode = ViewMode::Details;
     QStackedLayout *m_stack = nullptr;
     QWidget *m_messagePage = nullptr;
     QLabel *m_messageLabel = nullptr;

@@ -8,6 +8,7 @@
 //   eu-bench copy    <origen> <carpetaDestino>   compara formas de copiar un archivo grande
 //   eu-bench walk    <carpeta> [carpeta…]   recorre los árboles a la vez (un hilo cada uno)
 //   eu-bench yield   <archivo-grande> <carpeta>   listar mientras se lee, cediendo o no el disco
+//   eu-bench thumbs  <carpeta> [lado]   miniaturas de una carpeta, en el proceso y aisladas
 //   eu-bench index   <carpeta> <archivo.db> [consulta…]   construye el índice y busca en él
 //
 // Cada medición imprime una línea "nombre;milisegundos;detalle" fácil de pegar
@@ -17,9 +18,12 @@
 #include "eu/fs/DirectoryLister.h"
 #include "eu/fs/Volumes.h"
 #include "eu/index/Index.h"
+#include "eu/thumbs/Isolated.h"
+#include "eu/thumbs/Thumbnail.h"
 #include "eu/tasks/Scheduler.h"
 
 #include <QCoreApplication>
+#include <QGuiApplication>
 #include <QDir>
 #include <QDirIterator>
 #include <QElapsedTimer>
@@ -457,6 +461,44 @@ int commandYield(const QString &bigFile, const QString &folder)
     return 0;
 }
 
+/// Genera las miniaturas de los archivos de una carpeta dos veces: en este
+/// proceso y en el auxiliar aislado, para saber cuánto cuesta aislar.
+int commandThumbs(const QString &folder, int side)
+{
+    const auto listed = eu::fs::listDirectoryAll(folder);
+    if (!listed.ok()) {
+        out() << "No se pudo leer la carpeta\n";
+        return 1;
+    }
+    std::vector<eu::thumbs::ThumbnailRequest> requests;
+    for (const eu::fs::Entry &entry : listed.value()) {
+        eu::thumbs::ThumbnailRequest request;
+        request.path = folder + QLatin1Char('/') + entry.name;
+        request.size = entry.size;
+        request.modifiedMs = entry.modifiedMs;
+        request.maxSide = side;
+        request.isDirectory = entry.isDirectory;
+        if (!entry.isDirectory && eu::thumbs::thumbnailSourceFor(request) != eu::thumbs::ThumbnailSource::None) {
+            requests.push_back(request);
+        }
+    }
+    for (const bool isolated : {false, true}) {
+        int ok = 0;
+        QElapsedTimer timer;
+        timer.start();
+        for (const auto &request : requests) {
+            const auto image = isolated ? eu::thumbs::renderThumbnailIsolated(request, {})
+                                        : eu::thumbs::renderThumbnail(request, {});
+            ok += image.ok() ? 1 : 0;
+        }
+        report(isolated ? QStringLiteral("miniaturas aisladas") : QStringLiteral("miniaturas en el proceso"),
+               timer.nsecsElapsed(),
+               QStringLiteral("%1 de %2 archivos, lado %3; auxiliar %4").arg(ok).arg(requests.size()).arg(side)
+                   .arg(eu::thumbs::hasThumbnailHelper() ? QStringLiteral("sí") : QStringLiteral("no")));
+    }
+    return 0;
+}
+
 /// Construye (o pone al día) el índice de una carpeta y mide búsquedas en él:
 /// tiempo hasta el primer resultado y tiempo total.
 int commandIndex(const QString &folder, const QString &databasePath, const QStringList &queries)
@@ -512,7 +554,9 @@ int commandIndex(const QString &folder, const QString &databasePath, const QStri
 
 int main(int argc, char *argv[])
 {
-    QCoreApplication application(argc, argv);
+    // QGuiApplication: las miniaturas de texto y la duración pintan letras.
+    qputenv("QT_QPA_PLATFORM", "offscreen");
+    QGuiApplication application(argc, argv);
     const QStringList arguments = QCoreApplication::arguments();
     const QString command = arguments.value(1);
 
@@ -530,6 +574,9 @@ int main(int argc, char *argv[])
     }
     if (command == QStringLiteral("copy") && arguments.size() == 4) {
         return commandCopy(arguments[2], arguments[3]);
+    }
+    if (command == QStringLiteral("thumbs") && arguments.size() >= 3) {
+        return commandThumbs(QDir::cleanPath(arguments[2]), arguments.size() >= 4 ? arguments[3].toInt() : 256);
     }
     if (command == QStringLiteral("yield") && arguments.size() == 4) {
         return commandYield(arguments[2], QDir::cleanPath(arguments[3]));
