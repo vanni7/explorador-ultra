@@ -1,11 +1,26 @@
 # Estado del proyecto
 
-Última actualización: 2026-11-15 · Fase actual: **3 (por empezar)**; la Fase 2 se entregó el 14-nov con puntos abiertos (ver `INFORME_FASE_2.md`)
+Última actualización: 2026-11-15 · Fase actual: **3 (en curso)**; la Fase 2 se entregó el 14-nov con puntos abiertos (ver `INFORME_FASE_2.md`)
 
 Estados: **Terminada** (cumple §26) · **Parcial** · **Pendiente** · **Bloqueada**.
 
 ## Punto de reanudación (se actualiza tras cada paso; si hubo un corte, empieza aquí)
-Fase 2 — Búsqueda y rendimiento, rama `fase-2/busqueda` (sale de `main` con la Fase 1 ya fusionada). Cada paso terminado queda en un commit ya enviado a GitHub; lo que no esté en `git log` no está hecho. Antes de seguir: `git status` y compilar con el preset `release`. Si git dice «objeto vacío» tras un corte, ver las notas de `CLAUDE.md`.
+Fase 3 — Miniaturas, previsualización y metadatos, rama `fase-3/miniaturas` (sale de `main` con la Fase 2 ya fusionada). Cada paso terminado queda en un commit ya enviado a GitHub; lo que no esté en `git log` no está hecho. Antes de seguir: `git status` y compilar con el preset `release`. Si git dice «objeto vacío» tras un corte, ver las notas de `CLAUDE.md`.
+
+| # | Paso | Estado |
+|---|---|---|
+| 1 | Módulo `thumbs`: miniaturas de imágenes (JPEG, PNG, GIF, WebP, TIFF, SVG… con orientación EXIF, sin agrandar, tope contra imágenes absurdas), caché en memoria (256 MB) y en disco (`CacheLocation/miniaturas`, clave ruta + tamaño + fecha + lado, recuerda los fallos), servicio en segundo plano con cancelación de lo que deja de verse | **Hecho** (15-nov): 11 pruebas en `test_thumbs` (Ubuntu release). Falta: CI |
+| 2 | Vista de miniaturas en la pestaña (cambiar entre detallada y miniaturas, tamaño ajustable, carga solo de lo visible) | Siguiente |
+| 3 | Carpetas (hasta cuatro miniaturas o composición), PDF (Qt PDF), texto/código/Markdown (extracto) | Pendiente |
+| 4 | Video (fotograma del segundo 3) y audio (carátula, duración), con límite de decodificadores | Pendiente |
+| 5 | RAW (LibRaw) y ofimática (miniatura incrustada; LibreOffice en proceso aparte con tiempo límite) | Pendiente |
+| 6 | Panel de previsualización y metadatos (EXIF, ID3, códec, resolución, duración) | Pendiente |
+| 7 | Decodificación de riesgo en un proceso auxiliar (archivos dañados o maliciosos no cierran la aplicación) | Pendiente |
+| 8 | Reproducción en miniatura de video y audio | Pendiente |
+| 9 | CI con Qt PDF/Multimedia en las tres plataformas, mediciones, verificación manual, fusionar a `main`, informe | Pendiente |
+
+## Pasos de la Fase 2 (entregada el 14-nov; ver `INFORME_FASE_2.md`)
+Rama `fase-2/busqueda`, fusionada a `main`.
 
 | # | Paso | Estado |
 |---|---|---|
