@@ -8,9 +8,16 @@ function(eu_add_test name)
     if(NOT EU_SANITIZER AND NOT CMAKE_BUILD_TYPE STREQUAL "Debug")
         target_compile_definitions(${name} PRIVATE EU_CHECK_TIMINGS)
     endif()
+    # Programa de consola también en Windows (qt_standard_project_setup los
+    # hace de ventana): si no, la CI no recoge lo que escribe la prueba y un
+    # fallo queda sin explicar.
+    set_target_properties(${name} PROPERTIES WIN32_EXECUTABLE FALSE MACOSX_BUNDLE FALSE)
     add_test(NAME ${name} COMMAND ${name})
     # Las pruebas no necesitan pantalla: así corren igual en la CI.
-    set_tests_properties(${name} PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+    # QT_QPA_PLATFORM: las pruebas no necesitan pantalla.
+    # QTEST_FUNCTION_TIMEOUT: Qt corta a los 5 min cada función de prueba; la
+    # de 100 000 archivos se acerca a eso en las máquinas lentas de la CI.
+    set_tests_properties(${name} PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QTEST_FUNCTION_TIMEOUT=900000")
     if(EU_SANITIZER MATCHES "thread")
         # Falsos avisos dentro de Qt, que no está instrumentado (ver tsan.supp).
         set_property(TEST ${name} APPEND PROPERTY ENVIRONMENT
@@ -52,6 +59,7 @@ eu_add_test(test_trash trash/test_trash.cpp)
 
 # Programa auxiliar que se mata a mitad de una operación (pruebas de recuperación).
 qt_add_executable(eu-crash-helper ops/crash_helper.cpp)
+set_target_properties(eu-crash-helper PROPERTIES WIN32_EXECUTABLE FALSE MACOSX_BUNDLE FALSE)
 target_link_libraries(eu-crash-helper PRIVATE eu::ops_engine Qt6::Core)
 eu_target_defaults(eu-crash-helper)
 
