@@ -4,6 +4,7 @@
 #include "eu/ui/Locations.h"
 #include "eu/ui/MainWindow.h"
 #include "eu/ui/BulkRenameDialog.h"
+#include "eu/ui/OrganizeDialog.h"
 #include "eu/ui/PathBar.h"
 #include "eu/ui/SearchResultsModel.h"
 #include "eu/ui/IndexDialog.h"
@@ -561,6 +562,49 @@ private slots:
         window.showBulkRename();
         QTRY_VERIFY_WITH_TIMEOUT(QFileInfo::exists(directory.filePath(QStringLiteral("03 - nota.txt"))), 10000);
         QVERIFY(waitIdle(window));
+    }
+
+    void organizeShowsTheSimulationAndUndoesTogether()
+    {
+        QTemporaryDir data;
+        QTemporaryDir directory;
+        writeFile(directory.filePath(QStringLiteral("informe.pdf")), 10);
+        writeFile(directory.filePath(QStringLiteral("foto.jpg")), 10);
+        writeFile(directory.filePath(QStringLiteral("raro.xyz")), 10);
+        MainWindow window(m_scheduler, openJournal(data));
+        window.show();
+        BrowserPane *pane = window.openTab(directory.path());
+        QVERIFY(waitReady(pane));
+        QStringList topLevel;
+        window.setOrganizeDriverForTesting([&](OrganizeDialog &dialog) {
+            // Con las reglas de fábrica. Organizar solo se puede con la simulación a la vista.
+            if (!QTest::qWaitFor([&] { return dialog.isSimulationCurrent(); }, 10000)) {
+                return false;
+            }
+            for (int row = 0; row < dialog.simulation()->topLevelItemCount(); ++row) {
+                topLevel.append(dialog.simulation()->topLevelItem(row)->text(0));
+            }
+            // Cambiar algo invalida la simulación hasta que se rehace.
+            dialog.setRecursive(true);
+            if (dialog.applyButton()->isEnabled()) {
+                return false;
+            }
+            return QTest::qWaitFor([&] { return dialog.isSimulationCurrent() && dialog.applyButton()->isEnabled(); },
+                                   10000);
+        });
+        window.showOrganize();
+        topLevel.sort();
+        QCOMPARE(topLevel, (QStringList{QStringLiteral("Documentos"), QStringLiteral("Imágenes")}));
+        QTRY_VERIFY_WITH_TIMEOUT(QFileInfo::exists(directory.filePath(QStringLiteral("Documentos/PDF/informe.pdf"))),
+                                 10000);
+        QVERIFY(waitIdle(window));
+        QVERIFY(QFileInfo::exists(directory.filePath(QStringLiteral("Imágenes/JPG/foto.jpg"))));
+        QVERIFY(QFileInfo::exists(directory.filePath(QStringLiteral("raro.xyz"))));
+        window.undo();
+        QTRY_VERIFY_WITH_TIMEOUT(QFileInfo::exists(directory.filePath(QStringLiteral("informe.pdf"))), 10000);
+        QVERIFY(waitIdle(window));
+        QVERIFY(QFileInfo::exists(directory.filePath(QStringLiteral("foto.jpg"))));
+        QVERIFY(!QFileInfo::exists(directory.filePath(QStringLiteral("Documentos"))));
     }
 
     void interruptedCopyIsResumedAndClosingMidCopyCanBeResumed()

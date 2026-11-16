@@ -257,7 +257,11 @@ private slots:
         windows.rulesFor = [](const QString &) { return core::NameRules::Windows; };
         QCOMPARE(statuses(plan({itemOf(root + QStringLiteral("/a.txt"))}, withColon, windows)),
                  QStringList{QStringLiteral("invalido")});
-        QCOMPARE(statuses(plan({itemOf(root + QStringLiteral("/a.txt"))}, withColon)), QStringList{QStringLiteral("ok")});
+        // Con las de un disco ext4, sí (las nativas de macOS y Windows tampoco lo admiten).
+        PlanOptions posix;
+        posix.rulesFor = [](const QString &) { return core::NameRules::Posix; };
+        QCOMPARE(statuses(plan({itemOf(root + QStringLiteral("/a.txt"))}, withColon, posix)),
+                 QStringList{QStringLiteral("ok")});
 
         // Una expresión regular mal escrita.
         Rule broken;

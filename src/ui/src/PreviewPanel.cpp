@@ -297,12 +297,12 @@ void PreviewPanel::startLoading()
             if (source == thumbs::ThumbnailSource::Text) {
                 QFile file(item.path);
                 if (file.open(QIODevice::ReadOnly)) {
-                    const QByteArray data = file.read(textBytes);
+                    const QByteArray bytes = file.read(textBytes);
                     loaded.truncated = file.size() > textBytes;
                     QStringDecoder utf8(QStringDecoder::Utf8);
-                    loaded.text = utf8.decode(data);
+                    loaded.text = utf8.decode(bytes);
                     if (utf8.hasError()) {
-                        loaded.text = QString::fromLatin1(data);
+                        loaded.text = QString::fromLatin1(bytes);
                     }
                     loaded.markdown = isMarkdown(suffix);
                 } else {

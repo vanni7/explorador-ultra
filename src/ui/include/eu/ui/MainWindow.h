@@ -74,6 +74,12 @@ public:
     void showContentIndexDialog();
     /// Abre "Renombrar varios" con lo seleccionado (o la carpeta entera).
     void showBulkRename();
+    /// Abre "Organizar" sobre la carpeta a la vista.
+    void showOrganize();
+    void setOrganizeDriverForTesting(std::function<bool(class OrganizeDialog &)> driver)
+    {
+        m_organizeDriver = std::move(driver);
+    }
     /// Para pruebas: en vez de esperar al usuario, se llama con la ventana ya
     /// abierta y decide si se acepta.
     void setBulkRenameDriverForTesting(std::function<bool(class BulkRenameDialog &)> driver)
@@ -224,6 +230,8 @@ private:
     ops::CollisionAsker m_testCollisionAnswer;
     std::function<bool(class BulkRenameDialog &)> m_bulkRenameDriver;
     QAction *m_bulkRenameAction = nullptr;
+    QAction *m_organizeAction = nullptr;
+    std::function<bool(class OrganizeDialog &)> m_organizeDriver;
     QTimer m_progressDelay;   ///< El indicador solo aparece si la acción no es instantánea.
 
     TrashDialog *m_trashDialog = nullptr;

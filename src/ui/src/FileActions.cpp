@@ -282,6 +282,18 @@ quint64 FileActions::renameMany(const QList<QPair<QString, QString>> &items, con
     }, paths);
 }
 
+quint64 FileActions::organize(const QList<QPair<QString, QString>> &moves, const QStringList &foldersToCreate,
+                              const QString &directory)
+{
+    const QString description = tr("Organizar «%1» (%n archivo(s))", nullptr, int(moves.size()))
+                                    .arg(QDir(directory).dirName());
+    return start(ActionKind::Organize, directory, tasks::Category::Transfer,
+                 [moves, foldersToCreate, description](const Context &context, ActionResult &result) {
+        result.outcome = ops::Engine(context.journal)
+                             .applyMoves(moves, foldersToCreate, description, context.cancel, context.progress);
+    }, {directory});
+}
+
 quint64 FileActions::rename(const QString &path, const QString &newName)
 {
     // La carpeta se calcula sobre el texto de la ruta: sin tocar el disco.

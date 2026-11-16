@@ -35,6 +35,7 @@ enum class ActionKind {
     Extract,        ///< Sacar de un comprimido.
     Compress,       ///< Crear un comprimido.
     BulkRename,     ///< Renombrar varios a la vez.
+    Organize,       ///< Organizar una carpeta en subcarpetas.
 };
 
 /// Lo que pasó con una acción, ya de vuelta en el hilo de interfaz.
@@ -120,6 +121,9 @@ public:
     quint64 rename(const QString &path, const QString &newName);
     /// Renombrado masivo: (ruta, nombre nuevo). Una sola operación para deshacer.
     quint64 renameMany(const QList<QPair<QString, QString>> &items, const QString &directory);
+    /// Organizador: mueve cada archivo a su destino creando antes las carpetas. Una operación.
+    quint64 organize(const QList<QPair<QString, QString>> &moves, const QStringList &foldersToCreate,
+                     const QString &directory);
     quint64 copy(const QStringList &sources, const QString &destinationDirectory, const ops::TransferOptions &policy);
     quint64 move(const QStringList &sources, const QString &destinationDirectory, const ops::TransferOptions &policy);
     /// Extrae de `archivePath` lo que hay en `innerPaths` (vacío: todo) en una

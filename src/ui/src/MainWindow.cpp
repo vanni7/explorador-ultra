@@ -11,6 +11,7 @@
 #include "eu/ui/FileClipboard.h"
 #include "eu/thumbs/Isolated.h"
 #include "eu/ui/BulkRenameDialog.h"
+#include "eu/ui/OrganizeDialog.h"
 #include "eu/ui/ContentIndexDialog.h"
 #include "eu/ui/IndexDialog.h"
 #include "eu/ui/PathBar.h"
@@ -407,6 +408,10 @@ void MainWindow::createEditActions()
     m_bulkRenameAction->setToolTip(tr("Renombrar muchos a la vez con reglas: mayúsculas, sustituir, contador, "
                                       "fecha de la foto, etiquetas de la música…"));
     connect(m_bulkRenameAction, &QAction::triggered, this, &MainWindow::showBulkRename);
+    m_organizeAction = new QAction(tr("Organizar esta carpeta…"), this);
+    m_organizeAction->setToolTip(tr("Ordenar en subcarpetas por tipo, fecha, tamaño o datos; siempre con "
+                                    "simulación antes y se deshace todo junto"));
+    connect(m_organizeAction, &QAction::triggered, this, &MainWindow::showOrganize);
 
     m_cutAction = new QAction(themedIcon(QStringLiteral("edit-cut"), QStyle::SP_FileIcon), tr("Cortar"), this);
     m_cutAction->setShortcut(QKeySequence::Cut);
@@ -484,6 +489,10 @@ void MainWindow::createEditActions()
     editMenu->addSeparator();
     editMenu->addAction(m_renameAction);
     editMenu->addAction(m_bulkRenameAction);
+    QMenu *toolsMenu = menuBar()->addMenu(tr("&Herramientas"));
+    toolsMenu->setObjectName(QStringLiteral("menuHerramientas"));
+    toolsMenu->addAction(m_bulkRenameAction);
+    toolsMenu->addAction(m_organizeAction);
     editMenu->addAction(m_trashAction);
     editMenu->addAction(m_deleteAction);
 
@@ -614,6 +623,7 @@ void MainWindow::updateEditActions()
     // F2 con varios seleccionados abre el renombrado masivo.
     m_renameAction->setEnabled(canModify && selected >= 1);
     m_bulkRenameAction->setEnabled(canModify);
+    m_organizeAction->setEnabled(canModify);
     m_trashAction->setEnabled(canRemove && selected > 0);
     m_deleteAction->setEnabled(canRemove && selected > 0);
     m_newFolderAction->setEnabled(canModify);
@@ -803,6 +813,25 @@ void MainWindow::showBulkRename()
         return;
     }
     m_requestedCounts.insert(m_actions->renameMany(renames, folder), int(renames.size()));
+}
+
+void MainWindow::showOrganize()
+{
+    BrowserPane *pane = currentPane();
+    if (pane == nullptr || !m_actions->isAvailable() || isVirtualLocation(pane->currentPath())) {
+        return;
+    }
+    OrganizeDialog dialog(m_scheduler, pane->currentPath(), this);
+    const bool accepted = m_organizeDriver ? m_organizeDriver(dialog) : dialog.exec() == QDialog::Accepted;
+    if (!accepted || dialog.plan().moves.isEmpty()) {
+        return;
+    }
+    QList<QPair<QString, QString>> moves;
+    for (const organize::Move &move : dialog.plan().moves) {
+        moves.append({move.source, move.target});
+    }
+    m_requestedCounts.insert(m_actions->organize(moves, dialog.plan().foldersToCreate, dialog.folder()),
+                             int(moves.size()));
 }
 
 void MainWindow::copyToClipboard(bool cut)
@@ -1292,6 +1321,11 @@ void MainWindow::onActionFinished(const ActionResult &result)
                               "registro).",
                               nullptr, int(outcome.skipped.size()));
             }
+            break;
+        case ActionKind::Organize:
+            message = tr("Se organizaron %n archivo(s).", nullptr, int(outcome.resultPaths.size()));
+            message += QLatin1Char(' ')
+                + tr("Se deshace todo junto con Deshacer (%1).").arg(m_undoAction->shortcut().toString(QKeySequence::NativeText));
             break;
         case ActionKind::BulkRename:
             message = tr("Se renombraron %n elemento(s).", nullptr, int(outcome.resultPaths.size()));
