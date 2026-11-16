@@ -452,9 +452,9 @@ private slots:
     {
         Scheduler scheduler;
         const QString hdd = QStringLiteral("hdd");
-        const QString ssd = QStringLiteral("ssd");
+        const QString memory = QStringLiteral("tmpfs");
         scheduler.setDeviceClass(hdd, DeviceClass::Hdd);
-        scheduler.setDeviceClass(ssd, DeviceClass::Ssd);
+        scheduler.setDeviceClass(memory, DeviceClass::Virtual);
 
         // Una "copia" que avanza a bloques y cede entre bloque y bloque.
         std::atomic<int> blocks{0};
@@ -484,19 +484,20 @@ private slots:
         stop = true;
         QVERIFY(onHdd.waitFor(5s));
 
-        // En un SSD no hace falta ceder.
+        // En una unidad en memoria no hay disco que ceder.
         stop = false;
         blocks = 0;
-        TaskHandle onSsd = scheduler.submit(Category::Transfer, Priority::ActiveTransfer, {ssd}, copy);
-        Gate ssdListing;
-        TaskHandle list2 = scheduler.submit(Category::Listing, Priority::VisibleNavigation, {ssd}, ssdListing.task());
-        ssdListing.waitUntilEntered();
+        TaskHandle inMemory = scheduler.submit(Category::Transfer, Priority::ActiveTransfer, {memory}, copy);
+        Gate memoryListing;
+        TaskHandle list2 = scheduler.submit(Category::Listing, Priority::VisibleNavigation, {memory},
+                                            memoryListing.task());
+        memoryListing.waitUntilEntered();
         const int before = blocks;
         std::this_thread::sleep_for(150ms);
         QVERIFY(blocks - before > 10);
-        ssdListing.open = true;
+        memoryListing.open = true;
         stop = true;
-        QVERIFY(list2.waitFor(5s) && onSsd.waitFor(5s));
+        QVERIFY(list2.waitFor(5s) && inMemory.waitFor(5s));
     }
 
     void yieldingNeverStarvesALongTask()

@@ -182,8 +182,8 @@ struct Scheduler::Devices
         return true;
     }
 
-    /// ¿Hay algo interactivo trabajando en alguno de estos discos lentos?
-    bool interactiveOnSlowDevice(const QStringList &devices) const
+    /// ¿Hay algo interactivo trabajando en alguno de estos discos físicos?
+    bool interactiveOnPhysicalDevice(const QStringList &devices) const
     {
         std::lock_guard lock(mutex);
         for (const QString &device : devices) {
@@ -193,9 +193,10 @@ struct Scheduler::Devices
             }
             const auto known = classes.find(device);
             const DeviceClass deviceClass = known != classes.end() ? known->second : DeviceClass::Unknown;
-            // En un SSD leer a la vez no estorba; en un disco con cabezal, sí.
-            if (deviceClass == DeviceClass::Hdd || deviceClass == DeviceClass::Removable
-                || deviceClass == DeviceClass::Optical) {
+            // Medido (docs/BENCHMARKS.md): una lectura grande retrasa abrir
+            // carpetas 10-50 veces en un disco mecánico y ~18 veces en un SSD
+            // SATA. Solo en memoria (tmpfs) no hay disco que ceder.
+            if (deviceClass != DeviceClass::Virtual) {
                 return true;
             }
         }
@@ -368,7 +369,7 @@ private:
             const bool mayYield = !task->devices.isEmpty() && Devices::tierOf(task->priority) != Devices::Interactive;
             if (mayYield) {
                 task->cancelSource.setDeviceBusyCheck([devices = &m_devices, list = task->devices] {
-                    return devices->interactiveOnSlowDevice(list);
+                    return devices->interactiveOnPhysicalDevice(list);
                 });
             }
             // Una tarea cancelada antes de empezar no se ejecuta.

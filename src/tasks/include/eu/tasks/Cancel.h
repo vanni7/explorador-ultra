@@ -26,10 +26,11 @@ public:
     /// Para tareas largas que leen o escriben mucho (copiar, indexar, medir
     /// carpetas): se llama en los mismos puntos seguros que isCancelled().
     ///
-    /// Si en uno de los discos lentos de la tarea (mecánico, USB, óptico) está
-    /// trabajando algo que el usuario espera —abrir una carpeta—, espera a que
-    /// termine. En un disco mecánico, abrir una carpeta mientras se copia un
-    /// archivo grande tarda diez veces más o peor (docs/BENCHMARKS.md).
+    /// Si en uno de los discos de la tarea está trabajando algo que el usuario
+    /// espera —abrir una carpeta—, espera a que termine. Medido en este
+    /// equipo: abrir carpetas mientras se lee un archivo grande tarda de 10 a
+    /// 50 veces más en un disco mecánico y unas 18 veces más en un SSD SATA
+    /// (docs/BENCHMARKS.md). No cede en las unidades en memoria (tmpfs).
     ///
     /// Nunca deja la tarea parada para siempre: tras `maxWait` seguidos
     /// cediendo, sigue trabajando un segundo sin ceder. Sale enseguida si se
