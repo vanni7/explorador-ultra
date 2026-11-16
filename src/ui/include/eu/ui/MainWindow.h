@@ -138,6 +138,7 @@ signals:
 
 protected:
     void closeEvent(QCloseEvent *event) override;
+    void showEvent(QShowEvent *event) override;
 
 private:
     void createActions();
@@ -220,6 +221,8 @@ private:
     QHash<int, QAction *> m_thumbnailSizeActions;   ///< Por tamaño en píxeles.
     int m_thumbnailSize = 160;
     void syncViewActions();
+    bool m_splitterRestored = false;   ///< Había una disposición guardada de los paneles.
+    bool m_firstShowDone = false;
     PreviewPanel *m_previewPanel = nullptr;
     QAction *m_previewAction = nullptr;
     void updatePreview();

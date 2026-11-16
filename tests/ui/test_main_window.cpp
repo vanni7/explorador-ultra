@@ -1297,9 +1297,10 @@ private slots:
         // De vuelta a detalles (Ctrl+1), con lo renombrado seleccionado.
         window.setViewMode(BrowserPane::ViewMode::Details);
         QVERIFY(pane->view()->isVisible());
-        QTRY_COMPARE(pane->selectedCount(), 1);
-        const QModelIndex current = pane->view()->currentIndex();
-        QCOMPARE(pane->model()->entryAt(current.row()).name, QStringLiteral("costa.png"));
+        // La lista se vuelve a leer tras renombrar: se espera a que lo haga.
+        QTRY_COMPARE_WITH_TIMEOUT(pane->model()->entryAt(pane->view()->currentIndex().row()).name,
+                                  QStringLiteral("costa.png"), 10000);
+        QCOMPARE(pane->selectedCount(), 1);
 
         // Una pestaña nueva hereda la vista de la activa.
         window.setViewMode(BrowserPane::ViewMode::Thumbnails);

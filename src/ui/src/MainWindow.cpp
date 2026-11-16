@@ -100,7 +100,6 @@ MainWindow::MainWindow(tasks::Scheduler &scheduler, std::shared_ptr<journal::Jou
     m_splitter->setStretchFactor(0, 0);
     m_splitter->setStretchFactor(1, 1);
     m_splitter->setStretchFactor(2, 0);
-    m_splitter->setSizes({220, 700, 300});
     m_splitter->setSizes({230, 950});
     setCentralWidget(m_splitter);
 
@@ -1602,6 +1601,21 @@ void MainWindow::syncViewActions()
     }
 }
 
+void MainWindow::showEvent(QShowEvent *event)
+{
+    QMainWindow::showEvent(event);
+    if (m_firstShowDone) {
+        return;
+    }
+    m_firstShowDone = true;
+    // Anchos de fábrica de los tres paneles, ya con el tamaño real de la
+    // ventana (antes de mostrarla no se conoce y el panel derecho quedaba a 0).
+    if (!m_splitterRestored) {
+        const int total = std::max(m_splitter->width(), 900);
+        m_splitter->setSizes({220, total - 220 - 300, 300});
+    }
+}
+
 void MainWindow::setPreviewVisible(bool visible)
 {
     if (m_previewAction->isChecked() != visible) {
@@ -1708,19 +1722,15 @@ void MainWindow::loadPreferences()
 {
     QSettings settings;
     restoreGeometry(settings.value(QStringLiteral("window/geometry")).toByteArray());
-    m_splitter->restoreState(settings.value(QStringLiteral("window/splitter")).toByteArray());
+    // "splitter3": la disposición con el panel de previsualización. La antigua,
+    // de dos paneles, dejaría el nuevo con ancho cero; se ignora.
+    m_splitterRestored = m_splitter->restoreState(settings.value(QStringLiteral("window/splitter3")).toByteArray());
     m_showHiddenAction->setChecked(settings.value(QStringLiteral("view/showHidden"), false).toBool());
     m_binaryUnitsAction->setChecked(settings.value(QStringLiteral("view/binaryUnits"), false).toBool());
     m_folderSizesAction->setChecked(settings.value(QStringLiteral("view/folderSizes"), false).toBool());
     setThumbnailSize(settings.value(QStringLiteral("view/thumbnailSize"), 160).toInt());
     m_previewAction->setChecked(settings.value(QStringLiteral("view/preview"), true).toBool());
-    // Una disposición guardada antes de existir el panel lo dejaría con
-    // ancho cero: visible en el menú, invisible en la ventana.
-    const QList<int> sizes = m_splitter->sizes();
-    if (sizes.size() == 3 && sizes[2] < 120 && m_previewAction->isChecked()) {
-        const int total = sizes[0] + sizes[1] + sizes[2];
-        m_splitter->setSizes({sizes[0], std::max(300, total - sizes[0] - 300), 300});
-    }
+
     const bool thumbnails = settings.value(QStringLiteral("view/mode")).toString() == QLatin1String("miniaturas");
     (thumbnails ? m_thumbnailsAction : m_detailsAction)->setChecked(true);
     // El alcance y "en el contenido" no se guardan: una búsqueda en todos los
@@ -1733,7 +1743,7 @@ void MainWindow::saveSession()
 {
     QSettings settings;
     settings.setValue(QStringLiteral("window/geometry"), saveGeometry());
-    settings.setValue(QStringLiteral("window/splitter"), m_splitter->saveState());
+    settings.setValue(QStringLiteral("window/splitter3"), m_splitter->saveState());
     settings.setValue(QStringLiteral("view/showHidden"), m_showHiddenAction->isChecked());
     settings.setValue(QStringLiteral("view/binaryUnits"), m_binaryUnitsAction->isChecked());
     settings.setValue(QStringLiteral("view/folderSizes"), m_folderSizesAction->isChecked());

@@ -7,6 +7,7 @@
 #include <QApplication>
 #include <QDateTime>
 #include <QDir>
+#include <QEvent>
 #include <QFile>
 #include <QFileInfo>
 #include <QFontDatabase>
@@ -39,8 +40,10 @@ bool isMarkdown(const QString &suffix)
 
 QString dateText(qint64 milliseconds)
 {
+    // "29 oct 2026 18:21:44": completa pero sin el día de la semana ni la zona.
     return milliseconds == 0 ? QString()
-                             : QLocale().toString(QDateTime::fromMSecsSinceEpoch(milliseconds), QLocale::LongFormat);
+                             : QLocale().toString(QDateTime::fromMSecsSinceEpoch(milliseconds),
+                                                  QStringLiteral("d MMM yyyy HH:mm:ss"));
 }
 
 } // namespace
@@ -80,6 +83,7 @@ PreviewPanel::PreviewPanel(tasks::Scheduler &scheduler, QWidget *parent) : QWidg
     m_pictureLabel->setAlignment(Qt::AlignCenter);
     m_pictureLabel->setMinimumSize(1, 1);   // que el panel se pueda estrechar
     m_pictureLabel->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Ignored);
+    m_pictureLabel->installEventFilter(this);   // al cambiar de tamaño se vuelve a escalar
     m_textView = new QPlainTextEdit(m_preview);
     m_textView->setReadOnly(true);
     m_textView->setFont(QFontDatabase::systemFont(QFontDatabase::FixedFont));
@@ -285,8 +289,9 @@ void PreviewPanel::onLoaded(quint64 generation, const Loaded &loaded)
     if (!loaded.picture.isNull()) {
         m_picture = loaded.picture;
         m_picture.setDevicePixelRatio(1.0);
-        updatePicture();
+        // Primero a la vista, para que la etiqueta tenga ya su tamaño real.
         m_preview->setCurrentWidget(m_pictureLabel);
+        updatePicture();
     } else if (loaded.markdown) {
         m_markdownView->setMarkdown(loaded.text);
         m_preview->setCurrentWidget(m_markdownView);
@@ -324,6 +329,14 @@ void PreviewPanel::resizeEvent(QResizeEvent *event)
 {
     QWidget::resizeEvent(event);
     updatePicture();
+}
+
+bool PreviewPanel::eventFilter(QObject *watched, QEvent *event)
+{
+    if (watched == m_pictureLabel && event->type() == QEvent::Resize) {
+        updatePicture();
+    }
+    return QWidget::eventFilter(watched, event);
 }
 
 QString PreviewPanel::title() const
