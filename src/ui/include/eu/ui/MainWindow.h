@@ -78,6 +78,12 @@ public:
     void showOrganize();
     /// Abre "Buscar duplicados" sobre la carpeta a la vista.
     void showDuplicates();
+    /// Abre "Imágenes parecidas" sobre la carpeta a la vista.
+    void showSimilarImages();
+    void setSimilarDriverForTesting(std::function<bool(class SimilarImagesDialog &)> driver)
+    {
+        m_similarDriver = std::move(driver);
+    }
     void setDuplicatesDriverForTesting(std::function<bool(class DuplicatesDialog &)> driver)
     {
         m_duplicatesDriver = std::move(driver);
@@ -238,6 +244,10 @@ private:
     QAction *m_bulkRenameAction = nullptr;
     QAction *m_organizeAction = nullptr;
     QAction *m_duplicatesAction = nullptr;
+    QAction *m_similarAction = nullptr;
+    std::function<bool(class SimilarImagesDialog &)> m_similarDriver;
+    /// La unidad de `folder` y las raíces de todas.
+    QPair<QString, QStringList> volumesFor(const QString &folder);
     std::function<bool(class DuplicatesDialog &)> m_duplicatesDriver;
     std::function<bool(class OrganizeDialog &)> m_organizeDriver;
     QTimer m_progressDelay;   ///< El indicador solo aparece si la acción no es instantánea.

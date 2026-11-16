@@ -5,6 +5,7 @@
 #include "eu/ui/MainWindow.h"
 #include "eu/ui/BulkRenameDialog.h"
 #include "eu/ui/DuplicatesDialog.h"
+#include "eu/ui/SimilarImagesDialog.h"
 #include "eu/ui/OrganizeDialog.h"
 #include "eu/ui/PathBar.h"
 #include "eu/ui/SearchResultsModel.h"
@@ -34,6 +35,7 @@
 #include <QStandardPaths>
 #include <QTemporaryDir>
 #include <QTest>
+#include <QPainter>
 #include <QPushButton>
 #include <QTreeWidget>
 #include <QTreeView>
@@ -662,6 +664,54 @@ private slots:
         // Deshacer las devuelve.
         window.undo();
         QTRY_VERIFY_WITH_TIMEOUT(QFileInfo::exists(directory.filePath(QStringLiteral("c/copia.jpg"))), 10000);
+        QVERIFY(waitIdle(window));
+    }
+
+    void similarImagesAreComparedAndOnlyMarkedOnesTrashed()
+    {
+        QTemporaryDir data;
+        QTemporaryDir directory;
+        QImage photo(640, 480, QImage::Format_RGB32);
+        {
+            QPainter painter(&photo);
+            QLinearGradient gradient(0, 0, 640, 480);
+            gradient.setColorAt(0, Qt::yellow);
+            gradient.setColorAt(1, Qt::darkBlue);
+            painter.fillRect(photo.rect(), gradient);
+            painter.setBrush(Qt::red);
+            painter.drawEllipse(QPoint(200, 150), 80, 60);
+        }
+        QVERIFY(photo.save(directory.filePath(QStringLiteral("original.png"))));
+        QVERIFY(photo.save(directory.filePath(QStringLiteral("comprimida.jpg")), "JPG", 40));
+        QVERIFY(photo.scaled(200, 150).save(directory.filePath(QStringLiteral("pequena.jpg")), "JPG", 80));
+        MainWindow window(m_scheduler, openJournal(data));
+        window.show();
+        BrowserPane *pane = window.openTab(directory.path());
+        QVERIFY(waitReady(pane));
+        int groups = -1;
+        bool lastRefused = false;
+        window.setSimilarDriverForTesting([&](SimilarImagesDialog &dialog) {
+            dialog.startSearch();
+            if (!QTest::qWaitFor([&] { return !dialog.isSearching(); }, 30000)) {
+                return false;
+            }
+            groups = dialog.groupCount();
+            if (groups != 1) {
+                return false;
+            }
+            const QList<similar::Image> images = dialog.groups().first().images;
+            // La primera es la de más bytes; se marcan las otras dos y la última no se deja.
+            dialog.setMarked(images[1].path, true);
+            dialog.setMarked(images[2].path, true);
+            lastRefused = !dialog.setMarked(images[0].path, true);
+            dialog.setConfirmForTesting([](int files, qint64) { return files == 2; });
+            dialog.sendToTrash();
+            return dialog.result() == QDialog::Accepted;
+        });
+        window.showSimilarImages();
+        QCOMPARE(groups, 1);
+        QVERIFY(lastRefused);
+        QTRY_COMPARE_WITH_TIMEOUT(QDir(directory.path()).entryList(QDir::Files).size(), 1, 10000);
         QVERIFY(waitIdle(window));
     }
 

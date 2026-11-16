@@ -12,6 +12,7 @@
 #include "eu/thumbs/Isolated.h"
 #include "eu/ui/BulkRenameDialog.h"
 #include "eu/ui/DuplicatesDialog.h"
+#include "eu/ui/SimilarImagesDialog.h"
 #include "eu/ui/OrganizeDialog.h"
 #include "eu/ui/ContentIndexDialog.h"
 #include "eu/ui/IndexDialog.h"
@@ -417,6 +418,10 @@ void MainWindow::createEditActions()
     m_duplicatesAction->setToolTip(tr("Archivos con el mismo contenido: cuánto ocupan de más y quitar las copias "
                                       "que elijas (a la papelera)"));
     connect(m_duplicatesAction, &QAction::triggered, this, &MainWindow::showDuplicates);
+    m_similarAction = new QAction(tr("Imágenes parecidas…"), this);
+    m_similarAction->setToolTip(tr("Fotos casi iguales (recomprimidas, reducidas, retocadas), lado a lado para "
+                                   "elegir cuáles quitar"));
+    connect(m_similarAction, &QAction::triggered, this, &MainWindow::showSimilarImages);
 
     m_cutAction = new QAction(themedIcon(QStringLiteral("edit-cut"), QStyle::SP_FileIcon), tr("Cortar"), this);
     m_cutAction->setShortcut(QKeySequence::Cut);
@@ -500,6 +505,7 @@ void MainWindow::createEditActions()
     toolsMenu->addAction(m_organizeAction);
     toolsMenu->addSeparator();
     toolsMenu->addAction(m_duplicatesAction);
+    toolsMenu->addAction(m_similarAction);
     editMenu->addAction(m_trashAction);
     editMenu->addAction(m_deleteAction);
 
@@ -848,6 +854,19 @@ void MainWindow::showDuplicates()
         return;
     }
     const QString folder = pane->currentPath();
+    const auto [volume, roots] = volumesFor(folder);
+    DuplicatesDialog dialog(m_scheduler, folder, volume, roots, this);
+    const bool accepted = m_duplicatesDriver ? m_duplicatesDriver(dialog) : dialog.exec() == QDialog::Accepted;
+    const QStringList marked = dialog.marked();
+    if (!accepted || marked.isEmpty() || !m_actions->isAvailable()) {
+        return;
+    }
+    // A la papelera propia: se recupera con Deshacer (SPEC §14.1).
+    m_requestedCounts.insert(m_actions->trash(marked), int(marked.size()));
+}
+
+QPair<QString, QStringList> MainWindow::volumesFor(const QString &folder)
+{
     QStringList roots;
     QString volume;
     for (const fs::Volume &candidate : searchVolumes()) {
@@ -858,13 +877,23 @@ void MainWindow::showDuplicates()
             volume = candidate.rootPath;
         }
     }
-    DuplicatesDialog dialog(m_scheduler, folder, volume, roots, this);
-    const bool accepted = m_duplicatesDriver ? m_duplicatesDriver(dialog) : dialog.exec() == QDialog::Accepted;
+    return {volume, roots};
+}
+
+void MainWindow::showSimilarImages()
+{
+    BrowserPane *pane = currentPane();
+    if (pane == nullptr || isVirtualLocation(pane->currentPath())) {
+        return;
+    }
+    const QString folder = pane->currentPath();
+    const auto [volume, roots] = volumesFor(folder);
+    SimilarImagesDialog dialog(m_scheduler, folder, volume, roots, this);
+    const bool accepted = m_similarDriver ? m_similarDriver(dialog) : dialog.exec() == QDialog::Accepted;
     const QStringList marked = dialog.marked();
     if (!accepted || marked.isEmpty() || !m_actions->isAvailable()) {
         return;
     }
-    // A la papelera propia: se recupera con Deshacer (SPEC §14.1).
     m_requestedCounts.insert(m_actions->trash(marked), int(marked.size()));
 }
 

@@ -12,6 +12,7 @@ add_library(eu_ui STATIC
     src/BulkRenameDialog.cpp
     src/OrganizeDialog.cpp
     src/DuplicatesDialog.cpp
+    src/SimilarImagesDialog.cpp
     src/InlinePlayer.cpp
     src/MainWindow.cpp
     src/PathBar.cpp
@@ -32,6 +33,7 @@ add_library(eu_ui STATIC
     include/eu/ui/BulkRenameDialog.h
     include/eu/ui/OrganizeDialog.h
     include/eu/ui/DuplicatesDialog.h
+    include/eu/ui/SimilarImagesDialog.h
     include/eu/ui/InlinePlayer.h
     include/eu/ui/Locations.h
     include/eu/ui/MainWindow.h
@@ -46,7 +48,7 @@ add_library(eu_ui STATIC
 add_library(eu::ui ALIAS eu_ui)
 
 target_include_directories(eu_ui PUBLIC include)
-target_link_libraries(eu_ui PUBLIC eu::core eu::tasks eu::fs eu::search eu::index eu::thumbs eu::meta eu::archive eu::rename eu::organize eu::dupes eu::journal eu::ops_engine Qt6::Widgets)
+target_link_libraries(eu_ui PUBLIC eu::core eu::tasks eu::fs eu::search eu::index eu::thumbs eu::meta eu::archive eu::rename eu::organize eu::dupes eu::similar eu::journal eu::ops_engine Qt6::Widgets)
 eu_target_defaults(eu_ui)
 
 # Reproducción dentro de las miniaturas (opcional: sin Qt Multimedia no hay
