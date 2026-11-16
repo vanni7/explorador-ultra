@@ -23,6 +23,7 @@ include(EuCompilerOptions)
 
 find_package(Qt6 6.8 REQUIRED COMPONENTS Core Gui Widgets Svg Sql LinguistTools)
 qt_standard_project_setup()
+include(EuOptionalDeps)
 
 # Todos los ejecutables van a build/<preset>/bin en las tres plataformas.
 # (Sin esto, Qt los deja en sitios distintos en Windows y en Linux.)
@@ -35,6 +36,7 @@ add_subdirectory(src/search)
 add_subdirectory(src/journal)
 add_subdirectory(src/index)
 add_subdirectory(src/thumbs)
+add_subdirectory(src/meta)
 add_subdirectory(src/ops)
 add_subdirectory(src/trash)
 add_subdirectory(src/ui)
