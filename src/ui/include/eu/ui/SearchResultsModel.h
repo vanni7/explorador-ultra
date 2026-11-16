@@ -28,6 +28,7 @@ public:
     enum Role {
         SnippetStartRole = Qt::UserRole + 40,
         SnippetLengthRole,
+        SnippetPlaceRole,   ///< "pág. 12": se pinta delante, más tenue.
     };
 
     enum Column {

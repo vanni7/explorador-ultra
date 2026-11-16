@@ -221,6 +221,7 @@ private slots:
         QCOMPARE(int(hits.size()), 1);
         QCOMPARE(hits.front().snippet.mid(hits.front().snippetStart, hits.front().snippetLength),
                  QStringLiteral("Walter Riso"));
+        QVERIFY2(hits.front().snippetPlace.startsWith(QStringLiteral("línea ")), qPrintable(hits.front().snippetPlace));
 
 #ifdef EU_HAVE_LIBARCHIVE
         // También dentro de los documentos de oficina.

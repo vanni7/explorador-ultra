@@ -27,6 +27,8 @@ struct Hit
     QString snippet;
     int snippetStart = 0;
     int snippetLength = 0;
+    /// Dónde está la coincidencia: "pág. 12", "diap. 3", "línea 40"; vacío si no se sabe.
+    QString snippetPlace;
 
     QString path() const;
 };

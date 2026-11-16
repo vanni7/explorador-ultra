@@ -6,6 +6,7 @@
 
 #include <QDir>
 #include <QFile>
+#include <QCoreApplication>
 #include <QFileInfo>
 #include <QStringDecoder>
 
@@ -44,6 +45,21 @@ std::uint64_t deviceOf(const QString &path)
 QString childPath(const QString &directory, const QString &name)
 {
     return directory.endsWith(QLatin1Char('/')) ? directory + name : directory + QLatin1Char('/') + name;
+}
+
+/// "pág. 12", "diap. 3" o "línea 40", según el tipo de documento.
+QString placeOf(const QString &fileName, const content::Snippet &snippet)
+{
+    switch (content::textSourceFor(fileName)) {
+    case content::TextSource::Pdf:
+        return snippet.page > 0 ? QCoreApplication::translate("eu::search", "pág. %1").arg(snippet.page) : QString();
+    case content::TextSource::PowerPoint:
+        return snippet.page > 0 ? QCoreApplication::translate("eu::search", "diap. %1").arg(snippet.page) : QString();
+    case content::TextSource::Plain:
+        return QCoreApplication::translate("eu::search", "línea %1").arg(snippet.line);
+    default:
+        return {};
+    }
 }
 
 /// Saca el texto de un archivo la primera vez que la consulta lo pide.
@@ -225,6 +241,7 @@ SearchSummary searchTree(const QStringList &roots, const Query &query, const Sea
                 }
                 bool matched = false;
                 QString snippetText;
+                QString snippetPlace;
                 int snippetStart = 0;
                 int snippetLength = 0;
                 if (readsContent) {
@@ -253,6 +270,7 @@ SearchSummary searchTree(const QStringList &roots, const Query &query, const Sea
                                 snippetText = snippet.text;
                                 snippetStart = snippet.start;
                                 snippetLength = snippet.length;
+                                snippetPlace = placeOf(entry.name, snippet);
                                 break;
                             }
                         }
@@ -262,7 +280,8 @@ SearchSummary searchTree(const QStringList &roots, const Query &query, const Sea
                 }
                 if (matched) {
                     ++progress.hits;
-                    batch.push_back({folder.path, std::move(entry), snippetText, snippetStart, snippetLength});
+                    batch.push_back({folder.path, std::move(entry), snippetText, snippetStart, snippetLength,
+                                     snippetPlace});
                     if (progress.hits >= options.maxHits) {
                         summary.truncated = true;
                     }

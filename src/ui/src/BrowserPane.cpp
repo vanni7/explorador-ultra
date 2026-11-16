@@ -141,6 +141,16 @@ public:
             painter->drawText(x, baseline, part);
             x += width;
         };
+        // Primero dónde está ("pág. 12"), más tenue.
+        const QString place = index.data(SearchResultsModel::SnippetPlaceRole).toString();
+        if (!place.isEmpty()) {
+            painter->setFont(opt.font);
+            QColor dim = normal;
+            dim.setAlphaF(0.6f);
+            painter->setPen(dim);
+            painter->drawText(x, baseline, place);
+            x += regularMetrics.horizontalAdvance(place) + regularMetrics.horizontalAdvance(QLatin1Char(' ')) * 2;
+        }
         piece(text.left(start), false);
         piece(text.mid(start, length), true);
         piece(text.mid(start + length), false);

@@ -111,6 +111,7 @@ private slots:
         text = textOf(file(QStringLiteral("charla.pptx")));
         // En el orden de las diapositivas (2 antes que 10), no en el del nombre.
         QVERIFY2(text.indexOf(QStringLiteral("dos")) < text.indexOf(QStringLiteral("diez")), qPrintable(text));
+        QCOMPARE(snippetAround(text, QStringLiteral("diez"), Qt::CaseInsensitive).page, 2);
 
         // Un documento roto: error, sin colgarse.
         writeBytes(file(QStringLiteral("roto.docx")), QByteArray(500, 'x'));
@@ -138,6 +139,9 @@ private slots:
         const QString text = textOf(path);
         QVERIFY2(text.contains(QStringLiteral("presupuesto anual")), qPrintable(text));
         QVERIFY(text.contains(QStringLiteral("Segunda")));
+        // Las páginas van separadas: se sabe en cuál está cada cosa.
+        QCOMPARE(snippetAround(text, QStringLiteral("presupuesto"), Qt::CaseInsensitive).page, 1);
+        QCOMPARE(snippetAround(text, QStringLiteral("Segunda"), Qt::CaseInsensitive).page, 2);
     }
 
     void limitsAreRespected()
@@ -165,6 +169,8 @@ private slots:
         QCOMPARE(snippet.text.mid(snippet.start, snippet.length), QStringLiteral("Presupuesto Anual"));
         QVERIFY(snippet.text.startsWith(QStringLiteral("…")));
         QVERIFY(!snippet.text.contains(QLatin1Char('\n')));
+        QCOMPARE(snippet.line, 2);
+        QCOMPARE(snippet.page, 0);   // texto sin páginas
         QVERIFY(snippetAround(text, QStringLiteral("presupuesto anual"), Qt::CaseSensitive).text.isEmpty());
         // Los espacios seguidos y los saltos se juntan en uno; la posición
         // de la coincidencia sigue siendo la buena.

@@ -12,11 +12,11 @@ namespace eu::content {
 enum class TextSource {
     None,
     Plain,      ///< TXT, código, Markdown, CSV… (UTF-8, UTF-16 o Latin-1).
-    Pdf,        ///< Con Qt PDF.
+    Pdf,        ///< Con Qt PDF. Las páginas van separadas por '\f'.
     Word,       ///< DOCX.
     OpenText,   ///< ODT, ODS, ODP (OpenDocument).
     Excel,      ///< XLSX.
-    PowerPoint, ///< PPTX.
+    PowerPoint, ///< PPTX. Las diapositivas van separadas por '\f'.
     Rtf,
 };
 
@@ -47,6 +47,8 @@ struct Snippet
     QString text;
     int start = 0;
     int length = 0;
+    int page = 0;   ///< Página (PDF) o diapositiva (PPTX) donde está; 0 si no se sabe.
+    int line = 0;   ///< Línea del texto donde está.
 };
 Snippet snippetAround(const QString &text, const QString &needle, Qt::CaseSensitivity sensitivity,
                       int before = 30, int after = 90);

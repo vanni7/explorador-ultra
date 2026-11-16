@@ -362,7 +362,7 @@ core::Result<QString> extractText(const QString &path, const tasks::CancelToken 
             pageText.remove(QChar(0xFFFE));
             pageText.remove(QChar(0x00AD));
             text += pageText;
-            text += QLatin1Char('\n');
+            text += QLatin1Char('\f');   // salto de página: para decir en qué página está
         }
 #endif
         break;
@@ -402,6 +402,7 @@ core::Result<QString> extractText(const QString &path, const tasks::CancelToken 
             path, QRegularExpression(QStringLiteral("^ppt/slides/slide\\d+\\.xml$")), limits.maxTextChars * 4, cancel);
         for (const QByteArray &part : parts) {
             text += xmlText(part, {QStringLiteral("a:t")}, {QStringLiteral("a:p")}, {}, false);
+            text += QLatin1Char('\f');   // una diapositiva por "página"
         }
         break;
     }
@@ -470,6 +471,13 @@ Snippet snippetAround(const QString &text, const QString &needle, Qt::CaseSensit
     snippet.text = piece + (to < text.size() ? QStringLiteral("…") : QString());
     snippet.start = matchStart;
     snippet.length = matchEnd - matchStart;
+    // Dónde está: la página (los PDF y las presentaciones separan sus páginas
+    // con un salto de página) y la línea.
+    const QStringView preceding = QStringView(text).left(at);
+    if (text.contains(QLatin1Char('\f'))) {
+        snippet.page = int(preceding.count(QLatin1Char('\f'))) + 1;
+    }
+    snippet.line = int(preceding.count(QLatin1Char('\n'))) + 1;
     return snippet;
 }
 

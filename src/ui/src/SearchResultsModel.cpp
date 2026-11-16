@@ -198,12 +198,14 @@ QVariant SearchResultsModel::data(const QModelIndex &index, int role) const
         return hit.snippetStart;
     case SnippetLengthRole:
         return hit.snippetLength;
+    case SnippetPlaceRole:
+        return hit.snippetPlace;
     case Qt::ToolTipRole:
         if (index.column() == SizeColumn && !entry.isDirectory) {
             return tr("%1 bytes").arg(QLocale().toString(entry.size));
         }
         if (index.column() == SnippetColumn) {
-            return hit.snippet;
+            return hit.snippetPlace.isEmpty() ? hit.snippet : hit.snippetPlace + QStringLiteral(": ") + hit.snippet;
         }
         if (index.column() == OriginColumn) {
             return m_fromIndex ? tr("Del índice: no se ha comprobado que siga en el disco")

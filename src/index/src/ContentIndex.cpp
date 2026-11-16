@@ -25,7 +25,7 @@ namespace eu::index {
 namespace {
 
 /// Si cambia la forma de la base, se sube y la base vieja se vacía.
-constexpr int kSchemaVersion = 1;
+constexpr int kSchemaVersion = 2;   // 2: páginas separadas por \f
 /// Cada cuántos documentos (o segundos) se guarda lo hecho.
 constexpr int kCommitEvery = 20;
 constexpr qint64 kCommitEveryMs = 3000;
