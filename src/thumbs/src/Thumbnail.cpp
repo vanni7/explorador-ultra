@@ -2,6 +2,7 @@
 #include "eu/thumbs/Thumbnail.h"
 
 #include "MediaThumbnail.h"
+#include "OfficeThumbnail.h"
 
 #include "eu/core/NaturalCompare.h"
 #include "eu/fs/DirectoryLister.h"
@@ -103,6 +104,37 @@ const QSet<QString> &audioSuffixes()
     return suffixes;
 }
 
+const QSet<QString> &officeSuffixes()
+{
+    static const QSet<QString> suffixes{
+        QStringLiteral("odt"),  QStringLiteral("ods"),  QStringLiteral("odp"),  QStringLiteral("odg"),
+        QStringLiteral("docx"), QStringLiteral("xlsx"), QStringLiteral("pptx"), QStringLiteral("doc"),
+        QStringLiteral("xls"),  QStringLiteral("ppt"),  QStringLiteral("rtf"),
+    };
+    return suffixes;
+}
+
+/// Los formatos antiguos de Microsoft y RTF no llevan miniatura dentro:
+/// solo LibreOffice sabe pintarlos.
+bool needsLibreOffice(const QString &suffix)
+{
+    return suffix == QLatin1String("doc") || suffix == QLatin1String("xls") || suffix == QLatin1String("ppt")
+        || suffix == QLatin1String("rtf");
+}
+
+const QSet<QString> &rawSuffixes()
+{
+    static const QSet<QString> suffixes{
+        QStringLiteral("cr2"), QStringLiteral("cr3"), QStringLiteral("crw"), QStringLiteral("nef"),
+        QStringLiteral("nrw"), QStringLiteral("arw"), QStringLiteral("srf"), QStringLiteral("sr2"),
+        QStringLiteral("dng"), QStringLiteral("orf"), QStringLiteral("rw2"), QStringLiteral("raf"),
+        QStringLiteral("pef"), QStringLiteral("srw"), QStringLiteral("x3f"), QStringLiteral("3fr"),
+        QStringLiteral("erf"), QStringLiteral("kdc"), QStringLiteral("mrw"), QStringLiteral("rwl"),
+        QStringLiteral("iiq"),
+    };
+    return suffixes;
+}
+
 /// Lado mayor a partir del cual una imagen se rechaza sin decodificarla: una
 /// imagen de 100 000 × 100 000 píxeles ocuparía 40 GB en memoria.
 constexpr int maxSourceSide = 30000;
@@ -115,8 +147,18 @@ ThumbnailSource thumbnailSourceFor(const QString &fileName)
     if (suffix.isEmpty()) {
         return ThumbnailSource::None;
     }
+    // RAW antes que imagen: algún complemento de Qt lee el TIFF de un DNG,
+    // pero la vista previa de la cámara es mejor y más rápida.
+    if (rawSuffixes().contains(suffix)) {
+        return detail::hasRawSupport() ? ThumbnailSource::Raw : ThumbnailSource::None;
+    }
     if (readableImageSuffixes().contains(suffix)) {
         return ThumbnailSource::Image;
+    }
+    if (officeSuffixes().contains(suffix)) {
+        const bool possible = needsLibreOffice(suffix) ? !detail::libreOfficeProgram().isEmpty()
+                                                       : detail::hasOfficeSupport();
+        return possible ? ThumbnailSource::Office : ThumbnailSource::None;
     }
     if (suffix == QLatin1String("pdf")) {
         return hasPdfPlugin() ? ThumbnailSource::Pdf : ThumbnailSource::None;
@@ -363,6 +405,10 @@ core::Result<QImage> renderThumbnail(const ThumbnailRequest &request, const task
         return detail::renderMedia(request, cancel, false);
     case ThumbnailSource::Audio:
         return detail::renderMedia(request, cancel, true);
+    case ThumbnailSource::Office:
+        return detail::renderOffice(request, cancel);
+    case ThumbnailSource::Raw:
+        return detail::renderRaw(request, cancel);
     case ThumbnailSource::None:
         break;
     }

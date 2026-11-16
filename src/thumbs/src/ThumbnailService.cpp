@@ -34,8 +34,14 @@ ThumbnailCache::Entry ThumbnailService::request(const ThumbnailRequest &request)
     ThumbnailCache *cache = &m_cache;   // vive más que el servicio (lo crea quien crea el servicio)
     // Disco y decodificación en una tarea; en un disco lento cede el paso a
     // abrir carpetas, como el resto del trabajo de fondo.
+    // Lo lento (documentos que pasan por LibreOffice, videos) va detrás de
+    // las fotos, que se generan en milisegundos.
+    const ThumbnailSource source = thumbnailSourceFor(request);
+    const tasks::Priority priority = (source == ThumbnailSource::Office || source == ThumbnailSource::Video)
+        ? tasks::Priority::Background
+        : tasks::Priority::VisibleThumbnail;
     tasks::TaskHandle task = m_scheduler.submitForPaths(
-        tasks::Category::Thumbnails, tasks::Priority::VisibleThumbnail, {request.path},
+        tasks::Category::Thumbnails, priority, {request.path},
         [self, cache, request, key, id](const tasks::CancelToken &cancel) {
             if (cache->load(request).state == ThumbnailCache::State::Missing) {
                 const core::Result<QImage> image = renderThumbnail(request, cancel);

@@ -2,9 +2,11 @@
 #include "eu/thumbs/Thumbnail.h"
 #include "eu/thumbs/ThumbnailCache.h"
 #include "eu/thumbs/ThumbnailService.h"
+#include "../../src/thumbs/src/OfficeThumbnail.h"
 
 #include <QBuffer>
 #include <QDir>
+#include <QElapsedTimer>
 #include <QFile>
 #include <QFileInfo>
 #include <QImageWriter>
@@ -13,6 +15,7 @@
 #include <QPainter>
 #include <QPdfWriter>
 #include <QSignalSpy>
+#include <QStandardPaths>
 #include <QTemporaryDir>
 #include <QTest>
 #include <QThread>
@@ -30,10 +33,38 @@ extern "C" {
 }
 #endif
 
+#ifdef EU_HAVE_LIBARCHIVE
+#include <archive.h>
+#include <archive_entry.h>
+#endif
+
 using namespace eu;
 using namespace eu::thumbs;
 
 namespace {
+
+#ifdef EU_HAVE_LIBARCHIVE
+/// Escribe un ZIP con estas entradas (los documentos de oficina lo son).
+bool writeZip(const QString &path, const QList<QPair<QString, QByteArray>> &entries)
+{
+    archive *zip = archive_write_new();
+    archive_write_set_format_zip(zip);
+    bool ok = archive_write_open_filename(zip, QFile::encodeName(path).constData()) == ARCHIVE_OK;
+    for (const auto &[name, data] : entries) {
+        archive_entry *entry = archive_entry_new();
+        archive_entry_set_pathname(entry, name.toUtf8().constData());
+        archive_entry_set_size(entry, data.size());
+        archive_entry_set_filetype(entry, AE_IFREG);
+        archive_entry_set_perm(entry, 0644);
+        ok = ok && archive_write_header(zip, entry) == ARCHIVE_OK
+            && archive_write_data(zip, data.constData(), size_t(data.size())) == data.size();
+        archive_entry_free(entry);
+    }
+    ok = archive_write_close(zip) == ARCHIVE_OK && ok;
+    archive_write_free(zip);
+    return ok;
+}
+#endif
 
 #ifdef EU_HAVE_FFMPEG
 /// Escribe un video MJPEG (en contenedor MOV) hecho de tramos de colores
@@ -529,6 +560,103 @@ private slots:
 #endif
     }
 
+    void officeDocumentsUseTheirEmbeddedThumbnail()
+    {
+#ifndef EU_HAVE_LIBARCHIVE
+        QSKIP("Compilado sin libarchive.");
+#else
+        QCOMPARE(thumbnailSourceFor(QStringLiteral("informe.odt")), ThumbnailSource::Office);
+        QCOMPARE(thumbnailSourceFor(QStringLiteral("cuentas.XLSX")), ThumbnailSource::Office);
+        // Un ODT como los que guarda LibreOffice: con Thumbnails/thumbnail.png dentro.
+        QImage page(150, 200, QImage::Format_RGB32);
+        page.fill(Qt::white);
+        QPainter(&page).fillRect(0, 0, 150, 60, Qt::red);   // título rojo arriba
+        QByteArray png;
+        QBuffer buffer(&png);
+        buffer.open(QIODevice::WriteOnly);
+        page.save(&buffer, "png");
+        const QString odt = file(QStringLiteral("informe.odt"));
+        QVERIFY(writeZip(odt, {{QStringLiteral("mimetype"), "application/vnd.oasis.opendocument.text"},
+                               {QStringLiteral("content.xml"), "<x/>"},
+                               {QStringLiteral("Thumbnails/thumbnail.png"), png}}));
+        const auto thumbnail = renderThumbnail(requestFor(odt, 128), {});
+        QVERIFY2(thumbnail.ok(), thumbnail.ok() ? "" : qPrintable(thumbnail.error().message));
+        QCOMPARE(thumbnail.value().size(), QSize(96, 128));
+        QVERIFY(isReddish(thumbnail.value().pixel(48, 10)));
+        // Un ZIP roto con extensión de documento no se cuelga.
+        writeBytes(file(QStringLiteral("roto.docx")), QByteArray(300, 'q'));
+        if (detail::libreOfficeProgram().isEmpty()) {
+            QVERIFY(!renderThumbnail(requestFor(file(QStringLiteral("roto.docx"))), {}).ok());
+        }
+#endif
+    }
+
+    void libreOfficeDrawsDocumentsWithoutThumbnail()
+    {
+#ifndef EU_HAVE_LIBARCHIVE
+        QSKIP("Compilado sin libarchive.");
+#else
+        if (detail::libreOfficeProgram().isEmpty()) {
+            QSKIP("LibreOffice no está instalado.");
+        }
+        // Un DOCX mínimo, sin miniatura dentro: la pinta LibreOffice.
+        const QString docx = file(QStringLiteral("carta.docx"));
+        QVERIFY(writeZip(docx, {
+            {QStringLiteral("[Content_Types].xml"),
+             "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>"
+             "<Types xmlns=\"http://schemas.openxmlformats.org/package/2006/content-types\">"
+             "<Default Extension=\"rels\" ContentType=\"application/vnd.openxmlformats-package.relationships+xml\"/>"
+             "<Default Extension=\"xml\" ContentType=\"application/xml\"/>"
+             "<Override PartName=\"/word/document.xml\" ContentType=\"application/"
+             "vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml\"/></Types>"},
+            {QStringLiteral("_rels/.rels"),
+             "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>"
+             "<Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\">"
+             "<Relationship Id=\"rId1\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/"
+             "relationships/officeDocument\" Target=\"word/document.xml\"/></Relationships>"},
+            {QStringLiteral("word/document.xml"),
+             "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>"
+             "<w:document xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\"><w:body>"
+             "<w:p><w:r><w:rPr><w:sz w:val=\"144\"/></w:rPr><w:t>HOLA MUNDO</w:t></w:r></w:p>"
+             "</w:body></w:document>"},
+        }));
+        QElapsedTimer timer;
+        timer.start();
+        const auto thumbnail = renderThumbnail(requestFor(docx, 256), {});
+        qInfo("LibreOffice tardó %lld ms", static_cast<long long>(timer.elapsed()));
+        QVERIFY2(thumbnail.ok(), thumbnail.ok() ? "" : qPrintable(thumbnail.error().message));
+        const QImage image = thumbnail.value();
+        QCOMPARE(image.height(), 256);    // página vertical
+        QVERIFY(image.width() < image.height());
+        int dark = 0;   // el texto
+        for (int y = 0; y < image.height() / 3; ++y) {
+            for (int x = 0; x < image.width(); ++x) {
+                dark += qGray(image.pixel(x, y)) < 100 ? 1 : 0;
+            }
+        }
+        QVERIFY(dark > 20);
+        // Cancelar mientras espera o convierte corta enseguida.
+        tasks::CancelSource source;
+        source.cancel();
+        QVERIFY(!renderThumbnail(requestFor(docx, 200), source.token()).ok());
+#endif
+    }
+
+    void rawPhotosAreRecognised()
+    {
+#ifndef EU_HAVE_LIBRAW
+        QCOMPARE(thumbnailSourceFor(QStringLiteral("foto.CR2")), ThumbnailSource::None);
+        QSKIP("Compilado sin LibRaw.");
+#else
+        QCOMPARE(thumbnailSourceFor(QStringLiteral("foto.CR2")), ThumbnailSource::Raw);
+        QCOMPARE(thumbnailSourceFor(QStringLiteral("foto.nef")), ThumbnailSource::Raw);
+        QCOMPARE(thumbnailSourceFor(QStringLiteral("foto.dng")), ThumbnailSource::Raw);
+        // No hay fotos RAW reales en las pruebas: al menos, una falsa no rompe nada.
+        writeBytes(file(QStringLiteral("falsa.cr2")), QByteArray(5000, 'r'));
+        QVERIFY(!renderThumbnail(requestFor(file(QStringLiteral("falsa.cr2"))), {}).ok());
+#endif
+    }
+
     void cacheKeepsThumbnailsInMemoryAndOnDisk()
     {
         QTemporaryDir cacheDir;
@@ -663,6 +791,9 @@ private slots:
 int main(int argc, char *argv[])
 {
     QGuiApplication application(argc, argv);
+    // Lo que se guarda en "caché" (el perfil de LibreOffice) va a las carpetas
+    // de prueba de Qt, no a las del usuario.
+    QStandardPaths::setTestModeEnabled(true);
     TestThumbs test;
     QTEST_SET_MAIN_SOURCE_PATH
     return QTest::qExec(&test, argc, argv);

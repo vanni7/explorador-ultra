@@ -31,6 +31,8 @@ enum class ThumbnailSource {
     Folder,   ///< Hasta cuatro miniaturas de lo que contiene.
     Video,    ///< El fotograma del segundo 3, con la duración (si hay FFmpeg).
     Audio,    ///< La carátula incrustada o una genérica, con la duración (si hay FFmpeg).
+    Office,   ///< Primera página de un documento de oficina (incrustada o con LibreOffice).
+    Raw,      ///< Foto RAW de cámara: la vista previa que guarda dentro (si hay LibRaw).
 };
 
 /// true si esta compilación hace miniaturas de video y audio.
