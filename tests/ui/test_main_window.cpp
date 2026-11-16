@@ -4,6 +4,7 @@
 #include "eu/ui/Locations.h"
 #include "eu/ui/MainWindow.h"
 #include "eu/ui/BulkRenameDialog.h"
+#include "eu/ui/DuplicatesDialog.h"
 #include "eu/ui/OrganizeDialog.h"
 #include "eu/ui/PathBar.h"
 #include "eu/ui/SearchResultsModel.h"
@@ -605,6 +606,63 @@ private slots:
         QVERIFY(waitIdle(window));
         QVERIFY(QFileInfo::exists(directory.filePath(QStringLiteral("foto.jpg"))));
         QVERIFY(!QFileInfo::exists(directory.filePath(QStringLiteral("Documentos"))));
+    }
+
+    void duplicatesAreMarkedConfirmedAndTrashed()
+    {
+        QTemporaryDir data;
+        QTemporaryDir directory;
+        QByteArray content(50000, 'd');
+        for (const QString &name : {QStringLiteral("a/foto.jpg"), QStringLiteral("b/foto.jpg"), QStringLiteral("c/copia.jpg")}) {
+            QDir().mkpath(QFileInfo(directory.filePath(name)).absolutePath());
+            QFile file(directory.filePath(name));
+            QVERIFY(file.open(QIODevice::WriteOnly));
+            file.write(content);
+        }
+        writeFile(directory.filePath(QStringLiteral("unico.txt")), 10);
+        MainWindow window(m_scheduler, openJournal(data));
+        window.show();
+        BrowserPane *pane = window.openTab(directory.path());
+        QVERIFY(waitReady(pane));
+        int groups = -1;
+        bool keptOne = false;
+        window.setDuplicatesDriverForTesting([&](DuplicatesDialog &dialog) {
+            dialog.startSearch();
+            if (!QTest::qWaitFor([&] { return !dialog.isSearching(); }, 20000)) {
+                return false;
+            }
+            groups = dialog.results()->topLevelItemCount();
+            // Marcar a mano las tres: la tercera se desmarca sola.
+            QTreeWidgetItem *group = dialog.results()->topLevelItem(0);
+            for (int i = 0; i < group->childCount(); ++i) {
+                group->child(i)->setCheckState(0, Qt::Checked);
+            }
+            keptOne = dialog.marked().size() == 2;
+            // Con la regla: todas menos la de ruta más corta (a/foto.jpg o b/foto.jpg).
+            dialog.markWithRule(dupes::Keep::ShortestPath);
+            if (dialog.marked().size() != 2) {
+                return false;
+            }
+            dialog.setConfirmForTesting([](int files, qint64 bytes) { return files == 2 && bytes == 100000; });
+            for (QPushButton *button : dialog.findChildren<QPushButton *>()) {
+                if (button->text().startsWith(QStringLiteral("Enviar"))) {
+                    button->click();
+                }
+            }
+            return dialog.result() == QDialog::Accepted;
+        });
+        window.showDuplicates();
+        QCOMPARE(groups, 1);
+        QVERIFY(keptOne);
+        QTRY_COMPARE_WITH_TIMEOUT(int(QFileInfo::exists(directory.filePath(QStringLiteral("a/foto.jpg"))))
+                                      + int(QFileInfo::exists(directory.filePath(QStringLiteral("b/foto.jpg"))))
+                                      + int(QFileInfo::exists(directory.filePath(QStringLiteral("c/copia.jpg")))),
+                                  1, 10000);
+        QVERIFY(waitIdle(window));
+        // Deshacer las devuelve.
+        window.undo();
+        QTRY_VERIFY_WITH_TIMEOUT(QFileInfo::exists(directory.filePath(QStringLiteral("c/copia.jpg"))), 10000);
+        QVERIFY(waitIdle(window));
     }
 
     void interruptedCopyIsResumedAndClosingMidCopyCanBeResumed()

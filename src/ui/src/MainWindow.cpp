@@ -11,6 +11,7 @@
 #include "eu/ui/FileClipboard.h"
 #include "eu/thumbs/Isolated.h"
 #include "eu/ui/BulkRenameDialog.h"
+#include "eu/ui/DuplicatesDialog.h"
 #include "eu/ui/OrganizeDialog.h"
 #include "eu/ui/ContentIndexDialog.h"
 #include "eu/ui/IndexDialog.h"
@@ -412,6 +413,10 @@ void MainWindow::createEditActions()
     m_organizeAction->setToolTip(tr("Ordenar en subcarpetas por tipo, fecha, tamaño o datos; siempre con "
                                     "simulación antes y se deshace todo junto"));
     connect(m_organizeAction, &QAction::triggered, this, &MainWindow::showOrganize);
+    m_duplicatesAction = new QAction(tr("Buscar duplicados…"), this);
+    m_duplicatesAction->setToolTip(tr("Archivos con el mismo contenido: cuánto ocupan de más y quitar las copias "
+                                      "que elijas (a la papelera)"));
+    connect(m_duplicatesAction, &QAction::triggered, this, &MainWindow::showDuplicates);
 
     m_cutAction = new QAction(themedIcon(QStringLiteral("edit-cut"), QStyle::SP_FileIcon), tr("Cortar"), this);
     m_cutAction->setShortcut(QKeySequence::Cut);
@@ -493,6 +498,8 @@ void MainWindow::createEditActions()
     toolsMenu->setObjectName(QStringLiteral("menuHerramientas"));
     toolsMenu->addAction(m_bulkRenameAction);
     toolsMenu->addAction(m_organizeAction);
+    toolsMenu->addSeparator();
+    toolsMenu->addAction(m_duplicatesAction);
     editMenu->addAction(m_trashAction);
     editMenu->addAction(m_deleteAction);
 
@@ -832,6 +839,33 @@ void MainWindow::showOrganize()
     }
     m_requestedCounts.insert(m_actions->organize(moves, dialog.plan().foldersToCreate, dialog.folder()),
                              int(moves.size()));
+}
+
+void MainWindow::showDuplicates()
+{
+    BrowserPane *pane = currentPane();
+    if (pane == nullptr || isVirtualLocation(pane->currentPath())) {
+        return;
+    }
+    const QString folder = pane->currentPath();
+    QStringList roots;
+    QString volume;
+    for (const fs::Volume &candidate : searchVolumes()) {
+        roots.append(candidate.rootPath);
+        const QString prefix = candidate.rootPath.endsWith(QLatin1Char('/')) ? candidate.rootPath
+                                                                             : candidate.rootPath + QLatin1Char('/');
+        if ((folder == candidate.rootPath || folder.startsWith(prefix)) && candidate.rootPath.size() > volume.size()) {
+            volume = candidate.rootPath;
+        }
+    }
+    DuplicatesDialog dialog(m_scheduler, folder, volume, roots, this);
+    const bool accepted = m_duplicatesDriver ? m_duplicatesDriver(dialog) : dialog.exec() == QDialog::Accepted;
+    const QStringList marked = dialog.marked();
+    if (!accepted || marked.isEmpty() || !m_actions->isAvailable()) {
+        return;
+    }
+    // A la papelera propia: se recupera con Deshacer (SPEC §14.1).
+    m_requestedCounts.insert(m_actions->trash(marked), int(marked.size()));
 }
 
 void MainWindow::copyToClipboard(bool cut)

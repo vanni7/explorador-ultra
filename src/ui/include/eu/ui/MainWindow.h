@@ -76,6 +76,12 @@ public:
     void showBulkRename();
     /// Abre "Organizar" sobre la carpeta a la vista.
     void showOrganize();
+    /// Abre "Buscar duplicados" sobre la carpeta a la vista.
+    void showDuplicates();
+    void setDuplicatesDriverForTesting(std::function<bool(class DuplicatesDialog &)> driver)
+    {
+        m_duplicatesDriver = std::move(driver);
+    }
     void setOrganizeDriverForTesting(std::function<bool(class OrganizeDialog &)> driver)
     {
         m_organizeDriver = std::move(driver);
@@ -231,6 +237,8 @@ private:
     std::function<bool(class BulkRenameDialog &)> m_bulkRenameDriver;
     QAction *m_bulkRenameAction = nullptr;
     QAction *m_organizeAction = nullptr;
+    QAction *m_duplicatesAction = nullptr;
+    std::function<bool(class DuplicatesDialog &)> m_duplicatesDriver;
     std::function<bool(class OrganizeDialog &)> m_organizeDriver;
     QTimer m_progressDelay;   ///< El indicador solo aparece si la acción no es instantánea.
 
