@@ -1270,6 +1270,15 @@ private slots:
         QTRY_COMPARE_WITH_TIMEOUT(stateOf(QStringLiteral("monte.png")), thumbs::ThumbnailCache::State::Ready, 10000);
         QCOMPARE(service->pendingCount(), 0);
 
+        // Seleccionar aquí, con el ratón y con Mayús+flecha, cuenta igual que en detalles.
+        const int montoRow = pane->model()->rowOfName(QStringLiteral("monte.png"));
+        const QRect montoRect = thumbnails->visualRect(pane->model()->index(montoRow, 0));
+        QTest::mouseClick(thumbnails->viewport(), Qt::LeftButton, Qt::NoModifier, montoRect.center());
+        QCOMPARE(pane->selectedCount(), 1);
+        QTest::keyClick(thumbnails, Qt::Key_Right, Qt::ShiftModifier);
+        QCOMPARE(pane->selectedCount(), 2);
+        selectNames(pane, {QStringLiteral("playa.png")});
+
         // Cambiar el tamaño no pierde nada.
         window.setThumbnailSize(96);
         QCOMPARE(thumbnails->thumbnailSize(), 96);

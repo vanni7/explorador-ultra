@@ -64,10 +64,31 @@ public:
         initStyleOption(&opt, index);
         const QWidget *widget = opt.widget;
         QStyle *style = widget ? widget->style() : QApplication::style();
-        // Fondo: selección, foco y paso del ratón, como cualquier elemento.
-        opt.text.clear();
-        opt.icon = QIcon();
-        style->drawPrimitive(QStyle::PE_PanelItemViewItem, &opt, painter, widget);
+        // Fondo de toda la celda (imagen y nombre): el estilo, en modo icono,
+        // solo resalta el texto, y una foto seleccionada no se distinguiría.
+        Q_UNUSED(style);
+        const QRect cell = opt.rect.adjusted(1, 1, -1, -1);
+        QColor background;
+        if (opt.state & QStyle::State_Selected) {
+            background = opt.palette.color(QPalette::Highlight);
+        } else if (opt.state & QStyle::State_MouseOver) {
+            background = opt.palette.color(QPalette::Highlight);
+            background.setAlpha(45);
+        }
+        if (background.isValid()) {
+            painter->save();
+            painter->setRenderHint(QPainter::Antialiasing);
+            painter->setPen(Qt::NoPen);
+            painter->setBrush(background);
+            painter->drawRoundedRect(cell, 4, 4);
+            painter->restore();
+        }
+        if ((opt.state & QStyle::State_HasFocus) && !(opt.state & QStyle::State_Selected)) {
+            painter->save();
+            painter->setPen(QPen(opt.palette.color(QPalette::Highlight), 1, Qt::DotLine));
+            painter->drawRoundedRect(cell, 4, 4);
+            painter->restore();
+        }
 
         const int size = m_view->thumbnailSize();
         const QRect pictureArea(opt.rect.left() + (opt.rect.width() - size) / 2, opt.rect.top() + padding, size, size);
@@ -180,6 +201,9 @@ ThumbnailView::ThumbnailView(DirectoryModel *model, QWidget *parent) : QListView
     setUniformItemSizes(true);
     setWrapping(true);
     setSelectionMode(QAbstractItemView::ExtendedSelection);
+    // Se selecciona la fila entera, como en la vista detallada: quien cuenta
+    // lo seleccionado (barra de estado, copiar, borrar…) cuenta filas.
+    setSelectionBehavior(QAbstractItemView::SelectRows);
     setSelectionRectVisible(true);
     // Carpetas enormes: la cuadrícula se calcula a tandas y la ventana responde.
     setLayoutMode(QListView::Batched);
