@@ -18,13 +18,20 @@ class QLabel;
 class QLineEdit;
 class QPushButton;
 class QStackedLayout;
+class QAbstractItemView;
 class QTreeView;
 
 namespace eu::fs {
 class DirectoryWatcher;
 }
 
+namespace eu::thumbs {
+class ThumbnailService;
+}
+
 namespace eu::ui {
+
+class ThumbnailView;
 
 class SearchResultsModel;
 class VolumesView;
@@ -91,6 +98,18 @@ public:
     void selectAll();
     DirectoryModel *model() const { return m_model; }
     QTreeView *view() const { return m_view; }
+
+    /// Cómo se ve el contenido de una carpeta (SPEC §5.3). Las dos vistas
+    /// comparten la selección: al cambiar se conservan la carpeta y lo
+    /// seleccionado.
+    enum class ViewMode { Details, Thumbnails };
+    void setViewMode(ViewMode mode);
+    ViewMode viewMode() const { return m_viewMode; }
+    ThumbnailView *thumbnailView() const { return m_thumbView; }
+    /// La vista de archivos que se usa ahora (detallada o miniaturas).
+    QAbstractItemView *fileView() const;
+    void setThumbnailService(thumbs::ThumbnailService *service);
+    void setThumbnailSize(int size);
 
     bool canGoBack() const { return !m_backHistory.isEmpty(); }
     bool canGoForward() const { return !m_forwardHistory.isEmpty(); }
@@ -189,6 +208,8 @@ private:
     DirectoryModel *m_model = nullptr;
     fs::DirectoryWatcher &m_watcher;
     QTreeView *m_view = nullptr;
+    ThumbnailView *m_thumbView = nullptr;
+    ViewMode m_viewMode = ViewMode::Details;
     QStackedLayout *m_stack = nullptr;
     QWidget *m_messagePage = nullptr;
     QLabel *m_messageLabel = nullptr;

@@ -7,6 +7,7 @@
 #include "eu/ui/SearchResultsModel.h"
 #include "eu/ui/IndexDialog.h"
 #include "eu/ui/Sidebar.h"
+#include "eu/ui/ThumbnailView.h"
 #include "eu/ui/TrashDialog.h"
 #include "eu/ui/VolumesView.h"
 
@@ -1221,6 +1222,79 @@ private slots:
         QVERIFY(service->roots().isEmpty());
         QVERIFY(searchFor(QStringLiteral("playa")));
         QVERIFY(!pane->searchFromIndex());
+    }
+
+    void thumbnailViewKeepsTheSelectionAndShowsImages()
+    {
+        QTemporaryDir data;
+        QTemporaryDir directory;
+        for (const QString &name : {QStringLiteral("playa.png"), QStringLiteral("monte.png")}) {
+            QImage image(300, 200, QImage::Format_RGB32);
+            image.fill(Qt::darkGreen);
+            QVERIFY(image.save(directory.filePath(name)));
+        }
+        writeFile(directory.filePath(QStringLiteral("notas.txt")), 10);
+        QVERIFY(QDir(directory.path()).mkdir(QStringLiteral("carpeta")));
+
+        MainWindow window(m_scheduler, openJournal(data));
+        BrowserPane *pane = window.openTab(directory.path());
+        QVERIFY(waitReady(pane));
+        window.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&window));
+        selectNames(pane, {QStringLiteral("playa.png")});
+        QCOMPARE(pane->selectedCount(), 1);
+
+        // Ctrl+2 cambia a miniaturas sin perder la carpeta ni la selección.
+        window.setViewMode(BrowserPane::ViewMode::Thumbnails);
+        QCOMPARE(pane->viewMode(), BrowserPane::ViewMode::Thumbnails);
+        ThumbnailView *thumbnails = pane->thumbnailView();
+        QVERIFY(thumbnails->isVisible());
+        QVERIFY(!pane->view()->isVisible());
+        QCOMPARE(pane->fileView(), static_cast<QAbstractItemView *>(thumbnails));
+        QCOMPARE(pane->selectedCount(), 1);
+        QCOMPARE(thumbnails->selectionModel()->selectedRows().size(), 1);
+        QCOMPARE(thumbnails->model()->rowCount(), 4);
+
+        // Las miniaturas de lo que se ve se generan solas, en segundo plano.
+        thumbs::ThumbnailService *service = window.thumbnailService();
+        const auto stateOf = [&](const QString &name) {
+            const QFileInfo info(directory.filePath(name));
+            thumbs::ThumbnailRequest request;
+            request.path = QDir::cleanPath(info.filePath());
+            request.size = info.size();
+            request.modifiedMs = info.lastModified().toMSecsSinceEpoch();
+            request.maxSide = 256;   // 160 px lógicos con escala 1, redondeado al escalón
+            return service->cache().lookupMemory(request).state;
+        };
+        QTRY_COMPARE_WITH_TIMEOUT(stateOf(QStringLiteral("playa.png")), thumbs::ThumbnailCache::State::Ready, 10000);
+        QTRY_COMPARE_WITH_TIMEOUT(stateOf(QStringLiteral("monte.png")), thumbs::ThumbnailCache::State::Ready, 10000);
+        QCOMPARE(service->pendingCount(), 0);
+
+        // Cambiar el tamaño no pierde nada.
+        window.setThumbnailSize(96);
+        QCOMPARE(thumbnails->thumbnailSize(), 96);
+
+        // Renombrar también funciona aquí, con el nombre sin extensión seleccionado.
+        window.renameSelection();
+        QTRY_VERIFY(thumbnails->findChild<QLineEdit *>() != nullptr);
+        auto *editor = thumbnails->findChild<QLineEdit *>();
+        QTRY_COMPARE(editor->selectedText(), QStringLiteral("playa"));
+        editor->setText(QStringLiteral("costa.png"));
+        QTest::keyClick(editor, Qt::Key_Return);
+        QTRY_VERIFY_WITH_TIMEOUT(QFileInfo::exists(directory.filePath(QStringLiteral("costa.png"))), 10000);
+        QVERIFY(waitIdle(window));
+
+        // De vuelta a detalles (Ctrl+1), con lo renombrado seleccionado.
+        window.setViewMode(BrowserPane::ViewMode::Details);
+        QVERIFY(pane->view()->isVisible());
+        QTRY_COMPARE(pane->selectedCount(), 1);
+        const QModelIndex current = pane->view()->currentIndex();
+        QCOMPARE(pane->model()->entryAt(current.row()).name, QStringLiteral("costa.png"));
+
+        // Una pestaña nueva hereda la vista de la activa.
+        window.setViewMode(BrowserPane::ViewMode::Thumbnails);
+        BrowserPane *second = window.openTab(directory.path());
+        QCOMPARE(second->viewMode(), BrowserPane::ViewMode::Thumbnails);
     }
 
     void searchCanBePausedAndStopped()

@@ -74,6 +74,11 @@ MainWindow::MainWindow(tasks::Scheduler &scheduler, std::shared_ptr<journal::Jou
         m_scheduler, QStandardPaths::writableLocation(QStandardPaths::AppDataLocation) + QStringLiteral("/indice"),
         this);
     m_indexService->setExcludedNames({trash::trashFolderName()});
+    // Miniaturas: en la carpeta de caché del sistema (se puede borrar sin
+    // perder nada), con 256 MB como mucho en memoria (SPEC §5.5).
+    m_thumbnailCache = std::make_unique<thumbs::ThumbnailCache>(
+        QStandardPaths::writableLocation(QStandardPaths::CacheLocation) + QStringLiteral("/miniaturas"));
+    m_thumbnailService = new thumbs::ThumbnailService(m_scheduler, *m_thumbnailCache, this);
     setWindowTitle(core::applicationName());
     resize(1180, 720);
 
@@ -244,6 +249,20 @@ void MainWindow::createActions()
         m_searchEdit->selectAll();
     });
 
+    // Vistas de la carpeta (SPEC §5.3). Cada pestaña recuerda la suya.
+    auto *viewModes = new QActionGroup(this);
+    m_detailsAction = new QAction(themedIcon(QStringLiteral("view-list-details"), QStyle::SP_FileDialogDetailedView),
+                                  tr("Detalles"), viewModes);
+    m_detailsAction->setShortcut(QKeySequence(Qt::CTRL | Qt::Key_1));
+    m_detailsAction->setCheckable(true);
+    m_detailsAction->setChecked(true);
+    m_thumbnailsAction = new QAction(themedIcon(QStringLiteral("view-list-icons"), QStyle::SP_FileDialogListView),
+                                     tr("Miniaturas"), viewModes);
+    m_thumbnailsAction->setShortcut(QKeySequence(Qt::CTRL | Qt::Key_2));
+    m_thumbnailsAction->setCheckable(true);
+    connect(m_detailsAction, &QAction::triggered, this, [this] { setViewMode(BrowserPane::ViewMode::Details); });
+    connect(m_thumbnailsAction, &QAction::triggered, this, [this] { setViewMode(BrowserPane::ViewMode::Thumbnails); });
+
     m_editPathAction = new QAction(tr("Escribir una ruta"), this);
     m_editPathAction->setShortcuts({QKeySequence(Qt::CTRL | Qt::Key_L), QKeySequence(Qt::ALT | Qt::Key_D)});
 
@@ -259,6 +278,19 @@ void MainWindow::createActions()
     fileMenu->addAction(quitAction);
 
     QMenu *viewMenu = menuBar()->addMenu(tr("&Ver"));
+    viewMenu->addAction(m_detailsAction);
+    viewMenu->addAction(m_thumbnailsAction);
+    QMenu *sizeMenu = viewMenu->addMenu(tr("Tamaño de las miniaturas"));
+    auto *sizes = new QActionGroup(sizeMenu);
+    for (const auto &[size, name] : {std::pair{96, tr("Pequeñas")}, std::pair{160, tr("Medianas")},
+                                     std::pair{256, tr("Grandes")}}) {
+        QAction *action = sizeMenu->addAction(name);
+        action->setCheckable(true);
+        sizes->addAction(action);
+        m_thumbnailSizeActions.insert(size, action);
+        connect(action, &QAction::triggered, this, [this, size = size] { setThumbnailSize(size); });
+    }
+    viewMenu->addSeparator();
     viewMenu->addAction(m_refreshAction);
     viewMenu->addAction(m_filterAction);
     viewMenu->addAction(m_searchAction);
@@ -1060,6 +1092,9 @@ void MainWindow::createToolBar()
         if (auto *pane = currentPane()) pane->focusContent();
     });
 
+    toolBar->addSeparator();
+    toolBar->addAction(m_detailsAction);
+    toolBar->addAction(m_thumbnailsAction);
     toolBar->addAction(m_newTabAction);
     toolBar->addAction(m_showTrashAction);
 }
@@ -1073,6 +1108,14 @@ BrowserPane *MainWindow::openTab(const QString &path)
                                                                 : core::SizeUnits::Decimal);
 
     pane->setIndexResolver([this](const QString &folder) { return m_indexService->indexFor(folder); });
+    pane->setThumbnailService(m_thumbnailService);
+    pane->setThumbnailSize(m_thumbnailSize);
+    // Una pestaña nueva se abre con la vista que se está usando.
+    if (BrowserPane *current = currentPane()) {
+        pane->setViewMode(current->viewMode());
+    } else if (m_thumbnailsAction->isChecked()) {
+        pane->setViewMode(BrowserPane::ViewMode::Thumbnails);
+    }
 
     connect(pane, &BrowserPane::pathChanged, this, [this, pane] {
         updateTabTitle(pane);
@@ -1511,8 +1554,36 @@ void MainWindow::syncSearchBox()
     }
 }
 
+void MainWindow::setViewMode(BrowserPane::ViewMode mode)
+{
+    if (BrowserPane *pane = currentPane()) {
+        pane->setViewMode(mode);
+    }
+    syncViewActions();
+}
+
+void MainWindow::setThumbnailSize(int size)
+{
+    m_thumbnailSize = size;
+    for (int i = 0; i < m_tabs->count(); ++i) {
+        static_cast<BrowserPane *>(m_tabs->widget(i))->setThumbnailSize(size);
+    }
+    syncViewActions();
+}
+
+void MainWindow::syncViewActions()
+{
+    const BrowserPane *pane = currentPane();
+    const bool thumbnails = pane != nullptr && pane->viewMode() == BrowserPane::ViewMode::Thumbnails;
+    (thumbnails ? m_thumbnailsAction : m_detailsAction)->setChecked(true);
+    if (QAction *size = m_thumbnailSizeActions.value(m_thumbnailSize)) {
+        size->setChecked(true);
+    }
+}
+
 void MainWindow::onCurrentTabChanged()
 {
+    syncViewActions();
     if (BrowserPane *pane = currentPane()) {
         m_pathBar->setPath(pane->currentPath());
         m_sidebar->setCurrentPath(pane->currentPath());
@@ -1570,6 +1641,9 @@ void MainWindow::restoreSession()
     m_showHiddenAction->setChecked(settings.value(QStringLiteral("view/showHidden"), false).toBool());
     m_binaryUnitsAction->setChecked(settings.value(QStringLiteral("view/binaryUnits"), false).toBool());
     m_folderSizesAction->setChecked(settings.value(QStringLiteral("view/folderSizes"), false).toBool());
+    setThumbnailSize(settings.value(QStringLiteral("view/thumbnailSize"), 160).toInt());
+    const bool thumbnails = settings.value(QStringLiteral("view/mode")).toString() == QLatin1String("miniaturas");
+    (thumbnails ? m_thumbnailsAction : m_detailsAction)->setChecked(true);
     // El alcance y "en el contenido" no se guardan: una búsqueda en todos los
     // discos no debe heredarse sin querer de la sesión anterior.
     m_searchCaseAction->setChecked(settings.value(QStringLiteral("search/caseSensitive"), false).toBool());
@@ -1598,6 +1672,9 @@ void MainWindow::saveSession()
     settings.setValue(QStringLiteral("view/showHidden"), m_showHiddenAction->isChecked());
     settings.setValue(QStringLiteral("view/binaryUnits"), m_binaryUnitsAction->isChecked());
     settings.setValue(QStringLiteral("view/folderSizes"), m_folderSizesAction->isChecked());
+    settings.setValue(QStringLiteral("view/thumbnailSize"), m_thumbnailSize);
+    settings.setValue(QStringLiteral("view/mode"),
+                      m_thumbnailsAction->isChecked() ? QStringLiteral("miniaturas") : QStringLiteral("detalles"));
     settings.setValue(QStringLiteral("search/caseSensitive"), m_searchCaseAction->isChecked());
     settings.setValue(QStringLiteral("search/recent"), m_recentSearches);
 

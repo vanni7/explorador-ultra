@@ -5,8 +5,10 @@
 #include "eu/fs/DeviceMap.h"
 #include "eu/fs/Volumes.h"
 #include "eu/index/IndexService.h"
+#include "eu/thumbs/ThumbnailService.h"
 #include "eu/journal/Journal.h"
 #include "eu/tasks/Scheduler.h"
+#include "eu/ui/BrowserPane.h"
 #include "eu/ui/FileActions.h"
 #include "eu/ui/Locations.h"
 
@@ -60,6 +62,12 @@ public:
     void startIndexing(bool mayAsk);
     /// Abre la ventana "Índice de búsqueda".
     void showIndexDialog();
+
+    /// Miniaturas: la caché y quien las genera, comunes a todas las pestañas.
+    thumbs::ThumbnailService *thumbnailService() const { return m_thumbnailService; }
+    /// Vista de la pestaña activa (y de las que se abran después).
+    void setViewMode(BrowserPane::ViewMode mode);
+    void setThumbnailSize(int size);
 
     /// Opciones del buscador; son las del botón "Opciones" que tiene al lado.
     void setSearchScope(SearchScope scope);
@@ -196,6 +204,13 @@ private:
     QAction *m_searchAction = nullptr;
     QLineEdit *m_searchEdit = nullptr;
     index::IndexService *m_indexService = nullptr;
+    std::unique_ptr<thumbs::ThumbnailCache> m_thumbnailCache;
+    thumbs::ThumbnailService *m_thumbnailService = nullptr;
+    QAction *m_detailsAction = nullptr;
+    QAction *m_thumbnailsAction = nullptr;
+    QHash<int, QAction *> m_thumbnailSizeActions;   ///< Por tamaño en píxeles.
+    int m_thumbnailSize = 160;
+    void syncViewActions();
     QLabel *m_indexLabel = nullptr;   ///< "Indexando…" en la barra de estado.
     QAction *m_indexAction = nullptr;
     void runIndexWizard();
