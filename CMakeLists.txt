@@ -25,7 +25,8 @@ find_package(Qt6 6.8 REQUIRED COMPONENTS Core Gui Widgets Svg Sql LinguistTools)
 qt_standard_project_setup()
 include(EuOptionalDeps)
 # Qt Multimedia es opcional (reproducir video y audio en las miniaturas).
-find_package(Qt6 QUIET COMPONENTS Multimedia)
+find_package(Qt6 QUIET COMPONENTS Multimedia Pdf)
+message(STATUS "Qt PDF: ${Qt6Pdf_FOUND}")
 message(STATUS "Qt Multimedia: ${Qt6Multimedia_FOUND}")
 
 # Todos los ejecutables van a build/<preset>/bin en las tres plataformas.
@@ -39,6 +40,7 @@ add_subdirectory(src/search)
 add_subdirectory(src/journal)
 add_subdirectory(src/index)
 add_subdirectory(src/archive)
+add_subdirectory(src/content)
 add_subdirectory(src/meta)
 add_subdirectory(src/thumbs)
 add_subdirectory(src/ops)
