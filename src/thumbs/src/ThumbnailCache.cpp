@@ -45,7 +45,7 @@ QString ThumbnailCache::keyOf(const ThumbnailRequest &request)
 {
     const QString text = QDir::cleanPath(request.path) + QLatin1Char('\n') + QString::number(request.size)
         + QLatin1Char('\n') + QString::number(request.modifiedMs) + QLatin1Char('\n')
-        + QString::number(request.maxSide);
+        + QString::number(request.maxSide) + (request.isDirectory ? QStringLiteral("\nd") : QString());
     return QString::fromLatin1(QCryptographicHash::hash(text.toUtf8(), QCryptographicHash::Sha1).toHex());
 }
 

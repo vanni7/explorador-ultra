@@ -93,40 +93,50 @@ public:
         const int size = m_view->thumbnailSize();
         const QRect pictureArea(opt.rect.left() + (opt.rect.width() - size) / 2, opt.rect.top() + padding, size, size);
         const int row = index.row();
-        bool drawn = false;
+        thumbs::ThumbnailCache::Entry thumbnail;
+        bool isDirectory = false;
         if (service != nullptr && row >= 0 && row < m_model->rowCount()) {
             const fs::Entry &entry = m_model->entryAt(row);
-            if (!entry.isDirectory) {
-                thumbs::ThumbnailRequest request;
-                request.path = m_model->filePath(row);
-                request.size = entry.size;
-                request.modifiedMs = entry.modifiedMs;
-                request.maxSide = requestedSide(size, painter->device()->devicePixelRatioF());
-                const thumbs::ThumbnailCache::Entry thumbnail = service->request(request);
-                if (thumbnail.state == thumbs::ThumbnailCache::State::Ready && !thumbnail.image.isNull()) {
-                    QSize shown = thumbnail.image.size();
-                    shown.scale(pictureArea.size(), Qt::KeepAspectRatio);
-                    if (shown.width() > thumbnail.image.width()) {
-                        shown = thumbnail.image.size();   // no se agranda una imagen pequeña
-                    }
-                    const QRect target(pictureArea.left() + (pictureArea.width() - shown.width()) / 2,
-                                       pictureArea.bottom() + 1 - shown.height(), shown.width(), shown.height());
-                    painter->save();
-                    painter->setRenderHint(QPainter::SmoothPixmapTransform);
-                    painter->drawImage(target, thumbnail.image);
-                    painter->restore();
-                    drawn = true;
-                }
-            }
+            isDirectory = entry.isDirectory && !entry.isSymlink;
+            thumbs::ThumbnailRequest request;
+            request.path = m_model->filePath(row);
+            request.size = isDirectory ? 0 : entry.size;
+            request.modifiedMs = entry.modifiedMs;
+            request.isDirectory = isDirectory;
+            request.maxSide = requestedSide(size, painter->device()->devicePixelRatioF());
+            thumbnail = service->request(request);
         }
-        if (!drawn) {
+        const bool ready = thumbnail.state == thumbs::ThumbnailCache::State::Ready && !thumbnail.image.isNull();
+        if (ready && !isDirectory) {
+            QSize shown = thumbnail.image.size();
+            shown.scale(pictureArea.size(), Qt::KeepAspectRatio);
+            if (shown.width() > thumbnail.image.width()) {
+                shown = thumbnail.image.size();   // no se agranda una imagen pequeña
+            }
+            const QRect target(pictureArea.left() + (pictureArea.width() - shown.width()) / 2,
+                               pictureArea.bottom() + 1 - shown.height(), shown.width(), shown.height());
+            painter->save();
+            painter->setRenderHint(QPainter::SmoothPixmapTransform);
+            painter->drawImage(target, thumbnail.image);
+            painter->restore();
+        } else {
             // Mientras llega, o si no hay miniatura: el icono del tipo, grande.
+            // Una carpeta con miniatura enseña su contenido delante del icono.
             const QIcon icon = index.data(Qt::DecorationRole).value<QIcon>();
-            const int iconSide = size * 2 / 3;
+            const int iconSide = (isDirectory && ready) ? size : size * 2 / 3;
             const QRect iconRect(pictureArea.left() + (size - iconSide) / 2,
                                  pictureArea.top() + (size - iconSide) / 2, iconSide, iconSide);
             icon.paint(painter, iconRect, Qt::AlignCenter,
                        (opt.state & QStyle::State_Enabled) ? QIcon::Normal : QIcon::Disabled);
+            if (isDirectory && ready) {
+                const int inner = size * 3 / 5;
+                const QRect contents(pictureArea.left() + (size - inner) / 2,
+                                     pictureArea.top() + (size - inner) / 2 + size / 12, inner, inner);
+                painter->save();
+                painter->setRenderHint(QPainter::SmoothPixmapTransform);
+                painter->drawImage(contents, thumbnail.image);
+                painter->restore();
+            }
         }
 
         // Nombre: centrado, dos líneas como mucho, recortado por el medio.

@@ -22,7 +22,7 @@ ThumbnailCache::Entry ThumbnailService::request(const ThumbnailRequest &request)
     if (entry.state != ThumbnailCache::State::Missing) {
         return entry;
     }
-    if (thumbnailSourceFor(request.path) == ThumbnailSource::None) {
+    if (thumbnailSourceFor(request) == ThumbnailSource::None) {
         return ThumbnailCache::Entry{ThumbnailCache::State::Failed, {}};
     }
     const QString key = ThumbnailCache::keyOf(request);

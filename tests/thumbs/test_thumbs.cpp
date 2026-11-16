@@ -8,7 +8,10 @@
 #include <QFile>
 #include <QFileInfo>
 #include <QImageWriter>
+#include <QGuiApplication>
+#include <QImageReader>
 #include <QPainter>
+#include <QPdfWriter>
 #include <QSignalSpy>
 #include <QTemporaryDir>
 #include <QTest>
@@ -112,8 +115,8 @@ private slots:
         QCOMPARE(thumbnailSourceFor(QStringLiteral("a.jpeg")), ThumbnailSource::Image);
         QCOMPARE(thumbnailSourceFor(QStringLiteral("dibujo.svg")), ThumbnailSource::Image);
         QCOMPARE(thumbnailSourceFor(QStringLiteral("x.png")), ThumbnailSource::Image);
-        QCOMPARE(thumbnailSourceFor(QStringLiteral("notas.txt")), ThumbnailSource::None);
-        QCOMPARE(thumbnailSourceFor(QStringLiteral("libro.pdf")), ThumbnailSource::None);
+        QCOMPARE(thumbnailSourceFor(QStringLiteral("copia.zip")), ThumbnailSource::None);
+        QCOMPARE(thumbnailSourceFor(QStringLiteral("programa.exe")), ThumbnailSource::None);
         QCOMPARE(thumbnailSourceFor(QStringLiteral("sin-extension")), ThumbnailSource::None);
     }
 
@@ -180,6 +183,100 @@ private slots:
         // Una extensión equivocada no impide leerla.
         QVERIFY(testImage(50, 50).save(file(QStringLiteral("disfrazada.jpg")), "png"));
         QVERIFY(renderThumbnail(requestFor(file(QStringLiteral("disfrazada.jpg"))), {}).ok());
+    }
+
+    void pdfShowsTheFirstPage()
+    {
+        if (!QImageReader::supportedImageFormats().contains("pdf")) {
+            QCOMPARE(thumbnailSourceFor(QStringLiteral("libro.pdf")), ThumbnailSource::None);
+            QSKIP("Esta instalación de Qt no tiene el complemento de PDF.");
+        }
+        QCOMPARE(thumbnailSourceFor(QStringLiteral("libro.PDF")), ThumbnailSource::Pdf);
+        const QString path = file(QStringLiteral("libro.pdf"));
+        {
+            QPdfWriter writer(path);
+            writer.setPageSize(QPageSize(QPageSize::A4));
+            QPainter painter(&writer);
+            const QRect page = painter.viewport();
+            painter.fillRect(QRect(0, 0, page.width(), page.height() / 2), Qt::red);   // mitad de arriba roja
+            writer.newPage();
+            painter.fillRect(page, Qt::blue);                                        // la segunda no se ve
+        }
+        const auto thumbnail = renderThumbnail(requestFor(path, 200), {});
+        QVERIFY2(thumbnail.ok(), thumbnail.ok() ? "" : qPrintable(thumbnail.error().message));
+        const QImage image = thumbnail.value();
+        QCOMPARE(image.height(), 200);                 // A4 en vertical
+        QVERIFY(image.width() > 130 && image.width() < 150);
+        QVERIFY(isReddish(image.pixel(image.width() / 2, 40)));
+        const QRgb bottom = image.pixel(image.width() / 2, 160);
+        QVERIFY(qRed(bottom) > 240 && qGreen(bottom) > 240 && qBlue(bottom) > 240);   // papel blanco
+    }
+
+    void textShowsItsFirstLines()
+    {
+        QCOMPARE(thumbnailSourceFor(QStringLiteral("main.cpp")), ThumbnailSource::Text);
+        QCOMPARE(thumbnailSourceFor(QStringLiteral("LEEME.md")), ThumbnailSource::Text);
+        QString text;
+        for (int i = 0; i < 60; ++i) {
+            text += QStringLiteral("Línea %1 con texto de ejemplo, ñandú y acentos\n").arg(i);
+        }
+        writeBytes(file(QStringLiteral("notas.txt")), text.toUtf8());
+        const auto thumbnail = renderThumbnail(requestFor(file(QStringLiteral("notas.txt")), 256), {});
+        QVERIFY2(thumbnail.ok(), thumbnail.ok() ? "" : qPrintable(thumbnail.error().message));
+        const QImage image = thumbnail.value();
+        QCOMPARE(image.size(), QSize(192, 256));   // una hoja vertical
+        // Hay tinta arriba a la izquierda (el texto) y la hoja es clara.
+        int dark = 0;
+        for (int y = 0; y < 60; ++y) {
+            for (int x = 0; x < 120; ++x) {
+                dark += qGray(image.pixel(x, y)) < 128 ? 1 : 0;
+            }
+        }
+        QVERIFY(dark > 50);
+        QVERIFY(qGray(image.pixel(190, 254)) > 200 || qGray(image.pixel(150, 250)) > 200);
+
+        // Un binario con extensión de texto no se pinta como texto.
+        writeBytes(file(QStringLiteral("falso.txt")), QByteArray("ab\0\0cd", 6) + QByteArray(100, '\0'));
+        QVERIFY(!renderThumbnail(requestFor(file(QStringLiteral("falso.txt"))), {}).ok());
+    }
+
+    void foldersShowWhatTheyContain()
+    {
+        const QString photos = file(QStringLiteral("fotos"));
+        QVERIFY(QDir().mkpath(photos));
+        for (int i = 0; i < 5; ++i) {
+            QVERIFY(testImage(120, 80).save(photos + QStringLiteral("/foto%1.png").arg(i)));
+        }
+        QVERIFY(QDir().mkpath(photos + QStringLiteral("/subcarpeta")));   // las subcarpetas no cuentan
+        ThumbnailRequest request;
+        request.path = photos;
+        request.isDirectory = true;
+        request.maxSide = 128;
+        QCOMPARE(thumbnailSourceFor(request), ThumbnailSource::Folder);
+        const auto grid = renderThumbnail(request, {});
+        QVERIFY2(grid.ok(), grid.ok() ? "" : qPrintable(grid.error().message));
+        QCOMPARE(grid.value().size(), QSize(128, 128));
+        // Cuatro miniaturas en cuadrícula: hay color en las cuatro esquinas interiores.
+        for (const QPoint point : {QPoint(20, 32), QPoint(84, 32), QPoint(20, 96), QPoint(84, 96)}) {
+            QVERIFY2(qAlpha(grid.value().pixel(point)) > 0, qPrintable(QStringLiteral("%1,%2").arg(point.x()).arg(point.y())));
+        }
+
+        // Contenido mezclado, vacío o solo con subcarpetas: el icono de carpeta.
+        const QString mixed = file(QStringLiteral("mezcla"));
+        QVERIFY(QDir().mkpath(mixed));
+        QVERIFY(testImage(50, 50).save(mixed + QStringLiteral("/a.png")));
+        writeBytes(mixed + QStringLiteral("/b.zip"), "PK");
+        request.path = mixed;
+        QVERIFY(!renderThumbnail(request, {}).ok());
+        const QString empty = file(QStringLiteral("vacia"));
+        QVERIFY(QDir().mkpath(empty + QStringLiteral("/solo-subcarpeta")));
+        request.path = empty;
+        QVERIFY(!renderThumbnail(request, {}).ok());
+
+        // En la caché, la carpeta y un archivo del mismo nombre no se confunden.
+        ThumbnailRequest asFile = request;
+        asFile.isDirectory = false;
+        QVERIFY(ThumbnailCache::keyOf(request) != ThumbnailCache::keyOf(asFile));
     }
 
     void cacheKeepsThumbnailsInMemoryAndOnDisk()
@@ -261,9 +358,9 @@ private slots:
         QCOMPARE(entry.image.size(), QSize(128, 128));
 
         // Un tipo sin miniatura no pide nada.
-        ThumbnailRequest text;
-        text.path = file(QStringLiteral("notas.txt"));
-        QCOMPARE(service.request(text).state, ThumbnailCache::State::Failed);
+        ThumbnailRequest archive;
+        archive.path = file(QStringLiteral("datos.zip"));
+        QCOMPARE(service.request(archive).state, ThumbnailCache::State::Failed);
         QCOMPARE(service.pendingCount(), 0);
 
         // Un archivo roto avisa igual, y queda como fallido.
@@ -311,5 +408,13 @@ private slots:
     }
 };
 
-QTEST_GUILESS_MAIN(TestThumbs)
+// Pintar texto en una imagen necesita las fuentes, y las fuentes una
+// QGuiApplication (sin ventanas: la plataforma "offscreen" de las pruebas).
+int main(int argc, char *argv[])
+{
+    QGuiApplication application(argc, argv);
+    TestThumbs test;
+    QTEST_SET_MAIN_SOURCE_PATH
+    return QTest::qExec(&test, argc, argv);
+}
 #include "test_thumbs.moc"

@@ -1268,7 +1268,7 @@ private slots:
         };
         QTRY_COMPARE_WITH_TIMEOUT(stateOf(QStringLiteral("playa.png")), thumbs::ThumbnailCache::State::Ready, 10000);
         QTRY_COMPARE_WITH_TIMEOUT(stateOf(QStringLiteral("monte.png")), thumbs::ThumbnailCache::State::Ready, 10000);
-        QCOMPARE(service->pendingCount(), 0);
+        QTRY_COMPARE_WITH_TIMEOUT(service->pendingCount(), 0, 10000);   // también la carpeta y el texto
 
         // Seleccionar aquí, con el ratón y con Mayús+flecha, cuenta igual que en detalles.
         const int montoRow = pane->model()->rowOfName(QStringLiteral("monte.png"));
