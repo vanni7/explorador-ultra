@@ -10,6 +10,7 @@
 #include "eu/ui/FileClipboard.h"
 #include "eu/ui/IndexDialog.h"
 #include "eu/ui/PathBar.h"
+#include "eu/ui/InlinePlayer.h"
 #include "eu/ui/PreviewPanel.h"
 #include "eu/ui/Sidebar.h"
 #include "eu/ui/TrashDialog.h"
@@ -80,6 +81,8 @@ MainWindow::MainWindow(tasks::Scheduler &scheduler, std::shared_ptr<journal::Jou
     m_thumbnailCache = std::make_shared<thumbs::ThumbnailCache>(
         QStandardPaths::writableLocation(QStandardPaths::CacheLocation) + QStringLiteral("/miniaturas"));
     m_thumbnailService = new thumbs::ThumbnailService(m_scheduler, m_thumbnailCache, this);
+    // Un solo reproductor para toda la ventana: nunca suenan dos a la vez.
+    m_inlinePlayer = new InlinePlayer(this);
     setWindowTitle(core::applicationName());
     resize(1180, 720);
 
@@ -256,6 +259,19 @@ void MainWindow::createActions()
         m_searchEdit->selectAll();
     });
 
+    m_inlinePlaybackAction = new QAction(tr("Reproducir video y audio en las miniaturas"), this);
+    m_inlinePlaybackAction->setCheckable(true);
+    m_inlinePlaybackAction->setChecked(InlinePlayer::isAvailable());
+    m_inlinePlaybackAction->setEnabled(InlinePlayer::isAvailable());
+    m_inlinePlaybackAction->setToolTip(InlinePlayer::isAvailable()
+                                           ? tr("Botón ▶ sobre los videos y audios, o barra espaciadora")
+                                           : tr("Esta compilación no incluye Qt Multimedia"));
+    connect(m_inlinePlaybackAction, &QAction::toggled, this, [this](bool enabled) {
+        for (int i = 0; i < m_tabs->count(); ++i) {
+            static_cast<BrowserPane *>(m_tabs->widget(i))->setInlinePlaybackEnabled(enabled);
+        }
+    });
+
     m_previewAction = new QAction(tr("Panel de previsualización"), this);
     m_previewAction->setShortcut(QKeySequence(Qt::ALT | Qt::Key_P));
     m_previewAction->setCheckable(true);
@@ -305,6 +321,7 @@ void MainWindow::createActions()
         connect(action, &QAction::triggered, this, [this, size = size] { setThumbnailSize(size); });
     }
     viewMenu->addAction(m_previewAction);
+    viewMenu->addAction(m_inlinePlaybackAction);
     viewMenu->addSeparator();
     viewMenu->addAction(m_refreshAction);
     viewMenu->addAction(m_filterAction);
@@ -1125,6 +1142,8 @@ BrowserPane *MainWindow::openTab(const QString &path)
     pane->setIndexResolver([this](const QString &folder) { return m_indexService->indexFor(folder); });
     pane->setThumbnailService(m_thumbnailService);
     pane->setThumbnailSize(m_thumbnailSize);
+    pane->setInlinePlayer(m_inlinePlayer);
+    pane->setInlinePlaybackEnabled(m_inlinePlaybackAction->isChecked());
     // Una pestaña nueva se abre con la vista que se está usando.
     if (BrowserPane *current = currentPane()) {
         pane->setViewMode(current->viewMode());
@@ -1730,6 +1749,9 @@ void MainWindow::loadPreferences()
     m_folderSizesAction->setChecked(settings.value(QStringLiteral("view/folderSizes"), false).toBool());
     setThumbnailSize(settings.value(QStringLiteral("view/thumbnailSize"), 160).toInt());
     m_previewAction->setChecked(settings.value(QStringLiteral("view/preview"), true).toBool());
+    if (InlinePlayer::isAvailable()) {
+        m_inlinePlaybackAction->setChecked(settings.value(QStringLiteral("view/inlinePlayback"), true).toBool());
+    }
 
     const bool thumbnails = settings.value(QStringLiteral("view/mode")).toString() == QLatin1String("miniaturas");
     (thumbnails ? m_thumbnailsAction : m_detailsAction)->setChecked(true);
@@ -1749,6 +1771,9 @@ void MainWindow::saveSession()
     settings.setValue(QStringLiteral("view/folderSizes"), m_folderSizesAction->isChecked());
     settings.setValue(QStringLiteral("view/thumbnailSize"), m_thumbnailSize);
     settings.setValue(QStringLiteral("view/preview"), m_previewAction->isChecked());
+    if (InlinePlayer::isAvailable()) {
+        settings.setValue(QStringLiteral("view/inlinePlayback"), m_inlinePlaybackAction->isChecked());
+    }
     settings.setValue(QStringLiteral("view/mode"),
                       m_thumbnailsAction->isChecked() ? QStringLiteral("miniaturas") : QStringLiteral("detalles"));
     settings.setValue(QStringLiteral("search/caseSensitive"), m_searchCaseAction->isChecked());

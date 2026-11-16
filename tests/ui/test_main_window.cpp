@@ -6,6 +6,8 @@
 #include "eu/ui/PathBar.h"
 #include "eu/ui/SearchResultsModel.h"
 #include "eu/ui/IndexDialog.h"
+#include "eu/ui/InlinePlayer.h"
+#include "../support/TestMedia.h"
 #include "eu/ui/PreviewPanel.h"
 #include "eu/ui/Sidebar.h"
 #include "eu/ui/ThumbnailView.h"
@@ -1375,6 +1377,84 @@ private slots:
         QVERIFY(!panel->isVisible());
         window.setPreviewVisible(true);
         QVERIFY(panel->isVisible());
+    }
+
+    void videosPlayInsideTheirThumbnail()
+    {
+#ifndef EU_HAVE_FFMPEG
+        QSKIP("Sin FFmpeg no se puede fabricar el video de prueba.");
+#else
+        if (!InlinePlayer::isAvailable()) {
+            QSKIP("Compilado sin Qt Multimedia.");
+        }
+        QTemporaryDir data;
+        QTemporaryDir directory;
+        QVERIFY(eu::testsupport::writeColorVideo(directory.filePath(QStringLiteral("a-paseo.mov")),
+                                                 {{Qt::red, 30}, {Qt::blue, 30}}, 10, QSize(160, 120)));
+        QVERIFY(eu::testsupport::writeColorVideo(directory.filePath(QStringLiteral("b-fiesta.mov")),
+                                                 {{Qt::green, 40}}, 10, QSize(160, 120)));
+        writeFile(directory.filePath(QStringLiteral("c-notas.txt")), 10);
+
+        MainWindow window(m_scheduler, openJournal(data));
+        BrowserPane *pane = window.openTab(directory.path());
+        QVERIFY(waitReady(pane));
+        window.setViewMode(BrowserPane::ViewMode::Thumbnails);
+        window.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&window));
+        ThumbnailView *thumbnails = pane->thumbnailView();
+        InlinePlayer *player = window.inlinePlayer();
+        const auto rectOf = [&](const QString &name) {
+            return thumbnails->visualRect(pane->model()->index(pane->model()->rowOfName(name), 0));
+        };
+        QVERIFY(thumbnails->isPlayableRow(pane->model()->rowOfName(QStringLiteral("a-paseo.mov"))));
+        QVERIFY(!thumbnails->isPlayableRow(pane->model()->rowOfName(QStringLiteral("c-notas.txt"))));
+
+        // Clic en ▶: se reproduce dentro de la miniatura, en silencio y sin seleccionarlo.
+        const QPoint button = thumbnails->playButtonRect(rectOf(QStringLiteral("a-paseo.mov"))).center();
+        QTest::mouseMove(thumbnails->viewport(), button);
+        QTest::mouseClick(thumbnails->viewport(), Qt::LeftButton, Qt::NoModifier, button);
+        QVERIFY(player->isPlaying());
+        QCOMPARE(player->path(), QDir::cleanPath(directory.filePath(QStringLiteral("a-paseo.mov"))));
+        QVERIFY(!player->isAudio());
+        QCOMPARE(pane->selectedCount(), 0);
+        QTRY_VERIFY_WITH_TIMEOUT(!player->frame().isNull() || !player->error().isEmpty(), 10000);
+        QVERIFY2(player->error().isEmpty(), qPrintable(player->error()));
+
+        // Otro clic en el botón (ahora ■) lo para.
+        QTest::mouseClick(thumbnails->viewport(), Qt::LeftButton, Qt::NoModifier, button);
+        QVERIFY(!player->isPlaying());
+
+        // Al sacar el puntero de la miniatura, se para.
+        QTest::mouseClick(thumbnails->viewport(), Qt::LeftButton, Qt::NoModifier, button);
+        QVERIFY(player->isPlaying());
+        QTest::mouseMove(thumbnails->viewport(), rectOf(QStringLiteral("c-notas.txt")).center());
+        QTRY_VERIFY(!player->isPlaying());
+
+        // Con el teclado: barra espaciadora sobre el elemento con el cursor.
+        thumbnails->setFocus();
+        selectNames(pane, {QStringLiteral("b-fiesta.mov")});
+        QTest::keyClick(thumbnails, Qt::Key_Space);
+        QVERIFY(player->isPlaying());
+        QVERIFY(player->path().endsWith(QStringLiteral("b-fiesta.mov")));
+        // Mover el ratón no lo para (lo empezó el teclado); mover el cursor, sí.
+        QTest::mouseMove(thumbnails->viewport(), rectOf(QStringLiteral("c-notas.txt")).center());
+        QVERIFY(player->isPlaying());
+        QTest::keyClick(thumbnails, Qt::Key_Right);
+        QTRY_VERIFY(!player->isPlaying());
+
+        // Desactivado en el menú Ver: no hay botón ni barra espaciadora que valga.
+        pane->setInlinePlaybackEnabled(false);
+        selectNames(pane, {QStringLiteral("b-fiesta.mov")});
+        QTest::keyClick(thumbnails, Qt::Key_Space);
+        QVERIFY(!player->isPlaying());
+        pane->setInlinePlaybackEnabled(true);
+
+        // Al cambiar de carpeta, lo que sonaba se para.
+        QTest::keyClick(thumbnails, Qt::Key_Space);
+        QVERIFY(player->isPlaying());
+        pane->navigateTo(data.path());
+        QTRY_VERIFY(!player->isPlaying());
+#endif
     }
 
     void searchCanBePausedAndStopped()

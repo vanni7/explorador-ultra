@@ -32,6 +32,7 @@ class ThumbnailService;
 
 namespace eu::ui {
 
+class InlinePlayer;
 class ThumbnailView;
 
 class SearchResultsModel;
@@ -123,6 +124,8 @@ public:
     };
     CurrentItem currentItem() const;
     void setThumbnailSize(int size);
+    void setInlinePlayer(InlinePlayer *player);
+    void setInlinePlaybackEnabled(bool enabled);
 
     bool canGoBack() const { return !m_backHistory.isEmpty(); }
     bool canGoForward() const { return !m_forwardHistory.isEmpty(); }

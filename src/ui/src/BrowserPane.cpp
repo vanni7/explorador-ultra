@@ -612,6 +612,16 @@ void BrowserPane::setThumbnailSize(int size)
     m_thumbView->setThumbnailSize(size);
 }
 
+void BrowserPane::setInlinePlayer(InlinePlayer *player)
+{
+    m_thumbView->setInlinePlayer(player);
+}
+
+void BrowserPane::setInlinePlaybackEnabled(bool enabled)
+{
+    m_thumbView->setPlaybackEnabled(enabled);
+}
+
 void BrowserPane::setMoveByDefaultRule(MoveByDefaultRule rule)
 {
     static_cast<FileView *>(m_view)->moveByDefault = rule;

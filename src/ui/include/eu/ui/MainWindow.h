@@ -32,6 +32,7 @@ namespace eu::ui {
 class BrowserPane;
 class PathBar;
 class Sidebar;
+class InlinePlayer;
 class PreviewPanel;
 class TrashDialog;
 
@@ -69,6 +70,8 @@ public:
     /// Panel derecho de previsualización y metadatos.
     PreviewPanel *previewPanel() const { return m_previewPanel; }
     void setPreviewVisible(bool visible);
+    /// El reproductor de las miniaturas (uno por ventana).
+    InlinePlayer *inlinePlayer() const { return m_inlinePlayer; }
 
     /// Vista de la pestaña activa (y de las que se abran después).
     void setViewMode(BrowserPane::ViewMode mode);
@@ -224,6 +227,8 @@ private:
     bool m_splitterRestored = false;   ///< Había una disposición guardada de los paneles.
     bool m_firstShowDone = false;
     PreviewPanel *m_previewPanel = nullptr;
+    InlinePlayer *m_inlinePlayer = nullptr;
+    QAction *m_inlinePlaybackAction = nullptr;
     QAction *m_previewAction = nullptr;
     void updatePreview();
     QLabel *m_indexLabel = nullptr;   ///< "Indexando…" en la barra de estado.

@@ -1,12 +1,18 @@
 // Explorador Ultra — SPDX-License-Identifier: GPL-3.0-or-later
 #include "eu/ui/ThumbnailView.h"
 
+#include "eu/thumbs/Thumbnail.h"
 #include "eu/thumbs/ThumbnailService.h"
 #include "eu/ui/DirectoryModel.h"
 #include "eu/ui/EntrySort.h"
+#include "eu/ui/InlinePlayer.h"
 
 #include <QApplication>
+#include <QDir>
+#include <QFileInfo>
 #include <QDragEnterEvent>
+#include <QKeyEvent>
+#include <QMouseEvent>
 #include <QLineEdit>
 #include <QPainter>
 #include <QScrollBar>
@@ -140,6 +146,8 @@ public:
             }
         }
 
+        paintPlayback(painter, opt, index, pictureArea);
+
         // Nombre: centrado, dos líneas como mucho, recortado por el medio.
         const QRect textRect(opt.rect.left() + 2, pictureArea.bottom() + padding, opt.rect.width() - 4,
                              2 * opt.fontMetrics.height());
@@ -183,6 +191,59 @@ public:
     }
 
 private:
+    /// Video o audio: el fotograma en reproducción, la barra de avance y el
+    /// botón ▶ / ■ (al pasar el puntero, o en el elemento con el cursor).
+    void paintPlayback(QPainter *painter, const QStyleOptionViewItem &opt, const QModelIndex &index,
+                       const QRect &pictureArea) const
+    {
+        const int row = index.row();
+        if (!m_view->playbackEnabled() || !m_view->isPlayableRow(row)) {
+            return;
+        }
+        InlinePlayer *player = m_view->inlinePlayer();
+        const bool playing = player->isPlaying() && player->path() == m_model->filePath(row);
+        painter->save();
+        painter->setRenderHint(QPainter::Antialiasing);
+        painter->setRenderHint(QPainter::SmoothPixmapTransform);
+        if (playing && !player->frame().isNull()) {
+            // El fotograma tapa la miniatura en el mismo sitio y con el mismo tamaño.
+            const QImage frame = player->frame();
+            QSize shown = frame.size();
+            shown.scale(pictureArea.size(), Qt::KeepAspectRatio);
+            const QRect target(pictureArea.left() + (pictureArea.width() - shown.width()) / 2,
+                               pictureArea.bottom() + 1 - shown.height(), shown.width(), shown.height());
+            painter->fillRect(target, Qt::black);
+            painter->drawImage(target, frame);
+        }
+        if (playing && player->durationMs() > 0) {
+            const QRect track(pictureArea.left() + 4, pictureArea.bottom() - 5, pictureArea.width() - 8, 4);
+            painter->fillRect(track, QColor(0, 0, 0, 120));
+            QRect done = track;
+            done.setWidth(int(track.width() * double(player->positionMs()) / double(player->durationMs())));
+            painter->fillRect(done, opt.palette.color(QPalette::Highlight));
+        }
+        const bool hovered = m_view->hoverRow() == row;
+        const bool current = (opt.state & QStyle::State_HasFocus) && m_view->hasFocus();
+        if (playing || hovered || current) {
+            const QRect button = m_view->playButtonRect(opt.rect);
+            painter->setPen(Qt::NoPen);
+            painter->setBrush(QColor(0, 0, 0, playing ? 110 : 150));
+            painter->drawEllipse(button);
+            painter->setBrush(Qt::white);
+            const QRectF inner = QRectF(button).adjusted(button.width() * 0.32, button.height() * 0.3,
+                                                         -button.width() * 0.28, -button.height() * 0.3);
+            if (playing) {
+                painter->drawRect(QRectF(button).adjusted(button.width() * 0.33, button.height() * 0.33,
+                                                          -button.width() * 0.33, -button.height() * 0.33));
+            } else {
+                const QPointF triangle[3] = {inner.topLeft(), inner.bottomLeft(),
+                                             QPointF(inner.right(), inner.center().y())};
+                painter->drawPolygon(triangle, 3);
+            }
+        }
+        painter->restore();
+    }
+
     static QString fitInTwoLines(const QString &name, const QFontMetrics &metrics, int width)
     {
         if (metrics.horizontalAdvance(name) <= width) {
@@ -228,6 +289,7 @@ ThumbnailView::ThumbnailView(DirectoryModel *model, QWidget *parent) : QListView
     setModel(model);
     setItemDelegate(new ThumbnailDelegate(this, model));
     updateGrid();
+    setMouseTracking(true);   // para saber sobre qué miniatura está el puntero
 
     m_retainTimer.setSingleShot(true);
     m_retainTimer.setInterval(150);
@@ -275,6 +337,156 @@ void ThumbnailView::updateGrid()
     setIconSize(QSize(m_size, m_size));
     doItemsLayout();
     viewport()->update();
+}
+
+void ThumbnailView::setInlinePlayer(InlinePlayer *player)
+{
+    if (m_player != nullptr) {
+        disconnect(m_player, nullptr, this, nullptr);
+    }
+    m_player = player;
+    if (player != nullptr) {
+        player->setMaxFrameSide(512);
+        connect(player, &InlinePlayer::changed, viewport(), qOverload<>(&QWidget::update));
+    }
+    // Al cambiar de carpeta, lo que sonaba se para.
+    connect(m_model, &QAbstractItemModel::modelAboutToBeReset, this, &ThumbnailView::stopPlayback,
+            Qt::UniqueConnection);
+}
+
+void ThumbnailView::setPlaybackEnabled(bool enabled)
+{
+    m_playbackEnabled = enabled;
+    if (!enabled) {
+        stopPlayback();
+    }
+    viewport()->update();
+}
+
+QRect ThumbnailView::playButtonRect(const QRect &itemRect) const
+{
+    const QRect pictureArea(itemRect.left() + (itemRect.width() - m_size) / 2, itemRect.top() + padding, m_size,
+                            m_size);
+    const int side = qBound(28, m_size / 3, 56);
+    return QRect(pictureArea.center().x() - side / 2 + 1, pictureArea.center().y() - side / 2 + 1, side, side);
+}
+
+bool ThumbnailView::isPlayableRow(int row) const
+{
+    if (m_player == nullptr || row < 0 || row >= m_model->rowCount() || m_model->entryAt(row).isDirectory) {
+        return false;
+    }
+    const thumbs::ThumbnailSource source = thumbs::thumbnailSourceFor(m_model->entryAt(row).name);
+    // Video y audio se reconocen por la extensión aunque no haya FFmpeg para
+    // las miniaturas: Qt Multimedia los reproduce por su cuenta.
+    if (source == thumbs::ThumbnailSource::Video || source == thumbs::ThumbnailSource::Audio) {
+        return true;
+    }
+    static const QStringList media{QStringLiteral("mp4"), QStringLiteral("mkv"), QStringLiteral("webm"),
+                                   QStringLiteral("avi"), QStringLiteral("mov"), QStringLiteral("m4v"),
+                                   QStringLiteral("mp3"), QStringLiteral("flac"), QStringLiteral("ogg"),
+                                   QStringLiteral("opus"), QStringLiteral("m4a"), QStringLiteral("wav")};
+    return media.contains(QFileInfo(m_model->entryAt(row).name).suffix().toLower());
+}
+
+void ThumbnailView::togglePlayback(int row, bool fromKeyboard)
+{
+    if (!playbackEnabled() || !isPlayableRow(row)) {
+        return;
+    }
+    const QString path = m_model->filePath(row);
+    if (m_player->isPlaying() && m_player->path() == path) {
+        m_player->stop();
+        return;
+    }
+    const QString suffix = QFileInfo(path).suffix().toLower();
+    const bool isAudio = thumbs::thumbnailSourceFor(path) == thumbs::ThumbnailSource::Audio
+        || QStringList{QStringLiteral("mp3"), QStringLiteral("flac"), QStringLiteral("ogg"), QStringLiteral("opus"),
+                       QStringLiteral("m4a"), QStringLiteral("wav")}
+               .contains(suffix);
+    m_playbackFromKeyboard = fromKeyboard;
+    m_player->play(path, isAudio);
+}
+
+void ThumbnailView::stopPlayback()
+{
+    if (m_player != nullptr && m_player->isPlaying()) {
+        // Solo lo que se reproduce en esta carpeta: el reproductor es de la ventana.
+        const QString playing = m_player->path();
+        if (QFileInfo(playing).absolutePath() == QDir::cleanPath(m_model->path())) {
+            m_player->stop();
+        }
+    }
+}
+
+void ThumbnailView::setHoverRow(int row)
+{
+    if (row == m_hoverRow) {
+        return;
+    }
+    m_hoverRow = row;
+    viewport()->update();
+    // Se para cuando el puntero sale de lo que suena (si lo empezó el ratón).
+    if (m_player != nullptr && m_player->isPlaying() && !m_playbackFromKeyboard
+        && (row < 0 || m_model->filePath(row) != m_player->path())) {
+        stopPlayback();
+    }
+}
+
+void ThumbnailView::mouseMoveEvent(QMouseEvent *event)
+{
+    const QModelIndex index = indexAt(event->position().toPoint());
+    setHoverRow(index.isValid() ? index.row() : -1);
+    QListView::mouseMoveEvent(event);
+}
+
+void ThumbnailView::mousePressEvent(QMouseEvent *event)
+{
+    const QModelIndex index = indexAt(event->position().toPoint());
+    if (event->button() == Qt::LeftButton && index.isValid() && playbackEnabled() && isPlayableRow(index.row())
+        && playButtonRect(visualRect(index)).contains(event->position().toPoint())) {
+        setHoverRow(index.row());
+        togglePlayback(index.row(), false);
+        event->accept();
+        return;   // el botón no selecciona ni abre
+    }
+    QListView::mousePressEvent(event);
+}
+
+void ThumbnailView::keyPressEvent(QKeyEvent *event)
+{
+    const QModelIndex current = currentIndex();
+    if (event->key() == Qt::Key_Space && event->modifiers() == Qt::NoModifier && current.isValid()
+        && playbackEnabled() && isPlayableRow(current.row())) {
+        togglePlayback(current.row(), true);
+        event->accept();
+        return;
+    }
+    QListView::keyPressEvent(event);
+}
+
+bool ThumbnailView::viewportEvent(QEvent *event)
+{
+    if (event->type() == QEvent::Leave) {
+        setHoverRow(-1);
+    }
+    return QListView::viewportEvent(event);
+}
+
+void ThumbnailView::currentChanged(const QModelIndex &current, const QModelIndex &previous)
+{
+    QListView::currentChanged(current, previous);
+    // Lo que se empezó con el teclado se para al mover el cursor a otro elemento.
+    if (m_player != nullptr && m_player->isPlaying() && m_playbackFromKeyboard
+        && (!current.isValid() || m_model->filePath(current.row()) != m_player->path())) {
+        stopPlayback();
+    }
+}
+
+void ThumbnailView::hideEvent(QHideEvent *event)
+{
+    stopPlayback();   // otra pestaña, otra vista u otra ventana encima: nada suena a escondidas
+    QListView::hideEvent(event);
 }
 
 QSet<QString> ThumbnailView::visiblePaths() const
