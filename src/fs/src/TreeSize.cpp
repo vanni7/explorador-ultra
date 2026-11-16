@@ -17,6 +17,7 @@ TreeSize measureTree(const QString &path, const tasks::CancelToken &cancel, cons
     options.firstBatchSize = options.batchSize;   // aquí no hay nada que pintar pronto
 
     while (!pending.isEmpty()) {
+        cancel.yieldToInteractive();
         if (cancel.isCancelled()) {
             total.cancelled = true;
             return total;

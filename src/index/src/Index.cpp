@@ -393,6 +393,7 @@ core::Result<SyncProgress> Index::sync(const QString &folder, const SyncOptions 
             options.pause->waitWhilePaused(cancel);
             database.transaction();
         }
+        cancel.yieldToInteractive();
         if (cancel.isCancelled()) {
             break;
         }

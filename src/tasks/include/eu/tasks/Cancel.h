@@ -2,11 +2,15 @@
 #pragma once
 
 #include <atomic>
+#include <chrono>
+#include <functional>
 #include <memory>
+#include <mutex>
 
 namespace eu::tasks {
 
-/// Permite a una tarea preguntar si le han pedido que se detenga.
+/// Permite a una tarea preguntar si le han pedido que se detenga, y ceder el
+/// disco cuando el usuario está esperando algo de él.
 ///
 /// La cancelación es *cooperativa*: nadie interrumpe el hilo a la fuerza (eso
 /// podría dejar un archivo a medio escribir). La tarea consulta el token en sus
@@ -15,21 +19,51 @@ namespace eu::tasks {
 class CancelToken
 {
 public:
-    CancelToken() : m_flag(std::make_shared<std::atomic<bool>>(false)) {}
+    CancelToken() : m_state(std::make_shared<State>()) {}
 
-    bool isCancelled() const { return m_flag->load(std::memory_order_relaxed); }
+    bool isCancelled() const { return m_state->cancelled.load(std::memory_order_relaxed); }
+
+    /// Para tareas largas que leen o escriben mucho (copiar, indexar, medir
+    /// carpetas): se llama en los mismos puntos seguros que isCancelled().
+    ///
+    /// Si en uno de los discos lentos de la tarea (mecánico, USB, óptico) está
+    /// trabajando algo que el usuario espera —abrir una carpeta—, espera a que
+    /// termine. En un disco mecánico, abrir una carpeta mientras se copia un
+    /// archivo grande tarda diez veces más o peor (docs/BENCHMARKS.md).
+    ///
+    /// Nunca deja la tarea parada para siempre: tras `maxWait` seguidos
+    /// cediendo, sigue trabajando un segundo sin ceder. Sale enseguida si se
+    /// cancela. Fuera del planificador, o en tareas que no declararon disco,
+    /// no hace nada.
+    void yieldToInteractive(std::chrono::milliseconds maxWait = std::chrono::seconds(2)) const;
 
 private:
     friend class CancelSource;
-    std::shared_ptr<std::atomic<bool>> m_flag;
+
+    struct State
+    {
+        std::atomic<bool> cancelled{false};
+        std::mutex mutex;
+        std::function<bool()> deviceBusy;   ///< La pone el planificador mientras corre la tarea.
+        std::chrono::steady_clock::time_point freeUntil{};   ///< Hasta cuándo no se cede.
+    };
+    std::shared_ptr<State> m_state;
 };
 
 /// El lado que ordena la cancelación.
 class CancelSource
 {
 public:
-    void cancel() { m_token.m_flag->store(true, std::memory_order_relaxed); }
+    void cancel() { m_token.m_state->cancelled.store(true, std::memory_order_relaxed); }
     const CancelToken &token() const { return m_token; }
+
+    /// Instala (o quita, con una función vacía) la pregunta "¿hay alguien
+    /// esperando el disco?" que usa CancelToken::yieldToInteractive().
+    void setDeviceBusyCheck(std::function<bool()> check)
+    {
+        const std::lock_guard<std::mutex> lock(m_token.m_state->mutex);
+        m_token.m_state->deviceBusy = std::move(check);
+    }
 
 private:
     CancelToken m_token;

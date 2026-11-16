@@ -6,6 +6,8 @@
 //   eu-bench listing <carpeta>              compara formas de listar una carpeta
 //   eu-bench sort    <carpeta>              ordenamiento natural y filtrado en memoria
 //   eu-bench copy    <origen> <carpetaDestino>   compara formas de copiar un archivo grande
+//   eu-bench walk    <carpeta> [carpeta…]   recorre los árboles a la vez (un hilo cada uno)
+//   eu-bench yield   <archivo-grande> <carpeta>   listar mientras se lee, cediendo o no el disco
 //   eu-bench index   <carpeta> <archivo.db> [consulta…]   construye el índice y busca en él
 //
 // Cada medición imprime una línea "nombre;milisegundos;detalle" fácil de pegar
@@ -15,6 +17,7 @@
 #include "eu/fs/DirectoryLister.h"
 #include "eu/fs/Volumes.h"
 #include "eu/index/Index.h"
+#include "eu/tasks/Scheduler.h"
 
 #include <QCoreApplication>
 #include <QDir>
@@ -27,9 +30,12 @@
 #include <QTextStream>
 
 #include <algorithm>
+#include <cstdlib>
+#include <atomic>
 #include <filesystem>
 #include <functional>
 #include <system_error>
+#include <thread>
 #include <vector>
 
 #ifdef Q_OS_UNIX
@@ -326,6 +332,131 @@ int commandCopy(const QString &source, const QString &targetFolder)
 
 } // namespace
 
+/// Recorre varios árboles a la vez, un hilo por árbol, y dice cuánto tarda
+/// cada uno y el conjunto. Con una sola carpeta mide el recorrido a secas.
+/// Sirve para comparar, en un disco mecánico, dos recorridos simultáneos con
+/// los mismos dos uno detrás de otro (SPEC §3.3).
+int commandWalk(const QStringList &folders)
+{
+    QElapsedTimer total;
+    total.start();
+    std::vector<std::thread> threads;
+    std::vector<qint64> entries(size_t(folders.size()), 0);
+    std::vector<qint64> directories(size_t(folders.size()), 0);
+    std::vector<qint64> elapsed(size_t(folders.size()), 0);
+    for (qsizetype i = 0; i < folders.size(); ++i) {
+        threads.emplace_back([&, i] {
+            QElapsedTimer timer;
+            timer.start();
+            std::vector<QString> pending{folders[i]};
+            while (!pending.empty()) {
+                const QString folder = pending.back();
+                pending.pop_back();
+                ++directories[size_t(i)];
+                eu::fs::listDirectory(folder, eu::fs::ListOptions(), {}, [&](std::vector<eu::fs::Entry> &&batch) {
+                    for (const eu::fs::Entry &entry : batch) {
+                        ++entries[size_t(i)];
+                        if (entry.isDirectory && !entry.isSymlink) {
+                            pending.push_back(folder + QLatin1Char('/') + entry.name);
+                        }
+                    }
+                });
+            }
+            elapsed[size_t(i)] = timer.nsecsElapsed();
+        });
+    }
+    for (std::thread &thread : threads) {
+        thread.join();
+    }
+    for (qsizetype i = 0; i < folders.size(); ++i) {
+        report(QStringLiteral("recorrer ") + folders[i], elapsed[size_t(i)],
+               QStringLiteral("%1 entradas, %2 carpetas").arg(entries[size_t(i)]).arg(directories[size_t(i)]));
+    }
+    report(QStringLiteral("recorrer: total"), total.nsecsElapsed(),
+           QStringLiteral("%1 árboles a la vez").arg(folders.size()));
+    return 0;
+}
+
+/// Vacía la caché de disco del sistema (solo Linux, con sudo sin contraseña).
+/// Devuelve false si no se pudo: entonces la medición no es de disco frío.
+bool dropCaches()
+{
+#ifdef Q_OS_LINUX
+    return std::system("sync && echo 3 | sudo -n tee /proc/sys/vm/drop_caches >/dev/null 2>&1") == 0;
+#else
+    return false;
+#endif
+}
+
+/// Mide cuánto tarda recorrer `folder` (como lo haría la interfaz al abrir
+/// carpetas) mientras una tarea de fondo lee `bigFile` del mismo disco, con
+/// y sin ceder el disco (CancelToken::yieldToInteractive). El disco se trata
+/// como mecánico.
+int commandYield(const QString &bigFile, const QString &folder)
+{
+    using namespace std::chrono_literals;
+    for (const bool yielding : {false, true, false, true}) {
+        const bool cold = dropCaches();
+        eu::tasks::Scheduler scheduler;
+        const QString disk = QStringLiteral("disco");
+        scheduler.setDeviceClass(disk, eu::tasks::DeviceClass::Hdd);
+        std::atomic<qint64> readBytes{0};
+        eu::tasks::TaskHandle reader = scheduler.submit(
+            eu::tasks::Category::Transfer, eu::tasks::Priority::ActiveTransfer, {disk},
+            [&](const eu::tasks::CancelToken &cancel) {
+                QFile file(bigFile);
+                if (!file.open(QIODevice::ReadOnly)) {
+                    return;
+                }
+                std::vector<char> buffer(1024 * 1024);
+                while (!cancel.isCancelled()) {
+                    if (yielding) {
+                        cancel.yieldToInteractive();
+                    }
+                    const qint64 read = file.read(buffer.data(), qint64(buffer.size()));
+                    if (read <= 0) {
+                        break;
+                    }
+                    readBytes += read;
+                }
+            });
+        std::this_thread::sleep_for(2s);   // la lectura ya va lanzada
+        QElapsedTimer timer;
+        timer.start();
+        qint64 entries = 0;
+        eu::tasks::TaskHandle walker = scheduler.submit(
+            eu::tasks::Category::Listing, eu::tasks::Priority::VisibleNavigation, {disk},
+            [&](const eu::tasks::CancelToken &) {
+                std::vector<QString> pending{folder};
+                while (!pending.empty()) {
+                    const QString current = pending.back();
+                    pending.pop_back();
+                    eu::fs::listDirectory(current, eu::fs::ListOptions(), {},
+                                          [&](std::vector<eu::fs::Entry> &&batch) {
+                        for (const eu::fs::Entry &entry : batch) {
+                            ++entries;
+                            if (entry.isDirectory && !entry.isSymlink) {
+                                pending.push_back(current + QLatin1Char('/') + entry.name);
+                            }
+                        }
+                    });
+                }
+            });
+        walker.waitFor(600s);
+        const qint64 walkNs = timer.nsecsElapsed();
+        const qint64 readDuringWalk = readBytes;
+        reader.cancel();
+        reader.waitFor(600s);
+        report(yielding ? QStringLiteral("listar mientras se lee, cediendo el disco")
+                        : QStringLiteral("listar mientras se lee, sin ceder"),
+               walkNs,
+               QStringLiteral("%1 entradas; leídos %2 MB hasta terminar de listar; caché %3")
+                   .arg(entries).arg(readDuringWalk / 1000000).arg(cold ? QStringLiteral("vaciada")
+                                                                          : QStringLiteral("SIN vaciar")));
+    }
+    return 0;
+}
+
 /// Construye (o pone al día) el índice de una carpeta y mide búsquedas en él:
 /// tiempo hasta el primer resultado y tiempo total.
 int commandIndex(const QString &folder, const QString &databasePath, const QStringList &queries)
@@ -399,6 +530,16 @@ int main(int argc, char *argv[])
     }
     if (command == QStringLiteral("copy") && arguments.size() == 4) {
         return commandCopy(arguments[2], arguments[3]);
+    }
+    if (command == QStringLiteral("yield") && arguments.size() == 4) {
+        return commandYield(arguments[2], QDir::cleanPath(arguments[3]));
+    }
+    if (command == QStringLiteral("walk") && arguments.size() >= 3) {
+        QStringList folders;
+        for (const QString &folder : arguments.mid(2)) {
+            folders.append(QDir::cleanPath(folder));
+        }
+        return commandWalk(folders);
     }
     if (command == QStringLiteral("index") && arguments.size() >= 4) {
         return commandIndex(QDir::cleanPath(arguments[2]), arguments[3], arguments.mid(4));
