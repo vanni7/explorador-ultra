@@ -233,7 +233,9 @@ void PreviewPanel::startLoading()
             Loaded loaded;
             const QString suffix = QFileInfo(item.entry.name).suffix().toLower();
             if (!item.entry.isDirectory) {
-                const QList<meta::Section> sections = meta::readMetadata(item.path, cancel);
+                // En el proceso auxiliar: un EXIF o unas etiquetas hechos para
+                // romper el lector no cierran la aplicación.
+                const QList<meta::Section> sections = thumbs::readMetadataIsolated(item.path, cancel);
                 for (const meta::Section &section : sections) {
                     QList<QPair<QString, QString>> fields;
                     for (const meta::Field &field : section.fields) {

@@ -532,6 +532,14 @@ private slots:
         QCOMPARE(cancelled.error().code, core::ErrorCode::Cancelled);
         QVERIFY(timer.elapsed() < 3000);
 
+        // Los metadatos también se leen en el auxiliar.
+        const QList<meta::Section> sections = readMetadataIsolated(file(QStringLiteral("aislada.png")), {});
+        QVERIFY(!sections.isEmpty());
+        QCOMPARE(sections.first().title, QStringLiteral("Imagen"));
+        QCOMPARE(sections.first().fields.first().value, QStringLiteral("300 × 200 píxeles"));
+        QVERIFY(readMetadataIsolated(file(QStringLiteral("x__revienta__.png")), {}).isEmpty());
+        QVERIFY(!readMetadataIsolated(file(QStringLiteral("aislada.png")), {}).isEmpty());
+
         // El servicio usa el auxiliar: el archivo que lo cierra queda como fallido.
         auto shared = std::make_shared<ThumbnailCache>(QString());
         ThumbnailService service(m_scheduler, shared);

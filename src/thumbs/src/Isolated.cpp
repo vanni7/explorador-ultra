@@ -6,6 +6,7 @@
 #include <QElapsedTimer>
 #include <QFile>
 #include <QImageReader>
+#include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QProcess>
@@ -47,22 +48,14 @@ class Helper
 public:
     ~Helper() { stop(); }
 
-    core::Result<QImage> render(const ThumbnailRequest &request, const tasks::CancelToken &cancel)
+    bool available() { return ensureRunning(); }
+
+    /// Envía una petición y espera la respuesta, vigilando que el auxiliar
+    /// no se cierre ni se cuelgue.
+    core::Result<QJsonObject> ask(const QJsonObject &message, const QString &path, const tasks::CancelToken &cancel)
     {
-        if (!ensureRunning()) {
-            return renderThumbnail(request, cancel);   // sin auxiliar: aquí mismo
-        }
-        const QString out = m_scratch->filePath(QStringLiteral("miniatura.png"));
-        QFile::remove(out);
-        QJsonObject message{{QStringLiteral("path"), request.path},
-                            {QStringLiteral("size"), double(request.size)},
-                            {QStringLiteral("mtime"), double(request.modifiedMs)},
-                            {QStringLiteral("maxSide"), request.maxSide},
-                            {QStringLiteral("dir"), request.isDirectory},
-                            {QStringLiteral("out"), out}};
         m_process->write(QJsonDocument(message).toJson(QJsonDocument::Compact) + '\n');
         m_process->waitForBytesWritten(5000);
-
         QElapsedTimer timer;
         timer.start();
         while (!m_process->canReadLine()) {
@@ -70,21 +63,65 @@ public:
                 // No se le puede pedir que deje lo que está haciendo: se cierra
                 // y el siguiente arranca otro.
                 stop();
-                return core::Error{core::ErrorCode::Cancelled, tr("Cancelado"), request.path, 0};
+                return core::Error{core::ErrorCode::Cancelled, tr("Cancelado"), path, 0};
             }
             if (m_process->state() != QProcess::Running) {
                 stop();
                 return core::Error{core::ErrorCode::Corrupted,
-                                   tr("El archivo hizo cerrarse al lector de miniaturas"), request.path, 0};
+                                   tr("El archivo hizo cerrarse al lector de miniaturas"), path, 0};
             }
             if (timer.elapsed() > s_timeoutMs.load()) {
                 stop();
-                return core::Error{core::ErrorCode::Timeout, tr("El archivo tardó demasiado en leerse"),
-                                   request.path, 0};
+                return core::Error{core::ErrorCode::Timeout, tr("El archivo tardó demasiado en leerse"), path, 0};
             }
             m_process->waitForReadyRead(50);
         }
-        const QJsonObject answer = QJsonDocument::fromJson(m_process->readLine()).object();
+        return QJsonDocument::fromJson(m_process->readLine()).object();
+    }
+
+    QList<meta::Section> metadata(const QString &path, const tasks::CancelToken &cancel)
+    {
+        if (!ensureRunning()) {
+            return meta::readMetadata(path, cancel);
+        }
+        const core::Result<QJsonObject> answer =
+            ask({{QStringLiteral("op"), QStringLiteral("meta")}, {QStringLiteral("path"), path}}, path, cancel);
+        QList<meta::Section> sections;
+        if (!answer.ok()) {
+            return sections;
+        }
+        const QJsonArray list = answer.value().value(QStringLiteral("sections")).toArray();
+        for (const QJsonValue &item : list) {
+            const QJsonObject object = item.toObject();
+            meta::Section section{object.value(QStringLiteral("title")).toString(), {}};
+            const QJsonArray fields = object.value(QStringLiteral("fields")).toArray();
+            for (const QJsonValue &field : fields) {
+                const QJsonArray pair = field.toArray();
+                section.fields.append({pair.at(0).toString(), pair.at(1).toString()});
+            }
+            sections.append(section);
+        }
+        return sections;
+    }
+
+    core::Result<QImage> render(const ThumbnailRequest &request, const tasks::CancelToken &cancel)
+    {
+        if (!ensureRunning()) {
+            return renderThumbnail(request, cancel);   // sin auxiliar: aquí mismo
+        }
+        const QString out = m_scratch->filePath(QStringLiteral("miniatura.png"));
+        QFile::remove(out);
+        const core::Result<QJsonObject> reply = ask({{QStringLiteral("path"), request.path},
+                                                     {QStringLiteral("size"), double(request.size)},
+                                                     {QStringLiteral("mtime"), double(request.modifiedMs)},
+                                                     {QStringLiteral("maxSide"), request.maxSide},
+                                                     {QStringLiteral("dir"), request.isDirectory},
+                                                     {QStringLiteral("out"), out}},
+                                                    request.path, cancel);
+        if (!reply.ok()) {
+            return reply.error();
+        }
+        const QJsonObject answer = reply.value();
         if (!answer.value(QStringLiteral("ok")).toBool()) {
             return core::Error{core::ErrorCode(answer.value(QStringLiteral("code")).toInt(int(core::ErrorCode::Unknown))),
                                answer.value(QStringLiteral("message")).toString(), request.path, 0};
@@ -158,6 +195,14 @@ bool hasThumbnailHelper()
 void setThumbnailHelperTimeout(std::chrono::milliseconds timeout)
 {
     s_timeoutMs = timeout.count();
+}
+
+QList<meta::Section> readMetadataIsolated(const QString &path, const tasks::CancelToken &cancel)
+{
+    if (cancel.isCancelled()) {
+        return {};
+    }
+    return helperForThisThread().metadata(path, cancel);
 }
 
 core::Result<QImage> renderThumbnailIsolated(const ThumbnailRequest &request, const tasks::CancelToken &cancel)

@@ -3,6 +3,7 @@
 
 #include <QBuffer>
 #include <QCryptographicHash>
+#include <QDateTime>
 #include <QDir>
 #include <QDirIterator>
 #include <QFile>
@@ -85,10 +86,21 @@ ThumbnailCache::Entry ThumbnailCache::load(const ThumbnailRequest &request)
     if (QFile::exists(diskPath(key, QStringLiteral(".fallo")))) {
         entry.state = State::Failed;
     } else {
-        QImageReader reader(diskPath(key, QStringLiteral(".png")), "png");
+        const QString path = diskPath(key, QStringLiteral(".png"));
+        QImageReader reader(path, "png");
         const QImage image = reader.read();
         if (image.isNull()) {
             return {};   // no está (o el archivo de la caché se estropeó: se regenera)
+        }
+        // Al recortar la caché se borra lo que lleva más tiempo sin verse: cada
+        // lectura renueva la fecha (como mucho una vez al día, para no escribir
+        // en el disco cada vez que se pinta).
+        const QDateTime now = QDateTime::currentDateTime();
+        if (QFileInfo(path).lastModified().secsTo(now) > 24 * 3600) {
+            QFile file(path);
+            if (file.open(QIODevice::ReadWrite)) {
+                file.setFileTime(now, QFileDevice::FileModificationTime);
+            }
         }
         entry.state = State::Ready;
         entry.image = image.convertToFormat(image.hasAlphaChannel() ? QImage::Format_ARGB32_Premultiplied

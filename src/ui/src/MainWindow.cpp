@@ -78,8 +78,22 @@ MainWindow::MainWindow(tasks::Scheduler &scheduler, std::shared_ptr<journal::Jou
     m_indexService->setExcludedNames({trash::trashFolderName()});
     // Miniaturas: en la carpeta de caché del sistema (se puede borrar sin
     // perder nada), con 256 MB como mucho en memoria (SPEC §5.5).
-    m_thumbnailCache = std::make_shared<thumbs::ThumbnailCache>(
-        QStandardPaths::writableLocation(QStandardPaths::CacheLocation) + QStringLiteral("/miniaturas"));
+    // Topes configurables en el archivo de configuración, sección [miniaturas]:
+    // memoriaMB (256 de fábrica, SPEC §5.5) y discoMB (1024).
+    {
+        const QSettings settings;
+        const qint64 memoryMb = std::max<qint64>(16, settings.value(QStringLiteral("miniaturas/memoriaMB"), 256).toLongLong());
+        const qint64 diskMb = std::max<qint64>(16, settings.value(QStringLiteral("miniaturas/discoMB"), 1024).toLongLong());
+        m_thumbnailCache = std::make_shared<thumbs::ThumbnailCache>(
+            QStandardPaths::writableLocation(QStandardPaths::CacheLocation) + QStringLiteral("/miniaturas"),
+            memoryMb * 1024 * 1024);
+        // La caché en disco no crece sin límite: al arrancar, y en segundo
+        // plano, se borra lo más antiguo de lo que sobre.
+        m_scheduler.submit(tasks::Category::General, tasks::Priority::Background,
+                           [cache = m_thumbnailCache, diskMb](const tasks::CancelToken &) {
+            cache->pruneDisk(diskMb * 1024 * 1024);
+        });
+    }
     m_thumbnailService = new thumbs::ThumbnailService(m_scheduler, m_thumbnailCache, this);
     // Un solo reproductor para toda la ventana: nunca suenan dos a la vez.
     m_inlinePlayer = new InlinePlayer(this);

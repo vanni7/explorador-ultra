@@ -1,6 +1,7 @@
 // Explorador Ultra — SPDX-License-Identifier: GPL-3.0-or-later
 #pragma once
 
+#include "eu/meta/Metadata.h"
 #include "eu/thumbs/Thumbnail.h"
 
 #include <chrono>
@@ -16,6 +17,12 @@ namespace eu::thumbs {
 /// el auxiliar no está junto al ejecutable, se decodifica en este proceso.
 /// Bloqueante: se llama desde una tarea.
 core::Result<QImage> renderThumbnailIsolated(const ThumbnailRequest &request, const tasks::CancelToken &cancel);
+
+/// Como meta::readMetadata, pero leyendo en el proceso auxiliar: el EXIF de
+/// una foto o las etiquetas de un audio hechos para romper el lector no
+/// cierran la aplicación. Si el auxiliar se cierra o se cuelga, la lista
+/// viene vacía. Sin auxiliar, se lee en este proceso.
+QList<meta::Section> readMetadataIsolated(const QString &path, const tasks::CancelToken &cancel);
 
 /// true si está el auxiliar (si no, renderThumbnailIsolated no aísla).
 bool hasThumbnailHelper();

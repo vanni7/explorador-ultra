@@ -6,15 +6,19 @@
 // para romper el decodificador) puede cerrar el programa que lo intenta. Así
 // lo que se cierra es este proceso, no el explorador.
 //
-// Protocolo: una petición por línea en la entrada estándar, en JSON:
-//   {"path":"…","size":123,"mtime":456,"maxSide":256,"dir":false,"out":"…/x.png"}
-// y una respuesta por línea en la salida estándar:
-//   {"ok":true}  o  {"ok":false,"code":3,"message":"…"}
-// La imagen se deja en "out" (PNG sin comprimir, que es lo más rápido).
+// Protocolo: una petición por línea en la entrada estándar, en JSON, y una
+// respuesta por línea en la salida estándar.
+//   Miniatura: {"path":"…","size":123,"mtime":456,"maxSide":256,"dir":false,"out":"…/x.png"}
+//              -> {"ok":true}  o  {"ok":false,"code":3,"message":"…"}
+//              La imagen se deja en "out" (PNG sin comprimir, que es lo más rápido).
+//   Metadatos: {"op":"meta","path":"…"}
+//              -> {"ok":true,"sections":[{"title":"Cámara","fields":[["ISO","200"],…]}]}
 
+#include "eu/meta/Metadata.h"
 #include "eu/thumbs/Thumbnail.h"
 
 #include <QFile>
+#include <QJsonArray>
 #include <QGuiApplication>
 #include <QJsonDocument>
 #include <QJsonObject>
@@ -73,6 +77,27 @@ int main(int argc, char *argv[])
     std::string line;
     while (std::getline(std::cin, line)) {
         const QJsonObject request = QJsonDocument::fromJson(QByteArray::fromStdString(line)).object();
+        const QString path = request.value(QStringLiteral("path")).toString();
+        if (!crashOn.isEmpty() && path.contains(crashOn)) {
+            std::abort();
+        }
+        if (!hangOn.isEmpty() && path.contains(hangOn)) {
+            QThread::sleep(3600);
+        }
+        if (request.value(QStringLiteral("op")).toString() == QLatin1String("meta")) {
+            // Metadatos: {"op":"meta","path":"…"} -> {"ok":true,"sections":[{"title":…,"fields":[[l,v],…]}]}
+            QJsonArray sections;
+            for (const eu::meta::Section &section : eu::meta::readMetadata(path, {})) {
+                QJsonArray fields;
+                for (const eu::meta::Field &field : section.fields) {
+                    fields.append(QJsonArray{field.label, field.value});
+                }
+                sections.append(QJsonObject{{QStringLiteral("title"), section.title},
+                                            {QStringLiteral("fields"), fields}});
+            }
+            reply({{QStringLiteral("ok"), true}, {QStringLiteral("sections"), sections}});
+            continue;
+        }
         eu::thumbs::ThumbnailRequest thumbnail;
         thumbnail.path = request.value(QStringLiteral("path")).toString();
         thumbnail.size = qint64(request.value(QStringLiteral("size")).toDouble());
@@ -80,12 +105,6 @@ int main(int argc, char *argv[])
         thumbnail.maxSide = request.value(QStringLiteral("maxSide")).toInt(256);
         thumbnail.isDirectory = request.value(QStringLiteral("dir")).toBool();
         const QString out = request.value(QStringLiteral("out")).toString();
-        if (!crashOn.isEmpty() && thumbnail.path.contains(crashOn)) {
-            std::abort();
-        }
-        if (!hangOn.isEmpty() && thumbnail.path.contains(hangOn)) {
-            QThread::sleep(3600);
-        }
         const eu::core::Result<QImage> image = eu::thumbs::renderThumbnail(thumbnail, {});
         if (!image.ok()) {
             reply({{QStringLiteral("ok"), false}, {QStringLiteral("code"), int(image.error().code)},
