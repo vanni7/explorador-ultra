@@ -10,6 +10,7 @@
 //   eu-bench yield   <archivo-grande> <carpeta>   listar mientras se lee, cediendo o no el disco
 //   eu-bench grep    <carpeta> <texto>  busca el texto dentro de los documentos (aislado)
 //   eu-bench cindex  <carpeta> <texto>  crea el índice de contenido y busca con él
+//   eu-bench transfer <archivo> <carpeta> [veces]  copia con el motor y con cp+sync (caché fría)
 //   eu-bench thumbs  <carpeta> [lado]   miniaturas de una carpeta, en el proceso y aisladas
 //   eu-bench index   <carpeta> <archivo.db> [consulta…]   construye el índice y busca en él
 //
@@ -21,6 +22,8 @@
 #include "eu/fs/Volumes.h"
 #include "eu/index/Index.h"
 #include "eu/index/ContentIndex.h"
+#include "eu/journal/Journal.h"
+#include "eu/ops/Engine.h"
 #include "eu/search/Searcher.h"
 #include "eu/thumbs/Isolated.h"
 #include "eu/thumbs/Thumbnail.h"
@@ -33,6 +36,7 @@
 #include <QElapsedTimer>
 #include <QFile>
 #include <QFileInfo>
+#include <QProcess>
 #include <QString>
 #include <QStringList>
 #include <QTemporaryDir>
@@ -646,6 +650,77 @@ int commandIndex(const QString &folder, const QString &databasePath, const QStri
     return 0;
 }
 
+/// Copia un archivo grande con el motor (reanudable, como la cola; con y
+/// sin comprobar) y con `cp` + `sync`, con la caché vaciada antes de cada
+/// copia, y compara la velocidad (SPEC: ≥ 90 % de la nativa).
+/// Velocidad de cada hash sobre 512 MB en memoria (sin disco).
+int commandHashSpeed()
+{
+    QByteArray data(512 * 1024 * 1024, Qt::Uninitialized);
+    for (qsizetype i = 0; i < data.size(); i += 4096) {
+        data[i] = char(i / 4096);
+    }
+    for (const eu::ops::HashAlgorithm algorithm : {eu::ops::HashAlgorithm::Sha256, eu::ops::HashAlgorithm::Sha1,
+                                                   eu::ops::HashAlgorithm::Md5, eu::ops::HashAlgorithm::Crc32}) {
+        QElapsedTimer timer;
+        timer.start();
+        eu::ops::Hasher hasher(algorithm);
+        for (qsizetype at = 0; at < data.size(); at += 1024 * 1024) {
+            hasher.addData(data.constData() + at, 1024 * 1024);
+        }
+        hasher.result();
+        const qint64 elapsed = timer.nsecsElapsed();
+        report(QStringLiteral("hash %1").arg(eu::ops::hashAlgorithmName(algorithm)), elapsed,
+               QStringLiteral("%1 MB/s").arg(double(data.size()) / 1e6 / (double(elapsed) / 1e9), 0, 'f', 0));
+    }
+    return 0;
+}
+
+int commandTransfer(const QString &file, const QString &folder, int rounds)
+{
+    const qint64 size = QFileInfo(file).size();
+    QTemporaryDir journalDirectory;
+    const auto journal = eu::journal::Journal::open(journalDirectory.filePath(QStringLiteral("h.db")));
+    if (!journal.ok() || size <= 0) {
+        out() << "ERROR: no se pudo preparar la medición\n";
+        return 1;
+    }
+    const QString target = QDir(folder).filePath(QFileInfo(file).fileName());
+    const auto speed = [size](qint64 nanoseconds) { return double(size) / 1e6 / (double(nanoseconds) / 1e9); };
+    for (int round = 0; round < rounds; ++round) {
+        for (const QString &mode : {QStringLiteral("cp"), QStringLiteral("motor"), QStringLiteral("motor sin reanudar"),
+                                    QStringLiteral("motor+SHA-256")}) {
+            QFile::remove(target);
+            const bool cold = dropCaches();
+            QElapsedTimer timer;
+            timer.start();
+            if (mode == QStringLiteral("cp")) {
+                // cp no sincroniza; el motor sí: se cuenta el sync para comparar lo mismo.
+                if (QProcess::execute(QStringLiteral("cp"), {QStringLiteral("--reflink=never"), file, target}) != 0
+                    || QProcess::execute(QStringLiteral("sync"), {}) != 0) {
+                    out() << "ERROR: cp falló\n";
+                    return 1;
+                }
+            } else {
+                eu::ops::TransferOptions options(eu::ops::CollisionPolicy::Skip);
+                options.copy.resumable = mode != QStringLiteral("motor sin reanudar");
+                options.copy.verify = mode == QStringLiteral("motor+SHA-256");
+                const eu::ops::Outcome outcome =
+                    eu::ops::Engine(journal.value()).copy({file}, folder, options, eu::tasks::CancelToken());
+                if (!outcome.ok()) {
+                    out() << "ERROR: " << outcome.errors.value(0).message << '\n';
+                    return 1;
+                }
+            }
+            const qint64 elapsed = timer.nsecsElapsed();
+            report(QStringLiteral("copiar %1 MB (%2)").arg(size / 1000000).arg(mode), elapsed,
+                   QStringLiteral("%1 MB/s%2").arg(speed(elapsed), 0, 'f', 1).arg(cold ? QString() : QStringLiteral(" (caché caliente)")));
+        }
+    }
+    QFile::remove(target);
+    return 0;
+}
+
 int main(int argc, char *argv[])
 {
     // QGuiApplication: las miniaturas de texto y la duración pintan letras.
@@ -671,6 +746,13 @@ int main(int argc, char *argv[])
     }
     if (command == QStringLiteral("grep") && arguments.size() == 4) {
         return commandGrep(QDir::cleanPath(arguments[2]), arguments[3]);
+    }
+    if (command == QStringLiteral("hashspeed")) {
+        return commandHashSpeed();
+    }
+    if (command == QStringLiteral("transfer") && arguments.size() >= 4) {
+        return commandTransfer(QDir::cleanPath(arguments[2]), QDir::cleanPath(arguments[3]),
+                           arguments.size() > 4 ? arguments[4].toInt() : 2);
     }
     if (command == QStringLiteral("cindex") && arguments.size() == 4) {
         return commandContentIndex(QDir::cleanPath(arguments[2]), arguments[3]);

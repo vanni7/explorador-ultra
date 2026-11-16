@@ -36,6 +36,7 @@ int main(int argc, char *argv[])
     } else if (arguments[5] == QStringLiteral("copiar-reanudable")) {
         eu::ops::TransferOptions options(eu::ops::CollisionPolicy::Skip);
         options.copy.resumable = true;
+        options.copy.checkpointEveryMs = 0;
         engine.copy({arguments[2]}, arguments[3], options, cancel, dieWhenReached);
     } else {
         engine.copy({arguments[2]}, arguments[3], eu::ops::CollisionPolicy::Skip, cancel, dieWhenReached);

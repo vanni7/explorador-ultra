@@ -219,6 +219,7 @@ private slots:
         const QString target = directory.filePath(QStringLiteral("copia.mkv"));
         CopyOptions options;
         options.resumable = true;
+        options.checkpointEveryMs = 0;   // en la prueba, un punto cada 64 MB
 
         // Se cancela a los 100 MB: queda lo confirmado (64 MB) para seguir.
         tasks::CancelSource cancel;

@@ -65,6 +65,7 @@ public:
 private:
     HashAlgorithm m_algorithm;
     std::unique_ptr<QCryptographicHash> m_hash;
+    void *m_openssl = nullptr;   ///< EVP_MD_CTX de OpenSSL, si se compiló con él.
     quint32 m_crc = 0xFFFFFFFFu;
 };
 
@@ -91,6 +92,10 @@ struct CopyOptions
     /// el temporal se conserva y la próxima copia al mismo destino sigue
     /// desde ahí, si el original no cambió (mismo tamaño y fecha).
     bool resumable = false;
+    /// …y se hace como mucho cada este tiempo: sincronizar a menudo frena los
+    /// discos mecánicos (medido: 136 → 109 MB/s con uno cada 64 MB). Si se
+    /// corta, se pierde como mucho lo copiado en este rato. 0: cada 64 MB.
+    int checkpointEveryMs = 8000;
 };
 
 /// Sufijo del archivo temporal que usa copyFile mientras escribe.
@@ -102,7 +107,7 @@ QString checkpointSuffix();
 void removePartialsUnder(const QString &target);
 /// Una copia reanudable solo se plantea a partir de este tamaño.
 constexpr qint64 kResumableFromBytes = 32LL * 1024 * 1024;
-/// Cada cuánto se sincroniza y se anota el punto de control.
+/// Un punto de control cubre al menos esto…
 constexpr qint64 kCheckpointEveryBytes = 64LL * 1024 * 1024;
 
 /// Copia un archivo normal. Escribe en `<target>.eu-parcial`, sincroniza a

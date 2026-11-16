@@ -5,6 +5,7 @@
 #include <QCryptographicHash>
 #include <QDateTime>
 #include <QDir>
+#include <QElapsedTimer>
 #include <QFile>
 #include <QFileInfo>
 #include <QSaveFile>
@@ -28,6 +29,10 @@
 #else
 #include <fcntl.h>
 #include <unistd.h>
+#endif
+
+#ifdef EU_HAVE_LIBCRYPTO
+#include <openssl/evp.h>
 #endif
 
 #ifdef Q_OS_LINUX
@@ -110,20 +115,32 @@ void dropFromCache(QFile &file)
 
 std::atomic<int> s_corruptCopies{0};
 
-const std::array<quint32, 256> &crcTable()
+/// Tablas del CRC32 para procesar 8 bytes por vuelta ("slicing-by-8").
+const std::array<std::array<quint32, 256>, 8> &crcTables()
 {
-    static const std::array<quint32, 256> table = [] {
-        std::array<quint32, 256> values{};
+    static const std::array<std::array<quint32, 256>, 8> tables = [] {
+        std::array<std::array<quint32, 256>, 8> values{};
         for (quint32 i = 0; i < 256; ++i) {
             quint32 crc = i;
             for (int bit = 0; bit < 8; ++bit) {
                 crc = (crc & 1u) ? (crc >> 1) ^ 0xEDB88320u : crc >> 1;
             }
-            values[i] = crc;
+            values[0][i] = crc;
+        }
+        for (size_t k = 1; k < 8; ++k) {
+            for (size_t i = 0; i < 256; ++i) {
+                values[k][i] = (values[k - 1][i] >> 8) ^ values[0][values[k - 1][i] & 0xFFu];
+            }
         }
         return values;
     }();
-    return table;
+    return tables;
+}
+
+quint32 load32(const char *data)
+{
+    const auto *bytes = reinterpret_cast<const quint8 *>(data);
+    return quint32(bytes[0]) | (quint32(bytes[1]) << 8) | (quint32(bytes[2]) << 16) | (quint32(bytes[3]) << 24);
 }
 
 } // namespace
@@ -162,6 +179,20 @@ QString hashAlgorithmLimitation(HashAlgorithm algorithm)
 
 Hasher::Hasher(HashAlgorithm algorithm) : m_algorithm(algorithm)
 {
+#ifdef EU_HAVE_LIBCRYPTO
+    const EVP_MD *digest = algorithm == HashAlgorithm::Sha256 ? EVP_sha256()
+        : algorithm == HashAlgorithm::Sha1                   ? EVP_sha1()
+        : algorithm == HashAlgorithm::Md5                    ? EVP_md5()
+                                                             : nullptr;
+    if (digest != nullptr) {
+        EVP_MD_CTX *context = EVP_MD_CTX_new();
+        if (context != nullptr && EVP_DigestInit_ex(context, digest, nullptr) == 1) {
+            m_openssl = context;
+            return;
+        }
+        EVP_MD_CTX_free(context);   // sin OpenSSL utilizable: el de Qt
+    }
+#endif
     switch (algorithm) {
     case HashAlgorithm::Sha256: m_hash = std::make_unique<QCryptographicHash>(QCryptographicHash::Sha256); break;
     case HashAlgorithm::Sha1:   m_hash = std::make_unique<QCryptographicHash>(QCryptographicHash::Sha1); break;
@@ -170,24 +201,51 @@ Hasher::Hasher(HashAlgorithm algorithm) : m_algorithm(algorithm)
     }
 }
 
-Hasher::~Hasher() = default;
+Hasher::~Hasher()
+{
+#ifdef EU_HAVE_LIBCRYPTO
+    EVP_MD_CTX_free(static_cast<EVP_MD_CTX *>(m_openssl));
+#endif
+}
 
 void Hasher::addData(const char *data, qint64 length)
 {
+#ifdef EU_HAVE_LIBCRYPTO
+    if (m_openssl != nullptr) {
+        EVP_DigestUpdate(static_cast<EVP_MD_CTX *>(m_openssl), data, size_t(length));
+        return;
+    }
+#endif
     if (m_hash) {
         m_hash->addData(QByteArrayView(data, length));
         return;
     }
-    const std::array<quint32, 256> &table = crcTable();
+    const auto &t = crcTables();
     quint32 crc = m_crc;
+    while (length >= 8) {
+        const quint32 one = load32(data) ^ crc;
+        const quint32 two = load32(data + 4);
+        crc = t[7][one & 0xFFu] ^ t[6][(one >> 8) & 0xFFu] ^ t[5][(one >> 16) & 0xFFu] ^ t[4][one >> 24]
+            ^ t[3][two & 0xFFu] ^ t[2][(two >> 8) & 0xFFu] ^ t[1][(two >> 16) & 0xFFu] ^ t[0][two >> 24];
+        data += 8;
+        length -= 8;
+    }
     for (qint64 i = 0; i < length; ++i) {
-        crc = table[(crc ^ static_cast<quint8>(data[i])) & 0xFFu] ^ (crc >> 8);
+        crc = t[0][(crc ^ static_cast<quint8>(data[i])) & 0xFFu] ^ (crc >> 8);
     }
     m_crc = crc;
 }
 
 QByteArray Hasher::result()
 {
+#ifdef EU_HAVE_LIBCRYPTO
+    if (m_openssl != nullptr) {
+        unsigned char digest[EVP_MAX_MD_SIZE];
+        unsigned int size = 0;
+        EVP_DigestFinal_ex(static_cast<EVP_MD_CTX *>(m_openssl), digest, &size);
+        return QByteArray(reinterpret_cast<const char *>(digest), qsizetype(size));
+    }
+#endif
     if (m_hash) {
         return m_hash->result();
     }
@@ -467,6 +525,8 @@ core::Status copyFileOnce(const QString &source, const QString &target, const ta
         return true;
     };
 
+    QElapsedTimer sinceCheckpoint;
+    sinceCheckpoint.start();
     std::optional<Hasher> sourceHash;
     if (options.verify) {
         sourceHash.emplace(options.algorithm);
@@ -521,8 +581,12 @@ core::Status copyFileOnce(const QString &source, const QString &target, const ta
         if (output.write(buffer.data(), read) != read) {
             return fail(fromQFile(output, partialPath));
         }
-        if (resumable && output.pos() - confirmed >= kCheckpointEveryBytes && !saveCheckpoint()) {
-            return fail(lastSystemError(checkpointPath));
+        if (resumable && output.pos() - confirmed >= kCheckpointEveryBytes
+            && sinceCheckpoint.elapsed() >= options.checkpointEveryMs) {
+            if (!saveCheckpoint()) {
+                return fail(lastSystemError(checkpointPath));
+            }
+            sinceCheckpoint.restart();
         }
         if (progress) {
             progress(read);

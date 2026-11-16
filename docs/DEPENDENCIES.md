@@ -27,3 +27,6 @@ Notas de licencia:
 Herramientas de desarrollo (no se distribuyen): CMake, Ninja, GCC, Clang, clang-tidy, clang-format, ccache, Valgrind, hyperfine, aqtinstall, rsvg-convert, icoutils, icnsutils. Detalle en `ENVIRONMENT.md`.
 
 Las bibliotecas "opcionales" se detectan en `cmake/EuOptionalDeps.cmake`: si falta alguna, la aplicación compila igual y esa función queda desactivada (se ve el icono del tipo de archivo). LibreOffice tampoco se enlaza: se usa como programa externo si está instalado.
+
+## OpenSSL `libcrypto` (opcional, Fase 4)
+SHA-256, SHA-1 y MD5 rápidos (instrucciones del procesador) para comprobar las copias. Si falta, se usa `QCryptographicHash`, unas 13 veces más lento en SHA-256. Licencia Apache 2.0 (OpenSSL 3), compatible con GPL-3. Ubuntu: `libssl-dev`.

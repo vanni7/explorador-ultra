@@ -161,6 +161,19 @@ Unos 0,4 s por libro: es sacar el texto entero de cada PDF. Repetir la búsqueda
 
 La base ocupa unas 3 veces el texto guardado (los trigramas). Por eso la ventana recomienda carpetas de documentos y no unidades enteras.
 
+### Copiar archivos frente a `cp` (Fase 4, paso 3e, 16-nov)
+`eu-bench transfer <archivo> <carpeta> [veces]`: un archivo de 2 GB, caché vaciada antes de cada copia; `cp --reflink=never` + `sync` (el motor sincroniza siempre, así se compara lo mismo). «motor» es como copia la cola: reanudable, con punto de control.
+
+| De → a | `cp` + `sync` | motor | % de `cp` | motor + SHA-256 |
+|---|---|---|---|---|
+| SSD sistema → SSD RESPALDO | 249–253 MB/s | 250–255 MB/s | **100 %** | 171 MB/s |
+| SSD sistema → HDD YEILY | 137,6 MB/s | 133,6 MB/s | **97 %** | 75 MB/s |
+| HDD 8TB → HDD YEILY | 75,9 MB/s | 73,9 MB/s | **97 %** | 53 MB/s |
+
+Lo que cambió para llegar ahí:
+- El punto de control (`fsync` + anotación) cada 64 MB dejaba el disco mecánico en el 81 % (109 MB/s): sincronizar a menudo corta la escritura diferida. Ahora se hace como mucho cada 8 s (sin puntos de control: 96 %).
+- El SHA-256 de Qt va a 162 MB/s y frenaba la comprobación (65 MB/s). Con OpenSSL (opcional, `libcrypto`), 2088 MB/s; CRC32 con 8 bytes por vuelta, de 513 a 2599 MB/s (`eu-bench hashspeed`). Comprobar cuesta ahora sobre todo releer la copia del disco. Sin OpenSSL (Windows y macOS de la CI) se usa el de Qt: más lento.
+
 ### No medido todavía (pendiente)
 - Tiempo de apertura real de una carpeta en Archivos de GNOME (no hay forma fiable de automatizarlo; `gio list` es una aproximación de su motor, no de su interfaz).
 - Caché fría, HDD, USB y unidades de red.

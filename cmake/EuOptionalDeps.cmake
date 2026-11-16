@@ -18,6 +18,9 @@ if(PkgConfig_FOUND)
     # EXIF, XMP e IPTC. 0.28 o posterior: la 0.27 (Ubuntu 22.04 y 24.04) tiene
     # otra API (std::auto_ptr); allí no hay EXIF en el panel.
     pkg_check_modules(EU_EXIV2 QUIET IMPORTED_TARGET GLOBAL exiv2>=0.28)
+    # SHA-256, SHA-1 y MD5 rápidos para comprobar copias (Fase 4): OpenSSL usa
+    # las instrucciones del procesador (unos 2 GB/s frente a 160 MB/s del de Qt).
+    pkg_check_modules(EU_LIBCRYPTO QUIET IMPORTED_TARGET GLOBAL libcrypto>=1.1)
 endif()
 message(STATUS "Opcionales: FFmpeg=${EU_FFMPEG_FOUND} libarchive=${EU_LIBARCHIVE_FOUND} "
-               "LibRaw=${EU_LIBRAW_FOUND} Exiv2=${EU_EXIV2_FOUND}")
+               "LibRaw=${EU_LIBRAW_FOUND} Exiv2=${EU_EXIV2_FOUND} libcrypto=${EU_LIBCRYPTO_FOUND}")
