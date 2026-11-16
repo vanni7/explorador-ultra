@@ -98,6 +98,13 @@ QString expand(const QString &text, const Item &item, int index, const Metadata 
             const QDateTime taken = QDateTime::fromString(metadata.value(key), QStringLiteral("yyyy-MM-dd HH:mm:ss"));
             value = taken.isValid() ? taken.toString(argument.isEmpty() ? QStringLiteral("yyyy-MM-dd") : argument)
                                     : formatDate(item.modifiedMs, argument);
+        } else if (key == QStringLiteral("tamaño") || key == QLatin1String("tamano")) {
+            // Por tramos, para agrupar.
+            const qint64 megabyte = 1000LL * 1000;
+            value = item.size < megabyte                ? tr("Pequeños (menos de 1 MB)")
+                : item.size < 100 * megabyte            ? tr("Medianos (1 a 100 MB)")
+                : item.size < 1000 * megabyte           ? tr("Grandes (100 MB a 1 GB)")
+                                                        : tr("Enormes (más de 1 GB)");
         } else if (key == QLatin1String("pista")) {
             // "3/12" -> "03" con {pista:2}.
             const QString number = metadata.value(key).section(QLatin1Char('/'), 0, 0).trimmed();
@@ -226,20 +233,30 @@ QString applyRule(const Rule &rule, const QString &current, int index, const Ite
 bool usesMetadata(const Options &options)
 {
     for (const Rule &rule : options.rules) {
-        if (rule.kind != Rule::Kind::Template && rule.kind != Rule::Kind::Insert) {
-            continue;
-        }
-        QRegularExpressionMatchIterator it = tokenPattern().globalMatch(rule.with);
-        while (it.hasNext()) {
-            if (metadataKeys().contains(it.next().captured(1).trimmed().toLower())) {
-                return true;
-            }
+        if ((rule.kind == Rule::Kind::Template || rule.kind == Rule::Kind::Insert) && templateUsesMetadata(rule.with)) {
+            return true;
         }
     }
     return false;
 }
 
 } // namespace
+
+QString expandTemplate(const QString &text, const Item &item, int index, const Metadata &metadata)
+{
+    return expand(text, item, index, metadata);
+}
+
+bool templateUsesMetadata(const QString &text)
+{
+    QRegularExpressionMatchIterator it = tokenPattern().globalMatch(text);
+    while (it.hasNext()) {
+        if (metadataKeys().contains(it.next().captured(1).trimmed().toLower())) {
+            return true;
+        }
+    }
+    return false;
+}
 
 QList<QPair<QString, QString>> templateTokens()
 {
@@ -260,6 +277,7 @@ QList<QPair<QString, QString>> templateTokens()
         {QStringLiteral("{titulo}"), tr("Título")},
         {QStringLiteral("{año}"), tr("Año")},
         {QStringLiteral("{genero}"), tr("Género")},
+        {QStringLiteral("{tamaño}"), tr("Tramo de tamaño: pequeños, medianos, grandes, enormes")},
     };
 }
 

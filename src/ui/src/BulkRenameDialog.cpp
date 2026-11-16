@@ -97,7 +97,7 @@ rename::Metadata renameMetadataFor(const QString &path, const tasks::CancelToken
             if (!key.isEmpty() && !data.contains(key)) {
                 data.insert(key, field.value);
             }
-            if ((field.label == QLatin1String("Dimensiones") || field.label == QLatin1String("Resolución"))
+            if ((field.label == QLatin1String("Dimensiones") || field.label == QStringLiteral("Resolución"))
                 && !data.contains(QStringLiteral("ancho"))) {
                 const QRegularExpressionMatch match = size.match(field.value);
                 if (match.hasMatch()) {

@@ -313,6 +313,9 @@ public:
         return done;
     }
 
+    /// Mueve a un destino libre (usado por applyMoves).
+    bool moveTo(const QString &source, const QString &target) { return moveOne(source, target); }
+
 private:
     enum class Resolution { Write, Skip, Merge, Replace, Failed };
     struct Resolved
@@ -790,6 +793,50 @@ Outcome Engine::retry(const QList<QPair<QString, QString>> &items, bool moving, 
         const QFileInfo target(item.second);
         if (!run.transfer(item.first, target.absolutePath(), target.fileName(), moving, true)) {
             run.outcome.unfinished.append(item);
+        }
+    }
+    run.finish();
+    return run.outcome;
+}
+
+Outcome Engine::applyMoves(const QList<QPair<QString, QString>> &moves, const QStringList &foldersToCreate,
+                           const QString &description, const tasks::CancelToken &cancel,
+                           const ProgressCallback &progress)
+{
+    Run run(*m_journal, cancel, progress);
+    for (const auto &move : moves) {
+        measureTree(move.first, cancel, run.progress);
+    }
+    if (!run.begin(journal::OperationKind::Move, description)) {
+        return run.outcome;
+    }
+    QList<QPair<QString, QString>> plan;
+    for (const auto &move : moves) {
+        plan.append(move);
+    }
+    m_journal->setPlan(run.outcome.operationId, plan);
+    // Primero las carpetas (de fuera hacia dentro): deshacer las quita si quedan vacías.
+    for (const QString &folder : foldersToCreate) {
+        if (run.cancelled()) {
+            break;
+        }
+        if (!stampOf(folder).exists) {
+            run.step(journal::StepKind::MakeDirectory, {}, folder, {}, [&] { return makeDirectory(folder); });
+        }
+    }
+    for (const auto &[source, wanted] : moves) {
+        if (run.cancelled()) {
+            run.outcome.unfinished.append({source, wanted});
+            continue;
+        }
+        // Si entre la simulación y ahora apareció algo con ese nombre, otro nombre.
+        const QFileInfo target(wanted);
+        const QString free = joinPath(target.absolutePath(), uniqueName(target.absolutePath(), target.fileName()));
+        if (run.moveTo(source, free)) {
+            run.outcome.resultPaths.append(free);
+            ++run.progress.itemsDone;
+        } else {
+            run.outcome.unfinished.append({source, free});
         }
     }
     run.finish();

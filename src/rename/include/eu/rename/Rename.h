@@ -64,6 +64,7 @@ struct Item
     bool isDirectory = false;
     qint64 modifiedMs = 0;
     qint64 createdMs = 0;
+    qint64 size = 0;
 };
 
 /// Datos de un archivo para la plantilla: "fecha_foto", "camara", "artista",
@@ -74,6 +75,12 @@ using Metadata = QHash<QString, QString>;
 /// Los nombres de datos que entiende la plantilla, con su explicación, para
 /// mostrarlos en la ventana.
 QList<QPair<QString, QString>> templateTokens();
+
+/// Sustituye los {datos} de un texto (los de templateTokens()). Un dato
+/// desconocido se deja tal cual; uno que falta queda vacío.
+QString expandTemplate(const QString &text, const Item &item, int index, const Metadata &metadata);
+/// true si el texto usa datos que salen de los metadatos (y hay que leerlos).
+bool templateUsesMetadata(const QString &text);
 
 /// El nombre nuevo de `item` (posición `index` en la lista, para el contador).
 QString proposeName(const Item &item, int index, const Options &options, const Metadata &metadata = {});

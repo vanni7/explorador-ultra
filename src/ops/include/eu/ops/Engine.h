@@ -134,6 +134,14 @@ public:
     Outcome retry(const QList<QPair<QString, QString>> &items, bool moving, const TransferOptions &options,
                   const tasks::CancelToken &cancel, const ProgressCallback &progress = {});
 
+    /// Mueve cada archivo a su destino (ruta completa) creando antes las
+    /// carpetas que se piden, como una sola operación del historial: deshacer
+    /// devuelve todo y quita las carpetas creadas que queden vacías (el
+    /// organizador, SPEC §12). Nunca sobrescribe.
+    Outcome applyMoves(const QList<QPair<QString, QString>> &moves, const QStringList &foldersToCreate,
+                       const QString &description, const tasks::CancelToken &cancel,
+                       const ProgressCallback &progress = {});
+
     /// Reanuda una copia o un movimiento que quedó a medias por un cierre
     /// inesperado (SPEC §9): con el plan guardado en el historial, hace lo que
     /// falta (lo ya llegado no se repite; el archivo cortado sigue desde su
