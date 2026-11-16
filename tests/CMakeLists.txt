@@ -11,6 +11,11 @@ function(eu_add_test name)
     add_test(NAME ${name} COMMAND ${name})
     # Las pruebas no necesitan pantalla: así corren igual en la CI.
     set_tests_properties(${name} PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+    if(EU_SANITIZER MATCHES "thread")
+        # Falsos avisos dentro de Qt, que no está instrumentado (ver tsan.supp).
+        set_property(TEST ${name} APPEND PROPERTY ENVIRONMENT
+                     "TSAN_OPTIONS=suppressions=${CMAKE_CURRENT_SOURCE_DIR}/tsan.supp")
+    endif()
 endfunction()
 
 eu_add_test(test_core_natural_compare core/test_natural_compare.cpp)
@@ -27,15 +32,17 @@ eu_add_test(test_search_searcher search/test_searcher.cpp)
 eu_add_test(test_index index/test_index.cpp)
 eu_add_test(test_index_tree_watcher index/test_tree_watcher.cpp)
 eu_add_test(test_index_service index/test_index_service.cpp)
-eu_add_test(test_thumbs thumbs/test_thumbs.cpp)
-eu_add_test(test_meta meta/test_meta.cpp)
 eu_add_test(test_ui_entry_sort ui/test_entry_sort.cpp)
 eu_add_test(test_ui_file_actions ui/test_file_actions.cpp)
 
 # Las pruebas que crean una QApplication no se ejecutan con TSan: Qt y libdbus
 # no están compilados con ese detector y dan avisos falsos dentro de sus
 # propias bibliotecas. TSan sigue cubriendo core, tasks, fs, journal, ops y trash.
+# Miniaturas y metadatos tampoco: Qt reparte el escalado de imágenes en su
+# propio grupo de hilos, sin instrumentar, y TSan da carreras dentro de Qt.
 if(NOT EU_SANITIZER MATCHES "thread")
+    eu_add_test(test_thumbs thumbs/test_thumbs.cpp)
+    eu_add_test(test_meta meta/test_meta.cpp)
     eu_add_test(test_ui_directory_model ui/test_directory_model.cpp)
     eu_add_test(test_ui_main_window ui/test_main_window.cpp)
 endif()
