@@ -2,6 +2,7 @@
 #pragma once
 
 #include "eu/fs/Volumes.h"
+#include "eu/fs/Entry.h"
 #include "eu/index/Index.h"
 #include "eu/search/Searcher.h"
 #include "eu/ui/Locations.h"
@@ -109,6 +110,18 @@ public:
     /// La vista de archivos que se usa ahora (detallada o miniaturas).
     QAbstractItemView *fileView() const;
     void setThumbnailService(thumbs::ThumbnailService *service);
+
+    /// El elemento que tiene el cursor (en la carpeta o en unos resultados),
+    /// para el panel de previsualización. `valid` es false si no hay ninguno.
+    struct CurrentItem
+    {
+        bool valid = false;
+        QString path;
+        fs::Entry entry;
+        QString typeText;
+        int selectedCount = 0;
+    };
+    CurrentItem currentItem() const;
     void setThumbnailSize(int size);
 
     bool canGoBack() const { return !m_backHistory.isEmpty(); }
@@ -183,6 +196,8 @@ signals:
     void contextMenuRequested(const QPoint &globalPosition);
     /// Se soltaron archivos (de esta u otra aplicación) sobre `destination`.
     void filesDropped(const QStringList &paths, const QString &destination, bool move);
+    /// Cambió el elemento con el cursor o lo seleccionado.
+    void currentItemChanged();
 
 private:
     void changePath(const QString &path, const QString &nameToSelect);

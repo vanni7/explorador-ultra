@@ -9,6 +9,7 @@ add_library(eu_ui STATIC
     src/IndexDialog.cpp
     src/MainWindow.cpp
     src/PathBar.cpp
+    src/PreviewPanel.cpp
     src/SearchResultsModel.cpp
     src/Sidebar.cpp
     src/TrashDialog.cpp
@@ -23,6 +24,7 @@ add_library(eu_ui STATIC
     include/eu/ui/Locations.h
     include/eu/ui/MainWindow.h
     include/eu/ui/PathBar.h
+    include/eu/ui/PreviewPanel.h
     include/eu/ui/SearchResultsModel.h
     include/eu/ui/Sidebar.h
     include/eu/ui/TrashDialog.h
@@ -32,5 +34,5 @@ add_library(eu_ui STATIC
 add_library(eu::ui ALIAS eu_ui)
 
 target_include_directories(eu_ui PUBLIC include)
-target_link_libraries(eu_ui PUBLIC eu::core eu::tasks eu::fs eu::search eu::index eu::thumbs eu::journal eu::ops_engine Qt6::Widgets)
+target_link_libraries(eu_ui PUBLIC eu::core eu::tasks eu::fs eu::search eu::index eu::thumbs eu::meta eu::journal eu::ops_engine Qt6::Widgets)
 eu_target_defaults(eu_ui)

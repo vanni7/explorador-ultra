@@ -519,6 +519,13 @@ BrowserPane::BrowserPane(tasks::Scheduler &scheduler, fs::DirectoryWatcher &watc
     connect(escape, &QAction::triggered, this, &BrowserPane::hideFilter);
 
     connect(m_view, &QTreeView::activated, this, &BrowserPane::onActivated);
+    connect(m_view->selectionModel(), &QItemSelectionModel::currentChanged, this, &BrowserPane::currentItemChanged);
+    connect(m_view->selectionModel(), &QItemSelectionModel::selectionChanged, this, &BrowserPane::currentItemChanged);
+    connect(m_resultsView->selectionModel(), &QItemSelectionModel::currentChanged, this,
+            &BrowserPane::currentItemChanged);
+    connect(m_resultsView->selectionModel(), &QItemSelectionModel::selectionChanged, this,
+            &BrowserPane::currentItemChanged);
+    connect(this, &BrowserPane::pathChanged, this, &BrowserPane::currentItemChanged);
     connect(m_view->selectionModel(), &QItemSelectionModel::selectionChanged, this, &BrowserPane::statusChanged);
     connect(m_model, &DirectoryModel::stateChanged, this, &BrowserPane::onModelStateChanged);
     connect(m_model, &DirectoryModel::contentReplaced, this, &BrowserPane::restoreSelection);
@@ -533,6 +540,38 @@ BrowserPane::BrowserPane(tasks::Scheduler &scheduler, fs::DirectoryWatcher &watc
             refresh();
         }
     });
+}
+
+BrowserPane::CurrentItem BrowserPane::currentItem() const
+{
+    CurrentItem item;
+    if (showsVolumes()) {
+        return item;
+    }
+    if (showsSearch()) {
+        const QModelIndex current = m_resultsView->selectionModel()->currentIndex();
+        item.selectedCount = int(m_resultsView->selectionModel()->selectedRows().size());
+        if (!current.isValid() || current.row() >= m_resultsModel->count() || item.selectedCount == 0) {
+            return item;
+        }
+        const search::Hit &hit = m_resultsModel->hitAt(current.row());
+        item.valid = true;
+        item.path = hit.path();
+        item.entry = hit.entry;
+        item.typeText = m_resultsModel->index(current.row(), SearchResultsModel::TypeColumn).data().toString();
+        return item;
+    }
+    const QModelIndex current = m_view->selectionModel()->currentIndex();
+    item.selectedCount = int(m_view->selectionModel()->selectedRows().size());
+    if (!current.isValid() || current.row() >= m_model->rowCount() || item.selectedCount == 0
+        || m_model->state() != DirectoryModel::State::Ready) {
+        return item;
+    }
+    item.valid = true;
+    item.path = m_model->filePath(current.row());
+    item.entry = m_model->entryAt(current.row());
+    item.typeText = m_model->index(current.row(), int(Column::Type)).data().toString();
+    return item;
 }
 
 QAbstractItemView *BrowserPane::fileView() const

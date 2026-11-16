@@ -6,6 +6,7 @@
 #include "eu/ui/PathBar.h"
 #include "eu/ui/SearchResultsModel.h"
 #include "eu/ui/IndexDialog.h"
+#include "eu/ui/PreviewPanel.h"
 #include "eu/ui/Sidebar.h"
 #include "eu/ui/ThumbnailView.h"
 #include "eu/ui/TrashDialog.h"
@@ -1304,6 +1305,75 @@ private slots:
         window.setViewMode(BrowserPane::ViewMode::Thumbnails);
         BrowserPane *second = window.openTab(directory.path());
         QCOMPARE(second->viewMode(), BrowserPane::ViewMode::Thumbnails);
+    }
+
+    void previewPanelShowsDataAndContent()
+    {
+        QTemporaryDir data;
+        QTemporaryDir directory;
+        QImage image(400, 300, QImage::Format_RGB32);
+        image.fill(Qt::darkBlue);
+        QVERIFY(image.save(directory.filePath(QStringLiteral("mar.png"))));
+        {
+            QFile text(directory.filePath(QStringLiteral("notas.txt")));
+            QVERIFY(text.open(QIODevice::WriteOnly));
+            text.write("Primera línea\nSegunda línea\n");
+        }
+        {
+            QFile markdown(directory.filePath(QStringLiteral("LEEME.md")));
+            QVERIFY(markdown.open(QIODevice::WriteOnly));
+            markdown.write("# Título grande\n\nUn párrafo con **negrita**.\n");
+        }
+        writeFile(directory.filePath(QStringLiteral("datos.bin")), 100);
+
+        MainWindow window(m_scheduler, openJournal(data));
+        BrowserPane *pane = window.openTab(directory.path());
+        QVERIFY(waitReady(pane));
+        window.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&window));
+        PreviewPanel *panel = window.previewPanel();
+        QVERIFY(panel->isVisible());
+        QCOMPARE(panel->shown(), PreviewPanel::Shown::Nothing);   // nada seleccionado aún
+
+        // Una foto: sus datos arriba y la imagen abajo.
+        selectNames(pane, {QStringLiteral("mar.png")});
+        QCOMPARE(panel->title(), QStringLiteral("mar.png"));
+        QTRY_COMPARE_WITH_TIMEOUT(panel->shown(), PreviewPanel::Shown::Picture, 10000);
+        QVERIFY(!panel->isLoading());
+        QCOMPARE(panel->fieldValue(QStringLiteral("Dimensiones")), QStringLiteral("400 × 300 píxeles"));
+        QVERIFY(panel->fieldValue(QStringLiteral("Tamaño")).contains(QStringLiteral("bytes")));
+        QCOMPARE(panel->picture().size(), QSize(400, 300));   // no se agranda
+
+        // Un texto se ve como texto; un Markdown, ya formateado.
+        selectNames(pane, {QStringLiteral("notas.txt")});
+        QTRY_COMPARE_WITH_TIMEOUT(panel->shown(), PreviewPanel::Shown::Text, 10000);
+        QVERIFY(panel->text().startsWith(QStringLiteral("Primera línea")));
+        selectNames(pane, {QStringLiteral("LEEME.md")});
+        QTRY_COMPARE_WITH_TIMEOUT(panel->shown(), PreviewPanel::Shown::Markdown, 10000);
+        QVERIFY(panel->text().contains(QStringLiteral("Título grande")));
+        QVERIFY(!panel->text().contains(QLatin1Char('#')));
+
+        // Lo que no tiene vista previa lo dice, y enseña igual sus datos.
+        selectNames(pane, {QStringLiteral("datos.bin")});
+        QTRY_COMPARE_WITH_TIMEOUT(panel->shown(), PreviewPanel::Shown::Message, 10000);
+        QTRY_VERIFY(!panel->isLoading());
+        QVERIFY(panel->fieldValue(QStringLiteral("Tamaño")).contains(QStringLiteral("100")));
+
+        // Al recorrer deprisa, solo cuenta el último.
+        selectNames(pane, {QStringLiteral("mar.png")});
+        selectNames(pane, {QStringLiteral("notas.txt")});
+        QTRY_COMPARE_WITH_TIMEOUT(panel->shown(), PreviewPanel::Shown::Text, 10000);
+        QCOMPARE(panel->title(), QStringLiteral("notas.txt"));
+
+        // Varios seleccionados: lo dice y muestra el actual.
+        selectNames(pane, {QStringLiteral("mar.png"), QStringLiteral("notas.txt")});
+        QTRY_VERIFY(panel->fieldValue(QStringLiteral("Selección")).startsWith(QStringLiteral("2 elementos")));
+
+        // Alt+P lo oculta y vuelve a mostrar.
+        window.setPreviewVisible(false);
+        QVERIFY(!panel->isVisible());
+        window.setPreviewVisible(true);
+        QVERIFY(panel->isVisible());
     }
 
     void searchCanBePausedAndStopped()

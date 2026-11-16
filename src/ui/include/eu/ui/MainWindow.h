@@ -32,6 +32,7 @@ namespace eu::ui {
 class BrowserPane;
 class PathBar;
 class Sidebar;
+class PreviewPanel;
 class TrashDialog;
 
 /// Ventana principal: barra superior, panel de lugares y pestañas de exploración.
@@ -65,6 +66,10 @@ public:
 
     /// Miniaturas: la caché y quien las genera, comunes a todas las pestañas.
     thumbs::ThumbnailService *thumbnailService() const { return m_thumbnailService; }
+    /// Panel derecho de previsualización y metadatos.
+    PreviewPanel *previewPanel() const { return m_previewPanel; }
+    void setPreviewVisible(bool visible);
+
     /// Vista de la pestaña activa (y de las que se abran después).
     void setViewMode(BrowserPane::ViewMode mode);
     void setThumbnailSize(int size);
@@ -215,6 +220,9 @@ private:
     QHash<int, QAction *> m_thumbnailSizeActions;   ///< Por tamaño en píxeles.
     int m_thumbnailSize = 160;
     void syncViewActions();
+    PreviewPanel *m_previewPanel = nullptr;
+    QAction *m_previewAction = nullptr;
+    void updatePreview();
     QLabel *m_indexLabel = nullptr;   ///< "Indexando…" en la barra de estado.
     QAction *m_indexAction = nullptr;
     void runIndexWizard();
