@@ -9,7 +9,8 @@ Fase 4 — Herramientas, rama `fase-4/herramientas` (sale de `main` con la Fase 
 
 | # | Paso | Estado |
 |---|---|---|
-| 1 | Módulo `archive` (libarchive): navegar dentro de ZIP, 7z, TAR, TAR.GZ como ubicación virtual; RAR e ISO de solo lectura; extraer y crear ZIP/7z/TAR/TAR.GZ; pruebas de zip-slip y de bombas de descompresión | Siguiente |
+| 1a | Motor de comprimidos (`archive`, libarchive): listar (con las carpetas implícitas), extraer (todo o una parte) y crear ZIP, 7z, TAR y TAR.GZ; leer RAR, ISO y .gz sueltos | **Hecho** (16-nov): defensas propias además de las de libarchive — rutas con `..`, absolutas o con letra de unidad, enlaces simbólicos o duros que salen del destino, escribir a través de un enlace, nunca sobrescribir, topes de tamaño total, proporción y número de entradas (bombas), archivo a medias borrado al cortar; crear en un temporal que se renombra sin pisar. 12 pruebas en `test_archive` (ASan sin avisos), con comprimidos maliciosos fabricados en la prueba. **Falta**: CI; RAR real (libarchive no los crea; no hay muestra) |
+| 1b | Comprimidos en la interfaz: navegar dentro como carpeta virtual, extraer (aquí, en carpeta nueva, la selección), comprimir la selección, previsualizar dentro | Siguiente |
 | 2 | Búsqueda en contenido (§6.5): extracción de texto de TXT, código, Markdown, PDF, DOCX, ODT, XLSX, ODS, PPTX, ODP, RTF (en el auxiliar), índice FTS5 opcional, fragmento con la coincidencia resaltada, límites por archivo | Pendiente |
 | 3 | Cola de transferencias completa: pausar, reanudar, reintentar, priorizar; velocidad y tiempo restante; verificación SHA-256 (SHA-1, MD5, CRC32); todas las políticas de colisión; reanudación con punto de control; copia ≥ 90 % de la velocidad nativa (medido) | Pendiente |
 | 4 | Renombrado masivo (`rename`): reglas en cadena, metadatos (EXIF, etiquetas de audio), vista previa con conflictos y ciclos, deshacer en bloque | Pendiente |
