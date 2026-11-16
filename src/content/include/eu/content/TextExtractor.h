@@ -40,6 +40,8 @@ core::Result<QString> extractText(const QString &path, const tasks::CancelToken 
 /// Un fragmento del texto alrededor de la primera vez que aparece `needle`,
 /// para enseñarlo en los resultados. `start`/`length` dicen dónde está la
 /// coincidencia dentro del fragmento (para resaltarla). Vacío si no aparece.
+/// Lleva poco texto antes y más después, para que la coincidencia se vea
+/// aunque la columna sea estrecha.
 struct Snippet
 {
     QString text;
@@ -47,6 +49,6 @@ struct Snippet
     int length = 0;
 };
 Snippet snippetAround(const QString &text, const QString &needle, Qt::CaseSensitivity sensitivity,
-                      int context = 60);
+                      int before = 30, int after = 90);
 
 } // namespace eu::content

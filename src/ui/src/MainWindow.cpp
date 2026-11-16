@@ -1395,10 +1395,11 @@ void MainWindow::buildSearchOptions()
     m_searchInNameAction->setCheckable(true);
     m_searchInNameAction->setChecked(true);
     targets->addAction(m_searchInNameAction);
-    m_searchInContentAction = menu->addAction(tr("El contenido (archivos de texto)"));
+    m_searchInContentAction = menu->addAction(tr("El contenido (texto, PDF y documentos)"));
     m_searchInContentAction->setCheckable(true);
-    m_searchInContentAction->setToolTip(tr("Busca las palabras dentro de los archivos de texto de hasta 20 MB. "
-                                           "Todavía no lee PDF ni documentos de oficina."));
+    m_searchInContentAction->setToolTip(tr("Busca las palabras dentro de los archivos: texto y código, PDF, Word, "
+                                           "Excel, PowerPoint, OpenDocument y RTF. Lee cada archivo: en carpetas "
+                                           "grandes tarda."));
     targets->addAction(m_searchInContentAction);
     connect(targets, &QActionGroup::triggered, this, &MainWindow::updateSearchHints);
 

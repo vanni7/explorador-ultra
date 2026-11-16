@@ -166,6 +166,15 @@ private slots:
         QVERIFY(snippet.text.startsWith(QStringLiteral("…")));
         QVERIFY(!snippet.text.contains(QLatin1Char('\n')));
         QVERIFY(snippetAround(text, QStringLiteral("presupuesto anual"), Qt::CaseSensitive).text.isEmpty());
+        // Los espacios seguidos y los saltos se juntan en uno; la posición
+        // de la coincidencia sigue siendo la buena.
+        const Snippet spaced = snippetAround(QStringLiteral("una   experiencia\n\n extática,  de felicidad  inmensa"),
+                                             QStringLiteral("felicidad"), Qt::CaseInsensitive, 60);
+        QCOMPARE(spaced.text, QStringLiteral("una experiencia extática, de felicidad inmensa"));
+        QCOMPARE(spaced.text.mid(spaced.start, spaced.length), QStringLiteral("felicidad"));
+        const Snippet cut = snippetAround(QStringLiteral("una   experiencia\n\n extática,  de felicidad"),
+                                          QStringLiteral("felicidad"), Qt::CaseInsensitive, 30);
+        QCOMPARE(cut.text, QStringLiteral("…experiencia extática, de felicidad"));
         QVERIFY(snippetAround(text, QStringLiteral("no está"), Qt::CaseInsensitive).text.isEmpty());
     }
 };

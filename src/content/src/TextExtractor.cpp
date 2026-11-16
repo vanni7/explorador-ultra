@@ -418,7 +418,8 @@ core::Result<QString> extractText(const QString &path, const tasks::CancelToken 
     return text;
 }
 
-Snippet snippetAround(const QString &text, const QString &needle, Qt::CaseSensitivity sensitivity, int context)
+Snippet snippetAround(const QString &text, const QString &needle, Qt::CaseSensitivity sensitivity, int before,
+                      int after)
 {
     Snippet snippet;
     if (needle.isEmpty()) {
@@ -428,26 +429,47 @@ Snippet snippetAround(const QString &text, const QString &needle, Qt::CaseSensit
     if (at < 0) {
         return snippet;
     }
-    qsizetype from = std::max<qsizetype>(0, at - context);
-    qsizetype to = std::min<qsizetype>(text.size(), at + needle.size() + context);
-    // No cortar palabras por la mitad si se puede evitar.
-    while (from > 0 && from > at - context - 15 && !text[from - 1].isSpace()) {
-        --from;
+    qsizetype from = std::max<qsizetype>(0, at - before);
+    qsizetype to = std::min<qsizetype>(text.size(), at + needle.size() + after);
+    // No cortar palabras por la mitad si se puede evitar (hacia delante, para
+    // no alejar la coincidencia del principio).
+    while (from < at && from > 0 && !text[from - 1].isSpace()) {
+        ++from;
     }
-    while (to < text.size() && to < at + needle.size() + context + 15 && !text[to].isSpace()) {
+    while (from < at && text[from].isSpace()) {
+        ++from;
+    }
+    while (to < text.size() && to < at + needle.size() + after + 15 && !text[to].isSpace()) {
         ++to;
     }
-    QString piece = text.mid(from, to - from);
-    // Los saltos de línea y tabuladores, como espacios: el fragmento va en una línea.
-    for (QChar &character : piece) {
-        if (character == QLatin1Char('\n') || character == QLatin1Char('\r') || character == QLatin1Char('\t')) {
-            character = QLatin1Char(' ');
+    // En una sola línea: saltos y tabuladores como espacios, y los espacios
+    // seguidos (frecuentes en el texto de los PDF) como uno solo.
+    const QString prefix = from > 0 ? QStringLiteral("…") : QString();
+    QString piece = prefix;
+    int matchStart = -1;
+    int matchEnd = -1;
+    for (qsizetype i = from; i < to; ++i) {
+        if (i == at) {
+            matchStart = int(piece.size());
+        }
+        if (i == at + needle.size()) {
+            matchEnd = int(piece.size());
+        }
+        const QChar character = text[i];
+        if (character.isSpace()) {
+            if (!piece.endsWith(QLatin1Char(' ')) || i == at) {
+                piece += QLatin1Char(' ');
+            }
+        } else {
+            piece += character;
         }
     }
-    const QString prefix = from > 0 ? QStringLiteral("…") : QString();
-    snippet.text = prefix + piece + (to < text.size() ? QStringLiteral("…") : QString());
-    snippet.start = int(prefix.size() + (at - from));
-    snippet.length = int(needle.size());
+    if (matchEnd < 0) {
+        matchEnd = int(piece.size());
+    }
+    snippet.text = piece + (to < text.size() ? QStringLiteral("…") : QString());
+    snippet.start = matchStart;
+    snippet.length = matchEnd - matchStart;
     return snippet;
 }
 

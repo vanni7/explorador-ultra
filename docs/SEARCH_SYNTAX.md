@@ -23,7 +23,7 @@ El botón **Opciones**, a la derecha del buscador, decide cómo se busca. El tex
 | El nombre / El contenido (archivos de texto) | Con «El contenido», las palabras sueltas se buscan **dentro** de los archivos; los filtros (`ext:`, `name:`, `size:`…) siguen mirando el nombre y los datos del archivo |
 | Distinguir mayúsculas y minúsculas | Desactivado de fábrica. Es la única opción que se recuerda al cerrar |
 
-**Límites de la búsqueda en contenido (por ahora):** solo lee archivos de texto (TXT, código, Markdown, CSV, registros…) en UTF-8, UTF-16 o Latin-1 y de hasta 20 MB. **No lee PDF, Word, Excel ni otros documentos de oficina**: eso llega con la Fase 4 (SPEC §6.5). No hay índice: abre cada archivo, así que en una unidad entera puede tardar; conviene acotar con `ext:` (`presupuesto ext:txt,md`).
+**Búsqueda en contenido:** lee el texto de los archivos de texto y código (UTF-8, UTF-16 o Latin-1, hasta 20 MB), PDF, Word (DOCX), Excel (XLSX), PowerPoint (PPTX), OpenDocument (ODT, ODS, ODP) y RTF (hasta 100 MB por documento). Los PDF y documentos se leen en un proceso aparte: uno dañado no cierra la aplicación. Los resultados traen una columna «Fragmento» con la coincidencia resaltada. No lee DOC, XLS ni PPT antiguos, ni PDF escaneados (sin texto). No hay índice: abre cada archivo, así que en una carpeta grande tarda (unos 0,4 s por libro en PDF); conviene acotar con `ext:` (`presupuesto ext:pdf,docx`).
 
 La búsqueda en subcarpetas no entra en carpetas ocultas salvo que esté activado «Mostrar ocultos», no sigue enlaces simbólicos a carpetas y no pasa a otras unidades montadas dentro de la carpeta. Se detiene al llegar a 200 000 resultados y lo avisa.
 
@@ -89,7 +89,7 @@ Se escriben `clave:valor`, sin espacio tras los dos puntos. La clave puede ir en
 | `regex:` | Expresión regular sobre el nombre, entre barras. | `regex:/^IMG_\d{4}\.jpe?g$/` |
 | `name:` | Igual que un término suelto; útil para buscar algo que se parece a un filtro. | `name:fot*.jpg` |
 | `tag:` | Etiqueta. **Aún no disponible** (Fase 5). | `tag:rojo` |
-| `content:` | Texto dentro del archivo (solo archivos de texto; ver «Opciones del buscador»). Es siempre "contiene". Solo en el buscador: el filtro Ctrl+I no abre archivos y lo avisa. | `content:"presupuesto anual"` · `content:riso ext:txt` |
+| `content:` | Texto dentro del archivo (texto, PDF, documentos de oficina y RTF; ver «Opciones del buscador»). Es siempre "contiene". Solo en el buscador: el filtro Ctrl+I no abre archivos y lo avisa. | `content:"presupuesto anual"` · `content:riso ext:txt` |
 
 Si la consulta usa `tag:`, la aplicación avisa de que ese filtro todavía no funciona; no devuelve resultados como si lo hubiera aplicado.
 

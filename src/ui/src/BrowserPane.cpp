@@ -522,6 +522,8 @@ BrowserPane::BrowserPane(tasks::Scheduler &scheduler, fs::DirectoryWatcher &watc
     m_resultsView->header()->resizeSection(SearchResultsModel::SnippetColumn, 360);
     m_resultsView->setItemDelegateForColumn(SearchResultsModel::SnippetColumn, new SnippetDelegate(m_resultsView));
     m_resultsView->setColumnHidden(SearchResultsModel::SnippetColumn, true);
+    // El fragmento, justo después del nombre: es lo que se quiere leer.
+    m_resultsView->header()->moveSection(m_resultsView->header()->visualIndex(SearchResultsModel::SnippetColumn), 1);
 
     auto *searchLayout = new QVBoxLayout(m_searchPage);
     searchLayout->setContentsMargins(0, 0, 0, 0);
@@ -1030,6 +1032,16 @@ void BrowserPane::startSearch()
     m_searchReadsContent = parsedQuery.value().usesContent();
     // La columna del fragmento, solo cuando se busca en el contenido.
     m_resultsView->setColumnHidden(SearchResultsModel::SnippetColumn, !m_searchReadsContent);
+    // Con fragmento, es él quien se estira; sin él, la carpeta.
+    QHeaderView *resultsHeader = m_resultsView->header();
+    if (m_searchReadsContent) {
+        resultsHeader->setSectionResizeMode(SearchResultsModel::FolderColumn, QHeaderView::Interactive);
+        resultsHeader->resizeSection(SearchResultsModel::FolderColumn, 160);
+        resultsHeader->setSectionResizeMode(SearchResultsModel::SnippetColumn, QHeaderView::Stretch);
+    } else {
+        resultsHeader->setSectionResizeMode(SearchResultsModel::SnippetColumn, QHeaderView::Interactive);
+        resultsHeader->setSectionResizeMode(SearchResultsModel::FolderColumn, QHeaderView::Stretch);
+    }
 
     // El índice de cada carpeta de partida, si lo tiene. Si alguna no lo
     // tiene, o el índice no puede contestar esta consulta, se recorre el disco.
