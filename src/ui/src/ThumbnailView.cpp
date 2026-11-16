@@ -129,9 +129,10 @@ public:
             icon.paint(painter, iconRect, Qt::AlignCenter,
                        (opt.state & QStyle::State_Enabled) ? QIcon::Normal : QIcon::Disabled);
             if (isDirectory && ready) {
-                const int inner = size * 3 / 5;
+                // Sobre la parte delantera de la carpeta, que es la mayor parte del icono.
+                const int inner = size * 7 / 10;
                 const QRect contents(pictureArea.left() + (size - inner) / 2,
-                                     pictureArea.top() + (size - inner) / 2 + size / 12, inner, inner);
+                                     pictureArea.top() + (size - inner) / 2 + size / 14, inner, inner);
                 painter->save();
                 painter->setRenderHint(QPainter::SmoothPixmapTransform);
                 painter->drawImage(contents, thumbnail.image);

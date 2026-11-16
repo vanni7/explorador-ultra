@@ -261,6 +261,15 @@ private slots:
             QVERIFY2(qAlpha(grid.value().pixel(point)) > 0, qPrintable(QStringLiteral("%1,%2").arg(point.x()).arg(point.y())));
         }
 
+        // Con un solo archivo, ocupa todo el hueco (no una esquina).
+        const QString single = file(QStringLiteral("un-libro"));
+        QVERIFY(QDir().mkpath(single));
+        QVERIFY(testImage(100, 100).save(single + QStringLiteral("/portada.png")));
+        request.path = single;
+        const auto alone = renderThumbnail(request, {});
+        QVERIFY(alone.ok());
+        QVERIFY(qAlpha(alone.value().pixel(10, 64)) > 0 && qAlpha(alone.value().pixel(118, 64)) > 0);
+
         // Contenido mezclado, vacío o solo con subcarpetas: el icono de carpeta.
         const QString mixed = file(QStringLiteral("mezcla"));
         QVERIFY(QDir().mkpath(mixed));

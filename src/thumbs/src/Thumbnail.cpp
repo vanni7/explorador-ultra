@@ -256,13 +256,15 @@ core::Result<QImage> renderFolder(const ThumbnailRequest &request, const tasks::
     }
     const int side = std::max(32, request.maxSide);
     const int gap = std::max(2, side / 32);
-    const int cell = (side - gap) / 2;
-    QImage grid(side, side, QImage::Format_ARGB32_Premultiplied);
-    grid.fill(Qt::transparent);
-    QPainter painter(&grid);
-    painter.setRenderHint(QPainter::SmoothPixmapTransform);
-    int drawn = 0;
-    for (size_t i = 0; i < files.size() && drawn < 4; ++i) {
+    // Cuántas caben, y cómo repartirlas: una ocupa todo, dos van lado a lado,
+    // tres o cuatro en cuadrícula de 2 × 2.
+    const int wanted = int(std::min<size_t>(files.size(), 4));
+    const int columns = wanted == 1 ? 1 : 2;
+    const int rows = wanted <= 2 ? 1 : 2;
+    const int cellWidth = (side - (columns - 1) * gap) / columns;
+    const int cellHeight = (side - (rows - 1) * gap) / rows;
+    std::vector<QImage> images;
+    for (size_t i = 0; i < files.size() && int(images.size()) < wanted; ++i) {
         if (cancel.isCancelled()) {
             return cancelledError(request.path);
         }
@@ -270,19 +272,31 @@ core::Result<QImage> renderFolder(const ThumbnailRequest &request, const tasks::
         child.path = request.path + QLatin1Char('/') + files[i].name;
         child.size = files[i].size;
         child.modifiedMs = files[i].modifiedMs;
-        child.maxSide = cell;
+        child.maxSide = std::max(cellWidth, cellHeight);
         const core::Result<QImage> image = renderThumbnail(child, cancel);
-        if (!image.ok()) {
-            continue;
+        if (image.ok()) {
+            images.push_back(image.value());
         }
-        QSize shown = image.value().size();
-        shown.scale(cell, cell, Qt::KeepAspectRatio);
-        const int column = drawn % 2;
-        const int row = drawn / 2;
-        const QRect target((column * (cell + gap)) + (cell - shown.width()) / 2,
-                           (row * (cell + gap)) + (cell - shown.height()) / 2, shown.width(), shown.height());
-        painter.drawImage(target, image.value());
-        ++drawn;
+    }
+    QImage grid(side, side, QImage::Format_ARGB32_Premultiplied);
+    grid.fill(Qt::transparent);
+    QPainter painter(&grid);
+    painter.setRenderHint(QPainter::SmoothPixmapTransform);
+    const int drawn = int(images.size());
+    // Si alguna no se pudo leer, las que quedan se reparten en el mismo hueco.
+    const int usedColumns = drawn == 1 ? 1 : columns;
+    const int usedRows = drawn <= 2 ? 1 : rows;
+    const int usedWidth = (side - (usedColumns - 1) * gap) / usedColumns;
+    const int usedHeight = (side - (usedRows - 1) * gap) / usedRows;
+    for (int i = 0; i < drawn; ++i) {
+        QSize shown = images[size_t(i)].size();
+        shown.scale(usedWidth, usedHeight, Qt::KeepAspectRatio);
+        const int column = i % usedColumns;
+        const int row = i / usedColumns;
+        const QRect target(column * (usedWidth + gap) + (usedWidth - shown.width()) / 2,
+                           row * (usedHeight + gap) + (usedHeight - shown.height()) / 2, shown.width(),
+                           shown.height());
+        painter.drawImage(target, images[size_t(i)]);
     }
     painter.end();
     if (drawn == 0) {
