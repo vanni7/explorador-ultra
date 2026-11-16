@@ -174,6 +174,15 @@ Lo que cambió para llegar ahí:
 - El punto de control (`fsync` + anotación) cada 64 MB dejaba el disco mecánico en el 81 % (109 MB/s): sincronizar a menudo corta la escritura diferida. Ahora se hace como mucho cada 8 s (sin puntos de control: 96 %).
 - El SHA-256 de Qt va a 162 MB/s y frenaba la comprobación (65 MB/s). Con OpenSSL (opcional, `libcrypto`), 2088 MB/s; CRC32 con 8 bytes por vuelta, de 513 a 2599 MB/s (`eu-bench hashspeed`). Comprobar cuesta ahora sobre todo releer la copia del disco. Sin OpenSSL (Windows y macOS de la CI) se usa el de Qt: más lento.
 
+### Duplicados exactos (Fase 4, paso 6, 16-nov)
+`eu-bench dupes <carpeta>`, caché fría:
+
+| Carpeta | Archivos | Grupos | Copias de más | Recuperable | Leído | Tiempo |
+|---|---|---|---|---|---|---|
+| `RESPALDO/BIBLIOTECA_DIGITAL` (SSD) | 24 870 | 2821 | 3459 | 20,9 GB | 40 GB | 90 s |
+
+Casi todo el tiempo es el hash completo de los candidatos grandes (instaladores repetidos de varios GB): las etapas de tamaño y hash parcial descartan el resto leyendo 12 kB por archivo.
+
 ### No medido todavía (pendiente)
 - Tiempo de apertura real de una carpeta en Archivos de GNOME (no hay forma fiable de automatizarlo; `gio list` es una aproximación de su motor, no de su interfaz).
 - Caché fría, HDD, USB y unidades de red.

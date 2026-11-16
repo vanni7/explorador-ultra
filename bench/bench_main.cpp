@@ -11,6 +11,7 @@
 //   eu-bench grep    <carpeta> <texto>  busca el texto dentro de los documentos (aislado)
 //   eu-bench cindex  <carpeta> <texto>  crea el índice de contenido y busca con él
 //   eu-bench transfer <archivo> <carpeta> [veces]  copia con el motor y con cp+sync (caché fría)
+//   eu-bench dupes   <carpeta>          busca duplicados exactos y dice cuánto se recuperaría
 //   eu-bench thumbs  <carpeta> [lado]   miniaturas de una carpeta, en el proceso y aisladas
 //   eu-bench index   <carpeta> <archivo.db> [consulta…]   construye el índice y busca en él
 //
@@ -21,6 +22,7 @@
 #include "eu/fs/DirectoryLister.h"
 #include "eu/fs/Volumes.h"
 #include "eu/index/Index.h"
+#include "eu/dupes/Duplicates.h"
 #include "eu/index/ContentIndex.h"
 #include "eu/journal/Journal.h"
 #include "eu/ops/Engine.h"
@@ -653,6 +655,32 @@ int commandIndex(const QString &folder, const QString &databasePath, const QStri
 /// Copia un archivo grande con el motor (reanudable, como la cola; con y
 /// sin comprobar) y con `cp` + `sync`, con la caché vaciada antes de cada
 /// copia, y compara la velocidad (SPEC: ≥ 90 % de la nativa).
+/// Duplicados exactos de una carpeta, con caché fría.
+int commandDupes(const QString &folder)
+{
+    const bool cold = dropCaches();
+    eu::dupes::Options options;
+    options.roots = {folder};
+    QElapsedTimer timer;
+    timer.start();
+    const eu::dupes::Result result = eu::dupes::findDuplicates(options, {});
+    int copies = 0;
+    for (const eu::dupes::Group &group : result.groups) {
+        copies += group.physicalCopies - 1;
+    }
+    report(QStringLiteral("duplicados en %1").arg(QFileInfo(folder).fileName()), timer.nsecsElapsed(),
+           QStringLiteral("%1 archivos; %2 grupos; %3 copias de más; %4 MB recuperables; %5 MB leídos%6")
+               .arg(result.filesSeen).arg(result.groups.size()).arg(copies)
+               .arg(double(result.recoverable()) / 1e6, 0, 'f', 1).arg(double(result.bytesRead) / 1e6, 0, 'f', 1)
+               .arg(cold ? QString() : QStringLiteral(" (caché caliente)")));
+    for (const eu::dupes::Group &group : result.groups.mid(0, 3)) {
+        out() << "    " << group.physicalCopies << " copias de " << group.size / 1000 << " kB: "
+              << QFileInfo(group.files.first().path).fileName() << '\n';
+    }
+    out().flush();
+    return 0;
+}
+
 /// Velocidad de cada hash sobre 512 MB en memoria (sin disco).
 int commandHashSpeed()
 {
@@ -746,6 +774,9 @@ int main(int argc, char *argv[])
     }
     if (command == QStringLiteral("grep") && arguments.size() == 4) {
         return commandGrep(QDir::cleanPath(arguments[2]), arguments[3]);
+    }
+    if (command == QStringLiteral("dupes") && arguments.size() == 3) {
+        return commandDupes(QDir::cleanPath(arguments[2]));
     }
     if (command == QStringLiteral("hashspeed")) {
         return commandHashSpeed();
