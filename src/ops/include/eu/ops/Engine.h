@@ -2,6 +2,7 @@
 #pragma once
 
 #include "eu/core/Error.h"
+#include "eu/core/FileName.h"
 #include "eu/journal/Journal.h"
 #include "eu/ops/FileOps.h"
 #include "eu/tasks/Cancel.h"
@@ -96,6 +97,10 @@ struct Outcome
     bool ok() const { return errors.isEmpty() && !cancelled; }
 };
 
+/// Reglas de nombres del volumen donde está `directory` (un disco NTFS o
+/// exFAT montado en Linux exige las de Windows).
+core::NameRules nameRulesFor(const QString &directory);
+
 /// Motor de operaciones de archivos. Cada método hace una operación completa:
 /// la anota en el historial paso a paso **antes** de tocar el disco (SPEC §9)
 /// y devuelve qué pasó. Son bloqueantes: se llaman desde una tarea.
@@ -111,6 +116,12 @@ public:
     Outcome createFolder(const QString &parentDirectory, const QString &name);
     Outcome createFile(const QString &parentDirectory, const QString &name);
     Outcome rename(const QString &path, const QString &newName);
+    /// Renombra muchos a la vez (renombrado masivo, SPEC §11) como una sola
+    /// operación del historial: deshacer los devuelve todos. Cadenas y ciclos
+    /// (a→b, b→a) y cambios solo de mayúsculas pasan por nombres temporales.
+    /// Nunca sobrescribe: si un nombre final ya está ocupado, ese elemento
+    /// vuelve a su nombre y se informa.
+    Outcome renameMany(const QList<QPair<QString, QString>> &items, const tasks::CancelToken &cancel);
 
     Outcome copy(const QStringList &sources, const QString &destinationDirectory, const TransferOptions &collisions,
                  const tasks::CancelToken &cancel, const ProgressCallback &progress = {});

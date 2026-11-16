@@ -25,20 +25,6 @@ QString tr(const char *text)
     return QCoreApplication::translate("eu::ops::Engine", text);
 }
 
-/// Reglas de nombres del volumen donde está `directory`. Un disco NTFS o exFAT
-/// montado en Linux exige las reglas de Windows aunque Linux no las imponga:
-/// si no, el archivo sería ilegible al conectar el disco a un equipo Windows.
-core::NameRules nameRulesFor(const QString &directory)
-{
-    const QString fileSystem = fs::volumeForPath(directory).fileSystem.toLower();
-    static const QStringList windowsLike{QStringLiteral("ntfs"), QStringLiteral("ntfs3"), QStringLiteral("fuseblk"),
-                                         QStringLiteral("exfat"), QStringLiteral("vfat"), QStringLiteral("fat"),
-                                         QStringLiteral("fat32"), QStringLiteral("msdos")};
-    if (windowsLike.contains(fileSystem)) {
-        return core::NameRules::Windows;
-    }
-    return core::nativeNameRules();
-}
 
 /// true si `inner` es `outer` o está dentro de `outer`.
 bool isSameOrInside(const QString &inner, const QString &outer)
@@ -578,6 +564,105 @@ Outcome Engine::createFile(const QString &parentDirectory, const QString &name)
         }
         run.finish();
     }
+    return run.outcome;
+}
+
+/// Reglas de nombres del volumen donde está `directory`. Un disco NTFS o exFAT
+/// montado en Linux exige las reglas de Windows aunque Linux no las imponga:
+/// si no, el archivo sería ilegible al conectar el disco a un equipo Windows.
+core::NameRules nameRulesFor(const QString &directory)
+{
+    const QString fileSystem = fs::volumeForPath(directory).fileSystem.toLower();
+    static const QStringList windowsLike{QStringLiteral("ntfs"), QStringLiteral("ntfs3"), QStringLiteral("fuseblk"),
+                                         QStringLiteral("exfat"), QStringLiteral("vfat"), QStringLiteral("fat"),
+                                         QStringLiteral("fat32"), QStringLiteral("msdos")};
+    if (windowsLike.contains(fileSystem)) {
+        return core::NameRules::Windows;
+    }
+    return core::nativeNameRules();
+}
+
+Outcome Engine::renameMany(const QList<QPair<QString, QString>> &items, const tasks::CancelToken &cancel)
+{
+    Run run(*m_journal, cancel, {});
+    if (items.isEmpty()) {
+        return run.outcome;
+    }
+    if (!run.begin(journal::OperationKind::Rename, tr("Renombrar %1 elemento(s)").arg(items.size()))) {
+        return run.outcome;
+    }
+    // Lo más profundo primero: renombrar una carpeta cambia la ruta de lo de dentro.
+    QList<QPair<QString, QString>> ordered = items;
+    std::stable_sort(ordered.begin(), ordered.end(), [](const auto &a, const auto &b) {
+        return QDir::cleanPath(a.first).count(QLatin1Char('/')) > QDir::cleanPath(b.first).count(QLatin1Char('/'));
+    });
+    // Por carpetas. Si algún nombre nuevo es el viejo de otro (cadena o ciclo)
+    // o solo cambian mayúsculas, todo el grupo pasa antes por nombres temporales.
+    QList<QPair<QString, QList<QPair<QString, QString>>>> groups;
+    for (const auto &item : ordered) {
+        const QString parent = QFileInfo(QDir::cleanPath(item.first)).absolutePath();
+        auto found = std::find_if(groups.begin(), groups.end(), [&](const auto &group) { return group.first == parent; });
+        if (found == groups.end()) {
+            groups.append({parent, {}});
+            found = groups.end() - 1;
+        }
+        found->second.append({QDir::cleanPath(item.first), item.second});
+    }
+    int temporary = 0;
+    for (const auto &[parent, group] : groups) {
+        const core::NameRules rules = nameRulesFor(parent);
+        QSet<QString> oldNames;
+        for (const auto &item : group) {
+            oldNames.insert(QFileInfo(item.first).fileName().toCaseFolded());
+        }
+        bool needsTemporary = false;
+        for (const auto &item : group) {
+            needsTemporary = needsTemporary || oldNames.contains(item.second.toCaseFolded());
+        }
+        QList<QPair<QString, QString>> pending;   // (ruta actual, nombre final)
+        for (const auto &item : group) {
+            if (run.cancelled()) {
+                break;
+            }
+            const core::NameCheck check = core::checkFileName(item.second, rules);
+            if (!check.ok()) {
+                run.fail({core::ErrorCode::InvalidName, core::describeNameProblem(check), item.second, 0});
+                continue;
+            }
+            if (QFileInfo(item.first).fileName() == item.second) {
+                continue;   // mismo nombre: nada que hacer
+            }
+            if (!needsTemporary) {
+                pending.append(item);
+                continue;
+            }
+            const QString parked = joinPath(parent, QStringLiteral(".eu-renombrando-%1-%2")
+                                                        .arg(QCoreApplication::applicationPid())
+                                                        .arg(++temporary));
+            if (run.step(journal::StepKind::Rename, item.first, parked, parked,
+                         [&] { return renameNoReplace(item.first, parked); })) {
+                pending.append({parked, item.second});
+            }
+        }
+        for (const auto &item : pending) {
+            const QString target = joinPath(parent, item.second);
+            if (run.step(journal::StepKind::Rename, item.first, target, target,
+                         [&] { return renameNoReplace(item.first, target); })) {
+                run.outcome.resultPaths.append(target);
+            } else if (needsTemporary) {
+                // No se pudo dar el nombre final (apareció algo con ese nombre):
+                // vuelve a como estaba, para no dejarlo con el nombre temporal.
+                const auto original = std::find_if(group.begin(), group.end(), [&](const auto &candidate) {
+                    return candidate.second == item.second;
+                });
+                if (original != group.end()) {
+                    run.step(journal::StepKind::Rename, item.first, original->first, original->first,
+                             [&] { return renameNoReplace(item.first, original->first); });
+                }
+            }
+        }
+    }
+    run.finish();
     return run.outcome;
 }
 
