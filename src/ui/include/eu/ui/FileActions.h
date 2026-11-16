@@ -76,8 +76,8 @@ public:
     quint64 createFolder(const QString &parentDirectory, const QString &name);
     quint64 createFile(const QString &parentDirectory, const QString &name);
     quint64 rename(const QString &path, const QString &newName);
-    quint64 copy(const QStringList &sources, const QString &destinationDirectory, ops::CollisionPolicy policy);
-    quint64 move(const QStringList &sources, const QString &destinationDirectory, ops::CollisionPolicy policy);
+    quint64 copy(const QStringList &sources, const QString &destinationDirectory, const ops::CollisionOptions &policy);
+    quint64 move(const QStringList &sources, const QString &destinationDirectory, const ops::CollisionOptions &policy);
     /// Extrae de `archivePath` lo que hay en `innerPaths` (vacío: todo) en una
     /// carpeta nueva `folderName` dentro de `destinationDirectory`. Se quita
     /// `innerFolder` del principio de las rutas (la carpeta de dentro donde

@@ -150,7 +150,7 @@ quint64 FileActions::rename(const QString &path, const QString &newName)
 }
 
 quint64 FileActions::copy(const QStringList &sources, const QString &destinationDirectory,
-                          ops::CollisionPolicy policy)
+                          const ops::CollisionOptions &policy)
 {
     return start(ActionKind::Copy, destinationDirectory, tasks::Category::Transfer,
                  [sources, destinationDirectory, policy](const Context &context, ActionResult &result) {
@@ -160,7 +160,7 @@ quint64 FileActions::copy(const QStringList &sources, const QString &destination
 }
 
 quint64 FileActions::move(const QStringList &sources, const QString &destinationDirectory,
-                          ops::CollisionPolicy policy)
+                          const ops::CollisionOptions &policy)
 {
     return start(ActionKind::Move, destinationDirectory, tasks::Category::Transfer,
                  [sources, destinationDirectory, policy](const Context &context, ActionResult &result) {

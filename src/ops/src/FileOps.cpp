@@ -2,6 +2,7 @@
 #include "eu/ops/FileOps.h"
 
 #include <QCoreApplication>
+#include <QCryptographicHash>
 #include <QDateTime>
 #include <QDir>
 #include <QFile>
@@ -9,6 +10,7 @@
 #include <QTimeZone>
 
 #include <cerrno>
+#include <cstring>
 #include <filesystem>
 #include <system_error>
 #include <vector>
@@ -316,6 +318,93 @@ core::Status removeEmptyDirectory(const QString &path)
         return fromStdError(code, path);
     }
     return {};
+}
+
+core::Result<bool> sameContent(const QString &a, const QString &b, Comparison comparison,
+                               const tasks::CancelToken &cancel)
+{
+    const FileStamp first = stampOf(a);
+    const FileStamp second = stampOf(b);
+    if (!first.exists || !second.exists) {
+        return core::errorFromErrno(ENOENT, first.exists ? b : a);
+    }
+    if (first.isSymlink || second.isSymlink) {
+        return first.isSymlink && second.isSymlink && QFile::symLinkTarget(a) == QFile::symLinkTarget(b);
+    }
+    if (first.isDirectory || second.isDirectory || first.size != second.size) {
+        return false;
+    }
+    QFile left(a);
+    QFile right(b);
+    if (!left.open(QIODevice::ReadOnly)) {
+        return fromQFile(left, a);
+    }
+    if (!right.open(QIODevice::ReadOnly)) {
+        return fromQFile(right, b);
+    }
+    const auto cancelled = [&] {
+        return core::Error{core::ErrorCode::Cancelled, QCoreApplication::translate("eu::ops", "Cancelado."), a, 0};
+    };
+    std::vector<char> bufferA(1024 * 1024);
+    std::vector<char> bufferB(comparison == Comparison::Bytes ? bufferA.size() : 0);
+    if (comparison == Comparison::Bytes) {
+        while (true) {
+            if (cancel.isCancelled()) {
+                return cancelled();
+            }
+            const qint64 readA = left.read(bufferA.data(), qint64(bufferA.size()));
+            const qint64 readB = right.read(bufferB.data(), qint64(bufferB.size()));
+            if (readA < 0) {
+                return fromQFile(left, a);
+            }
+            if (readB < 0) {
+                return fromQFile(right, b);
+            }
+            if (readA != readB || std::memcmp(bufferA.data(), bufferB.data(), size_t(readA)) != 0) {
+                return false;
+            }
+            if (readA == 0) {
+                return true;
+            }
+        }
+    }
+    // Por hash: cada archivo de una pasada (en discos distintos no se alternan lecturas).
+    const auto digest = [&](QFile &file, const QString &path) -> core::Result<QByteArray> {
+        QCryptographicHash hash(QCryptographicHash::Sha256);
+        while (true) {
+            if (cancel.isCancelled()) {
+                return cancelled();
+            }
+            const qint64 read = file.read(bufferA.data(), qint64(bufferA.size()));
+            if (read < 0) {
+                return fromQFile(file, path);
+            }
+            if (read == 0) {
+                return hash.result();
+            }
+            hash.addData(QByteArrayView(bufferA.data(), read));
+        }
+    };
+    const core::Result<QByteArray> digestA = digest(left, a);
+    if (!digestA.ok()) {
+        return digestA.error();
+    }
+    const core::Result<QByteArray> digestB = digest(right, b);
+    if (!digestB.ok()) {
+        return digestB.error();
+    }
+    return digestA.value() == digestB.value();
+}
+
+QString nameWithDateTime(const QString &name, qint64 ms)
+{
+    const qsizetype dot = name.lastIndexOf(QLatin1Char('.'));
+    const bool hasSuffix = dot > 0;
+    const QString stem = hasSuffix ? name.left(dot) : name;
+    const QString suffix = hasSuffix ? name.mid(dot) : QString();
+    // Con puntos y no dos puntos: ":" no vale en nombres de Windows ni de macOS.
+    const QString stamp = QDateTime::fromMSecsSinceEpoch(ms).toString(QStringLiteral("yyyy-MM-dd HH.mm.ss"));
+    return stem + QLatin1Char(' ') + stamp + suffix;
 }
 
 QString uniqueName(const QString &directory, const QString &name)

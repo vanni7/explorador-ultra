@@ -5,6 +5,7 @@
 #include "eu/ops/FileOps.h"
 #include "eu/trash/Trash.h"
 
+#include <QDateTime>
 #include <QDir>
 #include <QDirIterator>
 #include <QFile>
@@ -202,6 +203,188 @@ private slots:
         const Outcome duplicate = engine.copy({file}, directory.path(), CollisionPolicy::Skip, m_noCancel);
         QVERIFY(duplicate.ok());
         QCOMPARE(readFile(directory.filePath(QStringLiteral("foto (2).jpg"))), QByteArray("original"));
+    }
+
+    void overwriteSendsTheOldOneToTheTrashAndUndoes()
+    {
+        QTemporaryDir directory;
+        const QString source = directory.filePath(QStringLiteral("informe.txt"));
+        const QString destination = directory.filePath(QStringLiteral("destino"));
+        const QString target = destination + QStringLiteral("/informe.txt");
+        writeFile(source, "versión nueva");
+        writeFile(target, "versión vieja");
+
+        Engine engine(m_journal);
+        const Outcome replaced = engine.copy({source}, destination, CollisionPolicy::Overwrite, m_noCancel);
+        if (!replaced.errors.isEmpty() && replaced.errors.first().code == core::ErrorCode::NotSupported) {
+            QSKIP("El volumen de la carpeta temporal no admite papelera en este equipo.");
+        }
+        QVERIFY2(replaced.ok(), qPrintable(describe(replaced)));
+        QCOMPARE(replaced.replaced, QStringList{target});
+        QCOMPARE(readFile(target), QByteArray("versión nueva"));
+        QCOMPARE(treeOf(destination), QStringList{QStringLiteral("informe.txt")});
+
+        // Deshacer quita la copia y devuelve lo que había.
+        const Outcome undone = engine.undo(replaced.operationId, m_noCancel);
+        QVERIFY2(undone.ok(), qPrintable(describe(undone)));
+        QCOMPARE(readFile(target), QByteArray("versión vieja"));
+        QCOMPARE(readFile(source), QByteArray("versión nueva"));
+
+        // Mover reemplazando: el origen desaparece y se puede deshacer igual.
+        const Outcome moved = engine.move({source}, destination, CollisionPolicy::Overwrite, m_noCancel);
+        QVERIFY2(moved.ok(), qPrintable(describe(moved)));
+        QVERIFY(!QFileInfo::exists(source));
+        QCOMPARE(readFile(target), QByteArray("versión nueva"));
+        QVERIFY(engine.undo(moved.operationId, m_noCancel).ok());
+        QCOMPARE(readFile(source), QByteArray("versión nueva"));
+        QCOMPARE(readFile(target), QByteArray("versión vieja"));
+
+        // Una carpeta no se reemplaza por algo de dentro de ella.
+        writeFile(directory.filePath(QStringLiteral("x/x")), "dentro");
+        const Outcome inside = engine.copy({directory.filePath(QStringLiteral("x/x"))}, directory.path(),
+                                           CollisionPolicy::Overwrite, m_noCancel);
+        QCOMPARE(inside.errors.size(), 1);
+        QCOMPARE(readFile(directory.filePath(QStringLiteral("x/x"))), QByteArray("dentro"));
+    }
+
+    void overwriteIfNewerAndDatedNames()
+    {
+        QTemporaryDir directory;
+        const QString destination = directory.filePath(QStringLiteral("destino"));
+        const QString older = directory.filePath(QStringLiteral("viejo/a.txt"));
+        const QString newer = directory.filePath(QStringLiteral("nuevo/a.txt"));
+        writeFile(older, "viejo");
+        writeFile(newer, "nuevo");
+        writeFile(destination + QStringLiteral("/a.txt"), "destino");
+        const auto setDate = [](const QString &path, const QDateTime &when) {
+            QFile file(path);
+            QVERIFY(file.open(QIODevice::ReadWrite));
+            QVERIFY(file.setFileTime(when, QFileDevice::FileModificationTime));
+        };
+        const QDateTime now = QDateTime::currentDateTimeUtc();
+        setDate(older, now.addDays(-10));
+        setDate(destination + QStringLiteral("/a.txt"), now.addDays(-5));
+        setDate(newer, now.addDays(-1));
+
+        Engine engine(m_journal);
+        const Outcome notNewer = engine.copy({older}, destination, CollisionPolicy::OverwriteIfNewer, m_noCancel);
+        QVERIFY(notNewer.ok());
+        QCOMPARE(notNewer.skipped, QStringList{older});
+        QCOMPARE(readFile(destination + QStringLiteral("/a.txt")), QByteArray("destino"));
+        const Outcome isNewer = engine.copy({newer}, destination, CollisionPolicy::OverwriteIfNewer, m_noCancel);
+        if (!isNewer.errors.isEmpty() && isNewer.errors.first().code == core::ErrorCode::NotSupported) {
+            QSKIP("El volumen de la carpeta temporal no admite papelera en este equipo.");
+        }
+        QVERIFY2(isNewer.ok(), qPrintable(describe(isNewer)));
+        QCOMPARE(readFile(destination + QStringLiteral("/a.txt")), QByteArray("nuevo"));
+
+        // Con la fecha del original en el nombre.
+        const Outcome dated = engine.copy({older}, destination, CollisionPolicy::AppendDateTime, m_noCancel);
+        QVERIFY(dated.ok());
+        const QString expected = nameWithDateTime(QStringLiteral("a.txt"), now.addDays(-10).toMSecsSinceEpoch());
+        QVERIFY2(expected.startsWith(QStringLiteral("a ")) && expected.endsWith(QStringLiteral(".txt")), qPrintable(expected));
+        QVERIFY(!expected.contains(QLatin1Char(':')));
+        QCOMPARE(dated.resultPaths, QStringList{destination + QLatin1Char('/') + expected});
+        QCOMPARE(readFile(destination + QLatin1Char('/') + expected), QByteArray("viejo"));
+    }
+
+    void identicalFilesAreSkippedOthersKept()
+    {
+        QTemporaryDir directory;
+        // En el destino ya hay una carpeta "origen" con dos de los archivos.
+        const QString destination = directory.filePath(QStringLiteral("dest2/origen"));
+        writeFile(directory.filePath(QStringLiteral("origen/igual.bin")), QByteArray(300000, 'z'));
+        writeFile(destination + QStringLiteral("/igual.bin"), QByteArray(300000, 'z'));
+        // Mismo tamaño, distinto contenido: no es el mismo archivo.
+        QByteArray almost(300000, 'z');
+        almost[299999] = 'y';
+        writeFile(directory.filePath(QStringLiteral("origen/distinto.bin")), almost);
+        writeFile(destination + QStringLiteral("/distinto.bin"), QByteArray(300000, 'z'));
+
+        for (const Comparison comparison : {Comparison::Hash, Comparison::Bytes}) {
+            QCOMPARE(sameContent(directory.filePath(QStringLiteral("origen/igual.bin")),
+                                 destination + QStringLiteral("/igual.bin"), comparison, m_noCancel).value(), true);
+            QCOMPARE(sameContent(directory.filePath(QStringLiteral("origen/distinto.bin")),
+                                 destination + QStringLiteral("/distinto.bin"), comparison, m_noCancel).value(), false);
+        }
+        Engine engine(m_journal);
+        CollisionOptions options(CollisionPolicy::SkipIfIdentical);
+        options.comparison = Comparison::Bytes;
+        // Las dos carpetas se juntan y cada archivo decide por su cuenta.
+        const QString folder = directory.filePath(QStringLiteral("origen"));
+        const QString merged = directory.filePath(QStringLiteral("dest2"));
+        const Outcome outcome = engine.copy({folder}, merged, options, m_noCancel);
+        QVERIFY2(outcome.ok(), qPrintable(describe(outcome)));
+        QCOMPARE(outcome.identical, QStringList{folder + QStringLiteral("/igual.bin")});
+        QCOMPARE(treeOf(merged + QStringLiteral("/origen")),
+                 (QStringList{QStringLiteral("distinto (2).bin"), QStringLiteral("distinto.bin"),
+                              QStringLiteral("igual.bin")}));
+        QCOMPARE(readFile(merged + QStringLiteral("/origen/distinto (2).bin")), almost);
+        // Deshacer quita solo lo copiado; la carpeta que ya existía se queda.
+        QVERIFY(engine.undo(outcome.operationId, m_noCancel).ok());
+        QCOMPARE(treeOf(merged + QStringLiteral("/origen")),
+                 (QStringList{QStringLiteral("distinto.bin"), QStringLiteral("igual.bin")}));
+    }
+
+    void askDecidesAndCanApplyToAll()
+    {
+        QTemporaryDir directory;
+        const QString destination = directory.filePath(QStringLiteral("destino"));
+        QStringList sources;
+        for (const QString &name : {QStringLiteral("1.txt"), QStringLiteral("2.txt"), QStringLiteral("3.txt")}) {
+            writeFile(directory.filePath(QStringLiteral("origen/") + name), "nuevo");
+            writeFile(destination + QLatin1Char('/') + name, "viejo");
+            sources.append(directory.filePath(QStringLiteral("origen/") + name));
+        }
+        int asked = 0;
+        CollisionOptions options(CollisionPolicy::Ask);
+        options.ask = [&](const Conflict &conflict) {
+            ++asked;
+            [&] { QCOMPARE(conflict.targetStamp.size, 5); }();
+            // Al primero: omitir. Al segundo: renombrar, y lo mismo para los que queden.
+            return asked == 1 ? CollisionDecision{CollisionPolicy::Skip, false, false}
+                              : CollisionDecision{CollisionPolicy::AutoRename, true, false};
+        };
+        Engine engine(m_journal);
+        const Outcome outcome = engine.copy(sources, destination, options, m_noCancel);
+        QVERIFY(outcome.ok());
+        QCOMPARE(asked, 2);   // el tercero no pregunta
+        QCOMPARE(outcome.skipped, QStringList{sources[0]});
+        QCOMPARE(treeOf(destination), (QStringList{QStringLiteral("1.txt"), QStringLiteral("2 (2).txt"),
+                                                   QStringLiteral("2.txt"), QStringLiteral("3 (2).txt"),
+                                                   QStringLiteral("3.txt")}));
+        // Cancelar desde la pregunta para la operación.
+        options.ask = [](const Conflict &) { return CollisionDecision{CollisionPolicy::Skip, false, true}; };
+        const Outcome cancelled = engine.copy(sources, destination, options, m_noCancel);
+        QVERIFY(cancelled.cancelled);
+    }
+
+    void moveMergesFoldersAndRemovesEmptySource()
+    {
+        QTemporaryDir directory;
+        const QString source = directory.filePath(QStringLiteral("fotos"));
+        const QString destination = directory.filePath(QStringLiteral("archivo"));
+        writeFile(source + QStringLiteral("/2024/a.jpg"), "a");
+        writeFile(source + QStringLiteral("/2024/b.jpg"), "b nueva");
+        writeFile(destination + QStringLiteral("/fotos/2024/b.jpg"), "b vieja");
+        writeFile(destination + QStringLiteral("/fotos/2023/c.jpg"), "c");
+        Engine engine(m_journal);
+        // Omitiendo los choques: lo omitido se queda en el origen, que no se borra.
+        const Outcome skipping = engine.move({source}, destination, CollisionPolicy::SkipIfIdentical, m_noCancel);
+        QVERIFY2(skipping.ok(), qPrintable(describe(skipping)));
+        QCOMPARE(treeOf(destination + QStringLiteral("/fotos")),
+                 (QStringList{QStringLiteral("2023"), QStringLiteral("2023/c.jpg"), QStringLiteral("2024"),
+                              QStringLiteral("2024/a.jpg"), QStringLiteral("2024/b (2).jpg"),
+                              QStringLiteral("2024/b.jpg")}));
+        QVERIFY(!QFileInfo::exists(source));   // todo salió: el origen vacío se quita
+        QVERIFY(engine.undo(skipping.operationId, m_noCancel).ok());
+        QCOMPARE(treeOf(source), (QStringList{QStringLiteral("2024"), QStringLiteral("2024/a.jpg"),
+                                              QStringLiteral("2024/b.jpg")}));
+        QCOMPARE(readFile(destination + QStringLiteral("/fotos/2024/b.jpg")), QByteArray("b vieja"));
+
+        const Outcome skipped = engine.move({source}, destination, CollisionPolicy::Skip, m_noCancel);
+        QVERIFY(skipped.ok());
+        QCOMPARE(skipped.skipped, QStringList{source});   // carpeta contra carpeta: omitida entera
     }
 
     void folderCannotBeCopiedOrMovedIntoItself()

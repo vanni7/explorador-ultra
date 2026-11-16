@@ -54,6 +54,21 @@ core::Status removeFile(const QString &path);
 /// Borra una carpeta vacía. Si tiene contenido falla con DirectoryNotEmpty.
 core::Status removeEmptyDirectory(const QString &path);
 
+/// Cómo saber si dos archivos son iguales. Nunca basta con el tamaño (SPEC §13).
+enum class Comparison {
+    Hash,    ///< SHA-256 de los dos.
+    Bytes,   ///< Byte a byte (lee los dos a la vez; para en la primera diferencia).
+};
+
+/// true si `a` y `b` tienen el mismo contenido: mismo tamaño y, además, mismo
+/// SHA-256 o mismos bytes. Dos enlaces simbólicos son iguales si apuntan al
+/// mismo sitio. Una carpeta nunca es igual a nada.
+core::Result<bool> sameContent(const QString &a, const QString &b, Comparison comparison,
+                               const tasks::CancelToken &cancel);
+
+/// "foto.jpg" con la fecha `ms` -> "foto 2026-11-16 14.05.33.jpg" (hora local).
+QString nameWithDateTime(const QString &name, qint64 ms);
+
 /// Devuelve un nombre libre en `directory` a partir de `name`:
 /// "foto.jpg" -> "foto (2).jpg", "foto (3).jpg"… Si `name` está libre, lo devuelve tal cual.
 QString uniqueName(const QString &directory, const QString &name);

@@ -3,6 +3,7 @@
 
 #include "eu/core/Error.h"
 #include "eu/journal/Journal.h"
+#include "eu/ops/FileOps.h"
 #include "eu/tasks/Cancel.h"
 #include "eu/trash/Trash.h"
 
@@ -15,12 +16,45 @@
 
 namespace eu::ops {
 
-/// Qué hacer cuando en el destino ya hay algo con el mismo nombre.
-/// (Sobrescribir y las demás políticas de SPEC §13 llegan con la cola de
-/// transferencias de la Fase 4; aquí nunca se sobrescribe nada.)
+/// Qué hacer cuando en el destino ya hay algo con el mismo nombre (SPEC §13).
+/// Si los dos son carpetas, las que reemplazan o comparan juntan el contenido
+/// y deciden archivo por archivo.
 enum class CollisionPolicy {
-    Skip,       ///< Dejar el destino como está y no copiar ese elemento.
-    AutoRename, ///< Copiar con otro nombre: "foto (2).jpg".
+    Skip,             ///< Dejar el destino como está y no copiar ese elemento.
+    AutoRename,       ///< Copiar con otro nombre: "foto (2).jpg".
+    Overwrite,        ///< Reemplazar. Lo reemplazado va a la papelera propia:
+                      ///< se puede deshacer. Si su unidad no tiene papelera, no se reemplaza.
+    OverwriteIfNewer, ///< Reemplazar solo si el origen es más reciente; si no, omitir.
+    AppendDateTime,   ///< Copiar con la fecha del original: "foto 2026-11-16 14.05.33.jpg".
+    SkipIfIdentical,  ///< Omitir si el contenido es idéntico; si no, copiar con otro nombre.
+    Ask,              ///< Preguntar en cada caso (CollisionOptions::ask).
+};
+
+/// Un choque de nombres, para preguntar qué hacer.
+struct Conflict
+{
+    QString source;
+    QString target;
+    FileStamp sourceStamp;
+    FileStamp targetStamp;
+};
+
+/// La respuesta a un choque.
+struct CollisionDecision
+{
+    CollisionPolicy policy = CollisionPolicy::Skip;   ///< Cualquiera menos Ask.
+    bool applyToAll = false;   ///< Usarla también en los choques que queden.
+    bool cancel = false;       ///< Parar aquí la operación.
+};
+/// Se llama desde el hilo de la operación y espera la respuesta.
+using CollisionAsker = std::function<CollisionDecision(const Conflict &)>;
+
+struct CollisionOptions
+{
+    CollisionOptions(CollisionPolicy chosen = CollisionPolicy::AutoRename) : policy(chosen) {}   // NOLINT
+    CollisionPolicy policy;
+    Comparison comparison = Comparison::Hash;   ///< Para SkipIfIdentical.
+    CollisionAsker ask;                         ///< Para Ask. Sin él, Ask renombra.
 };
 
 /// Avance de una operación larga.
@@ -39,7 +73,9 @@ struct Outcome
 {
     journal::OperationId operationId = 0;   ///< 0 si no llegó a anotarse en el historial.
     QStringList resultPaths;   ///< Lo creado o movido: rutas finales (para seleccionarlas).
-    QStringList skipped;       ///< Elementos omitidos por colisión de nombre.
+    QStringList skipped;       ///< Elementos omitidos por colisión de nombre (incluye los idénticos).
+    QStringList identical;     ///< De ellos, los omitidos por ser idénticos al destino.
+    QStringList replaced;      ///< Destinos reemplazados (lo que había está en la papelera).
     QList<core::Error> errors; ///< Lo que no se pudo hacer, con su causa.
     bool cancelled = false;
 
@@ -62,9 +98,9 @@ public:
     Outcome createFile(const QString &parentDirectory, const QString &name);
     Outcome rename(const QString &path, const QString &newName);
 
-    Outcome copy(const QStringList &sources, const QString &destinationDirectory, CollisionPolicy policy,
+    Outcome copy(const QStringList &sources, const QString &destinationDirectory, const CollisionOptions &collisions,
                  const tasks::CancelToken &cancel, const ProgressCallback &progress = {});
-    Outcome move(const QStringList &sources, const QString &destinationDirectory, CollisionPolicy policy,
+    Outcome move(const QStringList &sources, const QString &destinationDirectory, const CollisionOptions &collisions,
                  const tasks::CancelToken &cancel, const ProgressCallback &progress = {});
 
     /// Envía a la papelera propia. Si un volumen no admite papelera, ese
@@ -99,6 +135,9 @@ public:
 
 private:
     class Run;
+    Outcome transferAll(const QStringList &sources, const QString &destinationDirectory,
+                        const CollisionOptions &collisions, const tasks::CancelToken &cancel,
+                        const ProgressCallback &progress, bool moving);
     std::shared_ptr<journal::Journal> m_journal;
 };
 
