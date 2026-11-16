@@ -15,6 +15,8 @@
 #include <QTemporaryDir>
 #include <QTest>
 
+#include <atomic>
+
 using namespace eu;
 using namespace eu::ops;
 
@@ -400,6 +402,58 @@ private slots:
                                             directory.filePath(QStringLiteral("destino")), options, m_noCancel);
         QVERIFY2(outcome.ok(), qPrintable(describe(outcome)));
         QCOMPARE(outcome.verified, 2);
+    }
+
+    void interruptedCopyIsRetriedWithoutDuplicates()
+    {
+        QTemporaryDir directory;
+        const QString folder = directory.filePath(QStringLiteral("fotos"));
+        const QString single = directory.filePath(QStringLiteral("suelto.txt"));
+        for (int i = 0; i < 12; ++i) {
+            writeFile(folder + QStringLiteral("/%1.jpg").arg(i), QByteArray(1000 + i, char('a' + i)));
+        }
+        writeFile(single, "suelto");
+        const QString destination = directory.filePath(QStringLiteral("destino"));
+        // En el destino ya había otra "fotos": la copia irá a "fotos (2)".
+        writeFile(destination + QStringLiteral("/fotos/ajena.jpg"), "de otro");
+
+        tasks::CancelSource source;
+        int files = 0;
+        Engine engine(m_journal);
+        const Outcome first = engine.copy({folder, single}, destination, CollisionPolicy::AutoRename, source.token(),
+                                          [&](const Progress &progress) {
+            if (progress.itemsDone >= 6 && files++ == 0) {
+                source.cancel();   // a media carpeta
+            }
+        });
+        QVERIFY(first.cancelled);
+        QCOMPARE(first.unfinished.size(), 2);
+        QCOMPARE(first.unfinished[0].second, destination + QStringLiteral("/fotos (2)"));
+        QCOMPARE(first.unfinished[1].first, single);
+        const int copiedBefore = int(treeOf(destination + QStringLiteral("/fotos (2)")).size());
+        QVERIFY(copiedBefore > 0 && copiedBefore < 12);
+
+        const Outcome retried = engine.retry(first.unfinished, false, CollisionPolicy::AutoRename, m_noCancel);
+        QVERIFY2(retried.ok(), qPrintable(describe(retried)));
+        QCOMPARE(treeOf(destination + QStringLiteral("/fotos (2)")), treeOf(folder));
+        QCOMPARE(treeOf(destination + QStringLiteral("/fotos")), QStringList{QStringLiteral("ajena.jpg")});
+        QCOMPARE(readFile(destination + QStringLiteral("/suelto.txt")), QByteArray("suelto"));
+        QVERIFY(!QFileInfo::exists(destination + QStringLiteral("/fotos (3)")));
+        QCOMPARE(int(retried.identical.size()), copiedBefore);   // lo ya copiado no se repite
+    }
+
+    void pausePointHoldsTheCopy()
+    {
+        QTemporaryDir directory;
+        writeFile(directory.filePath(QStringLiteral("a.bin")), QByteArray(5 * 1024 * 1024, 'p'));
+        QDir().mkpath(directory.filePath(QStringLiteral("destino")));
+        std::atomic<int> pauses{0};
+        TransferOptions options(CollisionPolicy::AutoRename);
+        options.copy.pausePoint = [&](const tasks::CancelToken &) { ++pauses; };
+        Engine engine(m_journal);
+        QVERIFY(engine.copy({directory.filePath(QStringLiteral("a.bin"))}, directory.filePath(QStringLiteral("destino")),
+                            options, m_noCancel).ok());
+        QVERIFY2(pauses >= 5, qPrintable(QString::number(pauses)));   // al menos uno por bloque de 1 MB
     }
 
     void folderCannotBeCopiedOrMovedIntoItself()

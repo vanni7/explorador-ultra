@@ -8,6 +8,7 @@
 #include "eu/trash/Trash.h"
 
 #include <QList>
+#include <QPair>
 #include <QString>
 #include <QStringList>
 
@@ -81,6 +82,9 @@ struct Outcome
     QStringList identical;     ///< De ellos, los omitidos por ser idénticos al destino.
     QStringList replaced;      ///< Destinos reemplazados (lo que había está en la papelera).
     int verified = 0;          ///< Archivos copiados y comprobados con su hash.
+    /// Copiar y mover: lo que no se terminó (error o cancelación), con el
+    /// destino exacto que se eligió, para reintentarlo con Engine::retry.
+    QList<QPair<QString, QString>> unfinished;
     QList<core::Error> errors; ///< Lo que no se pudo hacer, con su causa.
     bool cancelled = false;
 
@@ -107,6 +111,12 @@ public:
                  const tasks::CancelToken &cancel, const ProgressCallback &progress = {});
     Outcome move(const QStringList &sources, const QString &destinationDirectory, const TransferOptions &collisions,
                  const tasks::CancelToken &cancel, const ProgressCallback &progress = {});
+
+    /// Reintenta lo que quedó sin terminar (`Outcome::unfinished`): cada
+    /// origen va a su destino exacto. Lo que ya llegó entero no se vuelve a
+    /// copiar (se compara su contenido) y lo que quedó a medias se completa.
+    Outcome retry(const QList<QPair<QString, QString>> &items, bool moving, const TransferOptions &options,
+                  const tasks::CancelToken &cancel, const ProgressCallback &progress = {});
 
     /// Envía a la papelera propia. Si un volumen no admite papelera, ese
     /// elemento queda en `errors` con código NotSupported y no se toca.

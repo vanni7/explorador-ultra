@@ -83,6 +83,9 @@ struct CopyOptions
     /// coinciden se repite la copia una vez; si vuelve a fallar, error.
     bool verify = false;
     HashAlgorithm algorithm = HashAlgorithm::Sha256;
+    /// Se llama entre bloque y bloque: si la transferencia está en pausa,
+    /// espera ahí (y vuelve si se cancela). Vacío: sin pausa.
+    std::function<void(const tasks::CancelToken &)> pausePoint;
 };
 
 /// Sufijo del archivo temporal que usa copyFile mientras escribe.
