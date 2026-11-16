@@ -10,8 +10,8 @@ Fase 3 — Miniaturas, previsualización y metadatos, rama `fase-3/miniaturas` (
 | # | Paso | Estado |
 |---|---|---|
 | 1 | Módulo `thumbs`: miniaturas de imágenes (JPEG, PNG, GIF, WebP, TIFF, SVG… con orientación EXIF, sin agrandar, tope contra imágenes absurdas), caché en memoria (256 MB) y en disco (`CacheLocation/miniaturas`, clave ruta + tamaño + fecha + lado, recuerda los fallos), servicio en segundo plano con cancelación de lo que deja de verse | **Hecho** (15-nov): 11 pruebas en `test_thumbs` (Ubuntu release). Falta: CI |
-| 2 | Vista de miniaturas en la pestaña (cambiar entre detallada y miniaturas, tamaño ajustable, carga solo de lo visible) | Siguiente |
-| 3 | Carpetas (hasta cuatro miniaturas o composición), PDF (Qt PDF), texto/código/Markdown (extracto) | Pendiente |
+| 2 | Vista de miniaturas en la pestaña (cambiar entre detallada y miniaturas, tamaño ajustable, carga solo de lo visible) | **Hecho** (15-nov): `ThumbnailView` comparte modelo y selección con la detallada; Ver → Detalles (Ctrl+1) / Miniaturas (Ctrl+2), tres tamaños, botones en la barra; renombrar, arrastrar, soltar y menú contextual. Prueba `thumbnailViewKeepsTheSelectionAndShowsImages`; visto con ratón simulado en `~/Imágenes` (fotos reales, la vertical sale vertical). Falta: CI; medir con miles de imágenes; ordenar desde esta vista (no hay cabecera) |
+| 3 | Carpetas (hasta cuatro miniaturas o composición), PDF (Qt PDF), texto/código/Markdown (extracto) | Siguiente |
 | 4 | Video (fotograma del segundo 3) y audio (carátula, duración), con límite de decodificadores | Pendiente |
 | 5 | RAW (LibRaw) y ofimática (miniatura incrustada; LibreOffice en proceso aparte con tiempo límite) | Pendiente |
 | 6 | Panel de previsualización y metadatos (EXIF, ID3, códec, resolución, duración) | Pendiente |
