@@ -29,7 +29,12 @@ enum class ThumbnailSource {
     Pdf,      ///< La primera página (si Qt tiene su complemento de PDF).
     Text,     ///< Las primeras líneas de un texto, código o Markdown.
     Folder,   ///< Hasta cuatro miniaturas de lo que contiene.
+    Video,    ///< El fotograma del segundo 3, con la duración (si hay FFmpeg).
+    Audio,    ///< La carátula incrustada o una genérica, con la duración (si hay FFmpeg).
 };
+
+/// true si esta compilación hace miniaturas de video y audio.
+bool hasMediaThumbnails();
 
 /// De qué clase sería la miniatura de este nombre de archivo. Solo mira la
 /// extensión: no abre el archivo.

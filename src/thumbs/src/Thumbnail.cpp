@@ -1,6 +1,8 @@
 // Explorador Ultra — SPDX-License-Identifier: GPL-3.0-or-later
 #include "eu/thumbs/Thumbnail.h"
 
+#include "MediaThumbnail.h"
+
 #include "eu/core/NaturalCompare.h"
 #include "eu/fs/DirectoryLister.h"
 
@@ -78,6 +80,29 @@ const QSet<QString> &textSuffixes()
     return suffixes;
 }
 
+const QSet<QString> &videoSuffixes()
+{
+    // "ts" no: se confunde con TypeScript, que es más habitual en una carpeta.
+    static const QSet<QString> suffixes{
+        QStringLiteral("mp4"),  QStringLiteral("m4v"), QStringLiteral("mkv"), QStringLiteral("webm"),
+        QStringLiteral("avi"),  QStringLiteral("mov"), QStringLiteral("wmv"), QStringLiteral("flv"),
+        QStringLiteral("mpg"),  QStringLiteral("mpeg"), QStringLiteral("3gp"), QStringLiteral("m2ts"),
+        QStringLiteral("mts"),  QStringLiteral("ogv"), QStringLiteral("vob"), QStringLiteral("divx"),
+    };
+    return suffixes;
+}
+
+const QSet<QString> &audioSuffixes()
+{
+    static const QSet<QString> suffixes{
+        QStringLiteral("mp3"), QStringLiteral("flac"), QStringLiteral("ogg"), QStringLiteral("oga"),
+        QStringLiteral("opus"), QStringLiteral("m4a"), QStringLiteral("aac"), QStringLiteral("wav"),
+        QStringLiteral("wma"), QStringLiteral("aiff"), QStringLiteral("aif"), QStringLiteral("ape"),
+        QStringLiteral("mka"), QStringLiteral("alac"),
+    };
+    return suffixes;
+}
+
 /// Lado mayor a partir del cual una imagen se rechaza sin decodificarla: una
 /// imagen de 100 000 × 100 000 píxeles ocuparía 40 GB en memoria.
 constexpr int maxSourceSide = 30000;
@@ -99,7 +124,20 @@ ThumbnailSource thumbnailSourceFor(const QString &fileName)
     if (textSuffixes().contains(suffix)) {
         return ThumbnailSource::Text;
     }
+    if (detail::hasMediaSupport()) {
+        if (videoSuffixes().contains(suffix)) {
+            return ThumbnailSource::Video;
+        }
+        if (audioSuffixes().contains(suffix)) {
+            return ThumbnailSource::Audio;
+        }
+    }
     return ThumbnailSource::None;
+}
+
+bool hasMediaThumbnails()
+{
+    return detail::hasMediaSupport();
 }
 
 ThumbnailSource thumbnailSourceFor(const ThumbnailRequest &request)
@@ -321,6 +359,10 @@ core::Result<QImage> renderThumbnail(const ThumbnailRequest &request, const task
         return renderText(request, cancel);
     case ThumbnailSource::Folder:
         return renderFolder(request, cancel);
+    case ThumbnailSource::Video:
+        return detail::renderMedia(request, cancel, false);
+    case ThumbnailSource::Audio:
+        return detail::renderMedia(request, cancel, true);
     case ThumbnailSource::None:
         break;
     }
