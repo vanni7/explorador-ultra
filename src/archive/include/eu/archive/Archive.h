@@ -69,6 +69,9 @@ struct ExtractOptions
     /// Solo estas rutas internas (una carpeta incluye lo que contiene).
     /// Vacía: todo.
     QStringList only;
+    /// Carpeta de dentro que se quita del principio de cada ruta: al extraer
+    /// "Fotos/2025/playa.jpg" con "Fotos/2025", queda "playa.jpg" en el destino.
+    QString stripPrefix;
     Limits limits;
 };
 

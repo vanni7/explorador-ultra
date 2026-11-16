@@ -6,6 +6,7 @@
 #include "eu/ui/PathBar.h"
 #include "eu/ui/SearchResultsModel.h"
 #include "eu/ui/IndexDialog.h"
+#include "eu/archive/Archive.h"
 #include "eu/ui/InlinePlayer.h"
 #include "../support/TestMedia.h"
 #include "eu/ui/PreviewPanel.h"
@@ -1455,6 +1456,86 @@ private slots:
         pane->navigateTo(data.path());
         QTRY_VERIFY(!player->isPlaying());
 #endif
+    }
+
+    void archivesAreBrowsedLikeFoldersAndExtracted()
+    {
+        if (!archive::isAvailable()) {
+            QSKIP("Compilado sin libarchive.");
+        }
+        QTemporaryDir data;
+        QTemporaryDir directory;
+        const QString root = QDir::cleanPath(directory.path());
+        QVERIFY(QDir(root).mkpath(QStringLiteral("álbum/sub")));
+        writeFile(root + QStringLiteral("/álbum/foto1.txt"), 10);
+        writeFile(root + QStringLiteral("/álbum/sub/foto2.txt"), 20);
+        writeFile(root + QStringLiteral("/notas.txt"), 5);
+
+        MainWindow window(m_scheduler, openJournal(data));
+        BrowserPane *pane = window.openTab(root);
+        QVERIFY(waitReady(pane));
+        window.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&window));
+
+        // Comprimir lo seleccionado (lo mismo que hace el menú contextual).
+        const QString zip = root + QStringLiteral("/paquete.zip");
+        window.fileActions()->compress({root + QStringLiteral("/álbum"), root + QStringLiteral("/notas.txt")}, zip,
+                                       archive::Format::Zip);
+        QVERIFY(waitIdle(window));
+        QVERIFY(QFileInfo(zip).isFile());
+        QTRY_VERIFY(pane->model()->rowOfName(QStringLiteral("paquete.zip")) >= 0);
+
+        // Doble clic: se entra en él como en una carpeta.
+        emit pane->view()->activated(pane->model()->index(pane->model()->rowOfName(QStringLiteral("paquete.zip")), 0));
+        QVERIFY(pane->showsArchive());
+        QVERIFY(waitReady(pane));
+        QCOMPARE(pane->model()->state(), DirectoryModel::State::Ready);
+        QCOMPARE(pane->model()->rowCount(), 2);
+        QVERIFY(pane->model()->rowOfName(QStringLiteral("álbum")) >= 0);
+        QVERIFY(pane->model()->rowOfName(QStringLiteral("notas.txt")) >= 0);
+        // Dentro no se renombra ni se arrastra, ni se busca.
+        const Qt::ItemFlags flags = pane->model()->flags(pane->model()->index(0, 0));
+        QVERIFY(!(flags & Qt::ItemIsEditable));
+        QVERIFY(!(flags & Qt::ItemIsDragEnabled));
+        QVERIFY(!window.searchEdit()->isEnabled());
+
+        // Una carpeta de dentro, y vuelta arriba hasta salir del comprimido.
+        emit pane->view()->activated(pane->model()->index(pane->model()->rowOfName(QStringLiteral("álbum")), 0));
+        QVERIFY(waitReady(pane));
+        QCOMPARE(pane->model()->rowCount(), 2);   // foto1.txt y sub
+        QVERIFY(pane->model()->rowOfName(QStringLiteral("sub")) >= 0);
+        pane->goUp();
+        QVERIFY(waitReady(pane));
+        QVERIFY(pane->showsArchive());
+        QCOMPARE(pane->model()->rowCount(), 2);
+        pane->goUp();
+        QVERIFY(waitReady(pane));
+        QVERIFY(!pane->showsArchive());
+        QCOMPARE(pane->currentPath(), root);
+        QTRY_COMPARE(pane->model()->entryAt(pane->view()->currentIndex().row()).name, QStringLiteral("paquete.zip"));
+        QVERIFY(window.searchEdit()->isEnabled());
+
+        // Extraer todo: en una carpeta nueva con el nombre del comprimido.
+        window.fileActions()->extract(zip, {}, QString(), root, QStringLiteral("paquete"));
+        QVERIFY(waitIdle(window));
+        QVERIFY(QFileInfo(root + QStringLiteral("/paquete/álbum/sub/foto2.txt")).isFile());
+        QCOMPARE(QFileInfo(root + QStringLiteral("/paquete/notas.txt")).size(), 5);
+        // Lo seleccionado dentro de "álbum": queda arriba, sin "álbum/".
+        window.fileActions()->extract(zip, {QStringLiteral("álbum/sub")}, QStringLiteral("álbum"), root,
+                                      QStringLiteral("parcial"));
+        QVERIFY(waitIdle(window));
+        QVERIFY(QFileInfo(root + QStringLiteral("/parcial/sub/foto2.txt")).isFile());
+        QVERIFY(!QFileInfo::exists(root + QStringLiteral("/parcial/álbum")));
+        QVERIFY(!QFileInfo::exists(root + QStringLiteral("/parcial/foto1.txt")));
+
+        // Comprimir encima de uno que ya existe: error, y el existente sigue igual.
+        const qint64 before = QFileInfo(zip).size();
+        QSignalSpy reports(&window, &MainWindow::actionReported);
+        window.fileActions()->compress({root + QStringLiteral("/notas.txt")}, zip, archive::Format::Zip);
+        QVERIFY(waitIdle(window));
+        QTRY_COMPARE(reports.count(), 1);
+        QCOMPARE(reports.first().at(1).toBool(), true);   // es un error
+        QCOMPARE(QFileInfo(zip).size(), before);
     }
 
     void searchCanBePausedAndStopped()

@@ -1,5 +1,6 @@
 // Explorador Ultra — SPDX-License-Identifier: GPL-3.0-or-later
 #include "eu/ui/BrowserPane.h"
+#include "eu/archive/Archive.h"
 #include "eu/ui/ThumbnailView.h"
 
 #include <utility>
@@ -12,6 +13,9 @@
 
 #include <QApplication>
 #include <QDesktopServices>
+#include <QFileInfo>
+#include <QStandardPaths>
+#include <QCryptographicHash>
 #include <QDir>
 #include <QAction>
 #include <QDragEnterEvent>
@@ -265,7 +269,9 @@ private:
 
     DropPlan planFor(const QDropEvent *event, int *targetRow) const
     {
-        if (m_model->path().isEmpty() || m_model->state() != DirectoryModel::State::Ready) {
+        // Dentro de un comprimido no se suelta nada (aún no se añade a él).
+        if (m_model->path().isEmpty() || m_model->state() != DirectoryModel::State::Ready
+            || isArchiveLocation(m_model->path())) {
             return {};
         }
         QString target = m_model->path();
@@ -641,7 +647,7 @@ void BrowserPane::navigateTo(const QString &path)
 {
     // Las ubicaciones virtuales no son rutas: no se normalizan.
     const QString clean = isVolumesLocation(path) ? volumesLocation()
-        : isSearchLocation(path) ? path : QDir::cleanPath(path);
+        : (isSearchLocation(path) || isArchiveLocation(path)) ? path : QDir::cleanPath(path);
     if (clean.isEmpty()) {
         return;
     }
@@ -696,6 +702,19 @@ void BrowserPane::goUp()
     if (showsSearch()) {
         // Por encima de unos resultados está la carpeta donde se buscó.
         changePath(searchRootOf(leaving), {});
+        return;
+    }
+    if (showsArchive()) {
+        // De una carpeta de dentro a la de arriba; de la raíz del comprimido, a
+        // la carpeta donde está, con el comprimido seleccionado.
+        const QString archivePath = archivePathOf(leaving);
+        const QString inner = archiveInnerOf(leaving);
+        if (inner.isEmpty()) {
+            changePath(QFileInfo(archivePath).path(), QFileInfo(archivePath).fileName());
+        } else {
+            const qsizetype slash = inner.lastIndexOf(QLatin1Char('/'));
+            changePath(archiveLocation(archivePath, slash < 0 ? QString() : inner.left(slash)), inner.mid(slash + 1));
+        }
         return;
     }
     const QString parent = parentPathOf(leaving);
@@ -840,6 +859,11 @@ void BrowserPane::contentMayHaveChanged()
 }
 
 // ---------------------------------------------------------------- búsqueda
+
+bool BrowserPane::showsArchive() const
+{
+    return isArchiveLocation(m_location);
+}
 
 bool BrowserPane::showsSearch() const
 {
@@ -1464,9 +1488,54 @@ void BrowserPane::onActivated(const QModelIndex &index)
     const QString path = m_model->filePath(index.row());
     if (entry.isDirectory) {
         navigateTo(path);
+    } else if (showsArchive()) {
+        openInsideArchive(path);
+    } else if (archive::isAvailable() && archive::isArchiveName(entry.name)) {
+        // Un comprimido se abre como una carpeta más (SPEC §15).
+        navigateTo(archiveLocation(path, QString()));
     } else if (!QDesktopServices::openUrl(QUrl::fromLocalFile(path))) {
         emit openFailed(path);
     }
+}
+
+void BrowserPane::openInsideArchive(const QString &location)
+{
+    const QString archivePath = archivePathOf(location);
+    const QString inner = archiveInnerOf(location);
+    // Cada archivo abierto, en su propia carpeta temporal: dos con el mismo
+    // nombre de comprimidos distintos no se pisan.
+    const QString folder = QStandardPaths::writableLocation(QStandardPaths::TempLocation)
+        + QStringLiteral("/explorador-ultra-abiertos/")
+        + QString::fromLatin1(QCryptographicHash::hash((archivePath + QLatin1Char('\n') + inner).toUtf8(),
+                                                       QCryptographicHash::Sha1)
+                                  .toHex()
+                                  .left(12));
+    const QPointer<BrowserPane> self(this);
+    m_scheduler.submitForPaths(tasks::Category::General, tasks::Priority::UserInteraction, {archivePath},
+                               [self, archivePath, inner, folder](const tasks::CancelToken &cancel) {
+        const QString target = folder + QLatin1Char('/') + inner;
+        QString problem;
+        if (!QFileInfo::exists(target)) {
+            QDir().mkpath(folder);
+            archive::ExtractOptions options;
+            options.only = QStringList{inner};
+            const core::Result<archive::ExtractResult> extracted =
+                archive::extractArchive(archivePath, folder, options, cancel);
+            if (!extracted.ok()) {
+                problem = extracted.error().message;
+            } else if (!extracted.value().skipped.isEmpty()) {
+                problem = extracted.value().skipped.first();
+            }
+        }
+        QMetaObject::invokeMethod(qApp, [self, target, problem] {
+            if (!self) {
+                return;
+            }
+            if (!problem.isEmpty() || !QDesktopServices::openUrl(QUrl::fromLocalFile(target))) {
+                emit self->openFailed(target);
+            }
+        }, Qt::QueuedConnection);
+    });
 }
 
 void BrowserPane::openSelection()

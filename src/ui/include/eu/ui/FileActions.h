@@ -1,6 +1,7 @@
 // Explorador Ultra — SPDX-License-Identifier: GPL-3.0-or-later
 #pragma once
 
+#include "eu/archive/Archive.h"
 #include "eu/journal/Journal.h"
 #include "eu/ops/Engine.h"
 #include "eu/tasks/Scheduler.h"
@@ -29,6 +30,8 @@ enum class ActionKind {
     Discard,   ///< Darla por perdida: limpiar los restos y dejar lo ya hecho.
     RestoreTrash,   ///< Sacar elementos de la papelera a su sitio original.
     PurgeTrash,     ///< Eliminar para siempre elementos de la papelera.
+    Extract,        ///< Sacar de un comprimido.
+    Compress,       ///< Crear un comprimido.
 };
 
 /// Lo que pasó con una acción, ya de vuelta en el hilo de interfaz.
@@ -75,6 +78,14 @@ public:
     quint64 rename(const QString &path, const QString &newName);
     quint64 copy(const QStringList &sources, const QString &destinationDirectory, ops::CollisionPolicy policy);
     quint64 move(const QStringList &sources, const QString &destinationDirectory, ops::CollisionPolicy policy);
+    /// Extrae de `archivePath` lo que hay en `innerPaths` (vacío: todo) en una
+    /// carpeta nueva `folderName` dentro de `destinationDirectory`. Se quita
+    /// `innerFolder` del principio de las rutas (la carpeta de dentro donde
+    /// estaba el usuario). Nunca sobrescribe ni escribe fuera de la carpeta.
+    quint64 extract(const QString &archivePath, const QStringList &innerPaths, const QString &innerFolder,
+                    const QString &destinationDirectory, const QString &folderName);
+    /// Crea `outputPath` con `sources`. No sobrescribe.
+    quint64 compress(const QStringList &sources, const QString &outputPath, archive::Format format);
     quint64 trash(const QStringList &paths);
     quint64 deletePermanently(const QStringList &paths);
     /// Deshace la operación más reciente que se pueda deshacer.

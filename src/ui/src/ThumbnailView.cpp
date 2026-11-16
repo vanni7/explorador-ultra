@@ -6,6 +6,7 @@
 #include "eu/ui/DirectoryModel.h"
 #include "eu/ui/EntrySort.h"
 #include "eu/ui/InlinePlayer.h"
+#include "eu/ui/Locations.h"
 
 #include <QApplication>
 #include <QDir>
@@ -531,8 +532,9 @@ void ThumbnailView::resizeEvent(QResizeEvent *event)
 
 DropPlan ThumbnailView::planFor(const QDropEvent *event, int *targetRow) const
 {
-    if (m_model->path().isEmpty() || m_model->state() != DirectoryModel::State::Ready) {
-        return {};
+    if (m_model->path().isEmpty() || m_model->state() != DirectoryModel::State::Ready
+        || isArchiveLocation(m_model->path())) {
+        return {};   // dentro de un comprimido no se suelta nada
     }
     QString target = m_model->path();
     const QModelIndex index = indexAt(event->position().toPoint());

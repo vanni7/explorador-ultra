@@ -3,6 +3,7 @@
 
 #include "eu/ui/Locations.h"
 
+#include "eu/archive/Archive.h"
 #include "eu/core/SizeFormat.h"
 #include "eu/core/Version.h"
 #include "eu/ui/BrowserPane.h"
@@ -528,10 +529,13 @@ void MainWindow::updateEditActions()
     // Tampoco en los resultados de una búsqueda, pero ahí sí se puede copiar,
     // cortar o borrar lo encontrado.
     const bool inFolder = pane != nullptr && pane->showsFolder();
-    const bool canModify = inFolder && m_actions->isAvailable();
-    const bool canRemove = pane != nullptr && m_actions->isAvailable();
+    // Dentro de un comprimido se navega y se extrae, pero no se modifica ni
+    // se copia (lo copiado serían rutas que no existen en el disco).
+    const bool inArchive = pane != nullptr && pane->showsArchive();
+    const bool canModify = inFolder && !inArchive && m_actions->isAvailable();
+    const bool canRemove = pane != nullptr && !inArchive && m_actions->isAvailable();
     m_filterAction->setEnabled(inFolder);
-    m_searchAction->setEnabled(pane != nullptr);
+    m_searchAction->setEnabled(pane != nullptr && !inArchive);
     if (m_searchEdit != nullptr) {
         m_searchEdit->setEnabled(m_searchAction->isEnabled());
     }
@@ -539,7 +543,7 @@ void MainWindow::updateEditActions()
     const bool canPaste = !fileSelectionFrom(QGuiApplication::clipboard()->mimeData()).isEmpty();
 
     m_openAction->setEnabled(selected > 0);
-    m_copyAction->setEnabled(selected > 0);
+    m_copyAction->setEnabled(selected > 0 && !inArchive);
     m_cutAction->setEnabled(canRemove && selected > 0);
     m_pasteAction->setEnabled(canModify && canPaste);
     m_renameAction->setEnabled(canModify && selected == 1);
@@ -571,8 +575,46 @@ void MainWindow::showContextMenu(BrowserPane *pane, const QPoint &globalPosition
         menu.exec(globalPosition);
         return;
     }
+    if (pane->showsArchive()) {
+        // Dentro de un comprimido: abrir y sacar, nada más (SPEC §15).
+        const QString location = pane->currentPath();
+        const QString archivePath = archivePathOf(location);
+        const QString inner = archiveInnerOf(location);
+        if (pane->selectedCount() > 0) {
+            menu.addAction(m_openAction);
+            QStringList innerPaths;
+            for (const QString &path : pane->selectedPaths()) {
+                innerPaths.append(archiveInnerOf(path));
+            }
+            QAction *selected = menu.addAction(tr("Extraer lo seleccionado junto al comprimido"));
+            connect(selected, &QAction::triggered, this, [this, archivePath, innerPaths, inner] {
+                extractArchive(archivePath, innerPaths, inner);
+            });
+        }
+        QAction *all = menu.addAction(tr("Extraer todo junto al comprimido"));
+        connect(all, &QAction::triggered, this, [this, archivePath] { extractArchive(archivePath, {}, QString()); });
+        all->setEnabled(m_actions->isAvailable());
+        menu.exec(globalPosition);
+        return;
+    }
     if (pane->selectedCount() > 0) {
         menu.addAction(m_openAction);
+        const QStringList selected = pane->selectedPaths();
+        if (archive::isAvailable() && m_actions->isAvailable()) {
+            if (selected.size() == 1 && archive::isArchiveName(selected.first()) && QFileInfo(selected.first()).isFile()) {
+                QAction *here = menu.addAction(tr("Extraer aquí (en una carpeta nueva)"));
+                const QString archivePath = selected.first();
+                connect(here, &QAction::triggered, this, [this, archivePath] { extractArchive(archivePath, {}, QString()); });
+            }
+            QMenu *compress = menu.addMenu(tr("Comprimir"));
+            for (const auto &[format, name] : {std::pair{archive::Format::Zip, tr("En ZIP")},
+                                               std::pair{archive::Format::SevenZip, tr("En 7z")},
+                                               std::pair{archive::Format::TarGz, tr("En TAR.GZ")}}) {
+                QAction *action = compress->addAction(name);
+                connect(action, &QAction::triggered, this,
+                        [this, pane, format = format] { compressSelection(pane, format); });
+            }
+        }
         menu.addSeparator();
         menu.addAction(m_cutAction);
         menu.addAction(m_copyAction);
@@ -591,6 +633,57 @@ void MainWindow::showContextMenu(BrowserPane *pane, const QPoint &globalPosition
         menu.addAction(m_refreshAction);
     }
     menu.exec(globalPosition);
+}
+
+QString MainWindow::freeName(const QString &folder, const QString &stem, const QString &extension)
+{
+    QString name = stem + extension;
+    for (int i = 2; QFileInfo::exists(folder + QLatin1Char('/') + name) || QFileInfo(folder + QLatin1Char('/') + name).isSymLink();
+         ++i) {
+        name = QStringLiteral("%1 (%2)%3").arg(stem).arg(i).arg(extension);
+    }
+    return name;
+}
+
+void MainWindow::extractArchive(const QString &archivePath, const QStringList &innerPaths, const QString &innerFolder)
+{
+    if (!m_actions->isAvailable()) {
+        return;
+    }
+    // La carpeta nueva se llama como el comprimido, sin su extensión
+    // ("fotos.tar.gz" -> "fotos").
+    const QFileInfo info(archivePath);
+    QString stem = info.fileName();
+    const QString lower = stem.toLower();
+    bool stripped = false;
+    for (const char *double_ : {".tar.gz", ".tar.bz2", ".tar.xz", ".tar.zst"}) {
+        if (lower.endsWith(QLatin1String(double_))) {
+            stem.chop(qsizetype(qstrlen(double_)));
+            stripped = true;
+            break;
+        }
+    }
+    if (!stripped) {
+        stem = info.completeBaseName();
+    }
+    const QString folder = info.path();
+    const quint64 id = m_actions->extract(archivePath, innerPaths, innerFolder, folder, freeName(folder, stem, QString()));
+    m_requestedCounts.insert(id, 1);
+}
+
+void MainWindow::compressSelection(BrowserPane *pane, archive::Format format)
+{
+    const QStringList sources = pane->selectedPaths();
+    if (sources.isEmpty() || !pane->showsFolder() || pane->showsArchive() || !m_actions->isAvailable()) {
+        return;
+    }
+    // Un elemento: con su nombre; varios: "Comprimido".
+    const QFileInfo first(sources.first());
+    const QString stem = sources.size() == 1 ? (first.isDir() ? first.fileName() : first.completeBaseName())
+                                             : tr("Comprimido");
+    const QString folder = pane->currentPath();
+    const QString output = folder + QLatin1Char('/') + freeName(folder, stem, archive::extensionOf(format));
+    m_requestedCounts.insert(m_actions->compress(sources, output, format), 1);
 }
 
 void MainWindow::newFolder()
@@ -924,6 +1017,8 @@ void MainWindow::onActionProgressed(quint64 id, const ops::Progress &progress)
     case ActionKind::Delete: verb = tr("Eliminando"); break;
     case ActionKind::Undo:   verb = tr("Deshaciendo"); break;
     case ActionKind::Revert: verb = tr("Revirtiendo"); break;
+    case ActionKind::Extract: verb = tr("Extrayendo"); break;
+    case ActionKind::Compress: verb = tr("Comprimiendo"); break;
     default:                 verb = tr("Trabajando"); break;
     }
     QString text = progress.itemsTotal > 0
@@ -1036,13 +1131,30 @@ void MainWindow::onActionFinished(const ActionResult &result)
         case ActionKind::Discard:
             message = tr("Se descartó la operación interrumpida: %1").arg(result.undoneDescription);
             break;
+        case ActionKind::Extract:
+            if (outcome.ok() && !outcome.resultPaths.isEmpty()) {
+                message = tr("Extraído en «%1».").arg(QFileInfo(outcome.resultPaths.first()).fileName());
+            }
+            if (!outcome.skipped.isEmpty()) {
+                // Aquí lo omitido son rutas peligrosas, enlaces que salen o
+                // cifrados, no solo nombres repetidos.
+                message += tr(" %n elemento(s) omitido(s) por seguridad o porque no se podían extraer (detalle en el "
+                              "registro).",
+                              nullptr, int(outcome.skipped.size()));
+            }
+            break;
+        case ActionKind::Compress:
+            if (outcome.ok() && !outcome.resultPaths.isEmpty()) {
+                message = tr("Creado «%1».").arg(QFileInfo(outcome.resultPaths.first()).fileName());
+            }
+            break;
         case ActionKind::CreateFolder:
         case ActionKind::CreateFile:
         case ActionKind::Rename:
             break;   // el resultado está a la vista; no hace falta decir nada
         }
     }
-    if (!outcome.skipped.isEmpty()) {
+    if (!outcome.skipped.isEmpty() && result.kind != ActionKind::Extract) {
         message += tr(" %n omitido(s) porque ya existía(n) en el destino.", nullptr, int(outcome.skipped.size()));
     }
 
@@ -1718,7 +1830,11 @@ void MainWindow::updateTabTitle(BrowserPane *pane)
     }
     const QString path = pane->currentPath();
     QString title = pane->showsVolumes() ? tr("Unidades")
-        : pane->showsSearch() ? tr("Buscar: %1").arg(searchQueryOf(path)) : QDir(path).dirName();
+        : pane->showsSearch()            ? tr("Buscar: %1").arg(searchQueryOf(path))
+        : pane->showsArchive()
+            ? (archiveInnerOf(path).isEmpty() ? QFileInfo(archivePathOf(path)).fileName()
+                                              : archiveInnerOf(path).section(QLatin1Char('/'), -1))
+            : QDir(path).dirName();
     if (title.isEmpty()) {
         title = QDir::toNativeSeparators(path);   // raíces: "/" o "C:\"
     }

@@ -35,11 +35,11 @@ namespace eu::testsupport {
 /// Escribe un ZIP con estas entradas (los documentos de oficina lo son).
 inline bool writeZip(const QString &path, const QList<QPair<QString, QByteArray>> &entries)
 {
-    archive *zip = archive_write_new();
+    struct archive *zip = archive_write_new();
     archive_write_set_format_zip(zip);
     bool ok = archive_write_open_filename(zip, QFile::encodeName(path).constData()) == ARCHIVE_OK;
     for (const auto &[name, data] : entries) {
-        archive_entry *entry = archive_entry_new();
+        struct archive_entry *entry = archive_entry_new();
         archive_entry_set_pathname(entry, name.toUtf8().constData());
         archive_entry_set_size(entry, data.size());
         archive_entry_set_filetype(entry, AE_IFREG);

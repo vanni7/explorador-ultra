@@ -110,10 +110,41 @@ inline QString searchQueryOf(const QString &location)
     return searchSpecOf(location).query;
 }
 
+/// El interior de un archivo comprimido, como si fuera una carpeta (SPEC §15).
+/// `inner` es la carpeta de dentro ("" para la raíz del comprimido).
+inline QString archiveLocation(const QString &archivePath, const QString &inner)
+{
+    return QStringLiteral("comprimido:") + archivePath + searchSeparator + inner;
+}
+
+inline bool isArchiveLocation(const QString &path)
+{
+    return path.startsWith(QLatin1String("comprimido:")) && path.contains(searchSeparator);
+}
+
+/// El archivo comprimido de una ubicación de comprimido.
+inline QString archivePathOf(const QString &location)
+{
+    return location.mid(11, location.indexOf(searchSeparator) - 11);   // tras "comprimido:"
+}
+
+/// La carpeta de dentro, sin "/" al principio ni al final ("" es la raíz).
+inline QString archiveInnerOf(const QString &location)
+{
+    QString inner = location.mid(location.indexOf(searchSeparator) + 1);
+    while (inner.startsWith(QLatin1Char('/'))) {
+        inner.remove(0, 1);
+    }
+    while (inner.endsWith(QLatin1Char('/'))) {
+        inner.chop(1);
+    }
+    return inner;
+}
+
 /// true si no es una carpeta del disco.
 inline bool isVirtualLocation(const QString &path)
 {
-    return isVolumesLocation(path) || isSearchLocation(path);
+    return isVolumesLocation(path) || isSearchLocation(path) || isArchiveLocation(path);
 }
 
 } // namespace eu::ui

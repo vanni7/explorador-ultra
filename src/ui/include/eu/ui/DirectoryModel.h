@@ -132,6 +132,9 @@ signals:
 
 private:
     void startLoading(bool keepCurrentContent);
+    /// Lista lo que hay en una carpeta de dentro de un comprimido.
+    static core::Status listInsideArchive(const QString &location, const tasks::CancelToken &cancel,
+                                          std::vector<fs::Entry> *out);
     void cancelRunningTask();
     void retireCurrentTask();
     void onBatch(quint64 generation, std::vector<fs::Entry> batch);

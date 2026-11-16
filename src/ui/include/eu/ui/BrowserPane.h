@@ -67,6 +67,9 @@ public:
 
     /// true si la pestaña muestra los resultados de una búsqueda.
     bool showsSearch() const;
+    /// Se está viendo el interior de un archivo comprimido (SPEC §15): se
+    /// navega y se extrae, pero no se modifica.
+    bool showsArchive() const;
     /// true si muestra una carpeta del disco (ni unidades ni resultados).
     bool showsFolder() const { return !showsVolumes() && !showsSearch(); }
     enum class SearchState {
@@ -205,6 +208,9 @@ signals:
 private:
     void changePath(const QString &path, const QString &nameToSelect);
     void onActivated(const QModelIndex &index);
+    /// Saca a una carpeta temporal un archivo de dentro de un comprimido y lo
+    /// abre con su programa.
+    void openInsideArchive(const QString &location);
     void onModelStateChanged(DirectoryModel::State state);
     void rememberSelection();
     void restoreSelection();

@@ -367,7 +367,14 @@ core::Result<ExtractResult> extractArchive(const QString &archivePath, const QSt
         if (raw.isEmpty() || !wanted(raw)) {
             continue;
         }
-        const QString safe = safeRelativePath(raw);
+        QString relative = raw;
+        if (!options.stripPrefix.isEmpty()) {
+            if (!raw.startsWith(options.stripPrefix + QLatin1Char('/'))) {
+                continue;   // la propia carpeta que se quita, o algo de fuera de ella
+            }
+            relative = raw.mid(options.stripPrefix.size() + 1);
+        }
+        const QString safe = safeRelativePath(relative);
         if (safe.isEmpty()) {
             skip(raw, tr("su ruta sale de la carpeta de destino"));
             continue;

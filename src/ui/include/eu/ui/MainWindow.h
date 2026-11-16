@@ -224,6 +224,13 @@ private:
     QHash<int, QAction *> m_thumbnailSizeActions;   ///< Por tamaño en píxeles.
     int m_thumbnailSize = 160;
     void syncViewActions();
+    /// Extrae del comprimido (lo seleccionado dentro de él, o todo) en una
+    /// carpeta nueva junto al comprimido.
+    void extractArchive(const QString &archivePath, const QStringList &innerPaths, const QString &innerFolder);
+    /// Comprime lo seleccionado en la carpeta actual.
+    void compressSelection(BrowserPane *pane, archive::Format format);
+    /// Nombre libre en `folder` para `stem` + `extension` ("x", "x (2)"…).
+    static QString freeName(const QString &folder, const QString &stem, const QString &extension);
     bool m_splitterRestored = false;   ///< Había una disposición guardada de los paneles.
     bool m_firstShowDone = false;
     PreviewPanel *m_previewPanel = nullptr;

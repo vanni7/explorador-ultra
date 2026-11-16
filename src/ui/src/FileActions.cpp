@@ -169,6 +169,72 @@ quint64 FileActions::move(const QStringList &sources, const QString &destination
     }, QStringList(sources) << destinationDirectory);
 }
 
+quint64 FileActions::extract(const QString &archivePath, const QStringList &innerPaths, const QString &innerFolder,
+                             const QString &destinationDirectory, const QString &folderName)
+{
+    return start(ActionKind::Extract, destinationDirectory, tasks::Category::Transfer,
+                 [archivePath, innerPaths, innerFolder, destinationDirectory, folderName](const Context &context,
+                                                                                         ActionResult &result) {
+        // Siempre en una carpeta nueva: lo extraído nunca se mezcla con lo que
+        // ya hay ni pisa nada.
+        const QString target = destinationDirectory + QLatin1Char('/') + folderName;
+        if (!QDir().mkdir(target)) {
+            result.outcome.errors.append(core::Error{core::ErrorCode::AlreadyExists,
+                                                     QCoreApplication::translate("eu::ui", "No se pudo crear la carpeta"),
+                                                     target, 0});
+            return;
+        }
+        archive::ExtractOptions options;
+        options.only = innerPaths;
+        options.stripPrefix = innerFolder;
+        const core::Result<archive::ExtractResult> extracted = archive::extractArchive(
+            archivePath, target, options, context.cancel, [&context](qint64 bytes) {
+                if (context.progress) {
+                    ops::Progress progress;
+                    progress.bytesDone = bytes;
+                    context.progress(progress);
+                }
+            });
+        result.outcome.resultPaths.append(target);
+        if (!extracted.ok()) {
+            if (extracted.error().code == core::ErrorCode::Cancelled) {
+                result.outcome.cancelled = true;
+            } else {
+                result.outcome.errors.append(extracted.error());
+            }
+            return;
+        }
+        result.outcome.skipped = extracted.value().skipped;
+        for (const QString &skipped : extracted.value().skipped) {
+            qWarning("Extraer %s: omitido %s", qPrintable(archivePath), qPrintable(skipped));
+        }
+    }, {archivePath, destinationDirectory});
+}
+
+quint64 FileActions::compress(const QStringList &sources, const QString &outputPath, archive::Format format)
+{
+    return start(ActionKind::Compress, QFileInfo(outputPath).path(), tasks::Category::Transfer,
+                 [sources, outputPath, format](const Context &context, ActionResult &result) {
+        const core::Status created = archive::createArchive(outputPath, format, sources, context.cancel,
+                                                            [&context](qint64 bytes) {
+            if (context.progress) {
+                ops::Progress progress;
+                progress.bytesDone = bytes;
+                context.progress(progress);
+            }
+        });
+        if (!created.ok()) {
+            if (created.error().code == core::ErrorCode::Cancelled) {
+                result.outcome.cancelled = true;
+            } else {
+                result.outcome.errors.append(created.error());
+            }
+            return;
+        }
+        result.outcome.resultPaths.append(outputPath);
+    }, QStringList(sources) << outputPath);
+}
+
 quint64 FileActions::trash(const QStringList &paths)
 {
     // Enviar a la papelera es un renombrado por elemento: rápido, no ocupa un
