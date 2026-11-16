@@ -1,6 +1,7 @@
 // Explorador Ultra — SPDX-License-Identifier: GPL-3.0-or-later
 #include "eu/search/Searcher.h"
 
+#include "eu/content/TextExtractor.h"
 #include "eu/fs/DirectoryLister.h"
 
 #include <QDir>
@@ -45,11 +46,14 @@ QString childPath(const QString &directory, const QString &name)
     return directory.endsWith(QLatin1Char('/')) ? directory + name : directory + QLatin1Char('/') + name;
 }
 
-/// Lee un archivo como texto la primera vez que la consulta lo pide.
+/// Saca el texto de un archivo la primera vez que la consulta lo pide.
 class FileContent : public ContentSource
 {
 public:
-    FileContent(QString path, qint64 maxBytes) : m_path(std::move(path)), m_maxBytes(maxBytes) {}
+    FileContent(QString path, const SearchOptions &options, const tasks::CancelToken &cancel)
+        : m_path(std::move(path)), m_options(options), m_cancel(cancel)
+    {
+    }
 
     const QString *text() override
     {
@@ -65,40 +69,30 @@ public:
 private:
     bool load()
     {
-        // Solo archivos corrientes: abrir una tubería o un dispositivo
-        // podría dejar la búsqueda esperando para siempre.
+        // Solo archivos corrientes de un tipo con texto: abrir una tubería o
+        // un dispositivo podría dejar la búsqueda esperando para siempre, y un
+        // binario no tiene nada que buscar.
         const QFileInfo info(m_path);
-        if (!info.isFile() || info.size() > m_maxBytes) {
+        const content::TextSource source = content::textSourceFor(m_path);
+        if (!info.isFile() || source == content::TextSource::None) {
             return false;
         }
-        QFile file(m_path);
-        if (!file.open(QIODevice::ReadOnly)) {
+        if (source == content::TextSource::Plain && info.size() > m_options.maxContentBytes) {
             return false;
         }
         m_opened = true;
-        const QByteArray data = file.read(m_maxBytes + 1);
-        if (data.size() > m_maxBytes) {
-            return false;   // creció mientras se leía
-        }
-        const bool utf16 = data.startsWith("\xff\xfe") || data.startsWith("\xfe\xff");
-        if (utf16) {
-            m_text = QStringDecoder(QStringDecoder::Utf16).decode(data);
-            return true;
-        }
-        // Un byte nulo al principio delata un binario (PDF, imagen, ZIP…).
-        if (data.left(8192).contains('\0')) {
+        const core::Result<QString> text = m_options.textProvider ? m_options.textProvider(m_path, m_cancel)
+                                                                  : content::extractText(m_path, m_cancel);
+        if (!text.ok()) {
             return false;
         }
-        QStringDecoder utf8(QStringDecoder::Utf8);
-        m_text = utf8.decode(data);
-        if (utf8.hasError()) {
-            m_text = QString::fromLatin1(data);   // texto antiguo de Windows
-        }
+        m_text = text.value();
         return true;
     }
 
     QString m_path;
-    qint64 m_maxBytes;
+    const SearchOptions &m_options;
+    const tasks::CancelToken &m_cancel;
     QString m_text;
     bool m_loaded = false;
     bool m_ok = false;
@@ -207,6 +201,9 @@ SearchSummary searchTree(const QStringList &roots, const Query &query, const Sea
                     }
                 }
                 bool matched = false;
+                QString snippetText;
+                int snippetStart = 0;
+                int snippetLength = 0;
                 if (readsContent) {
                     // Leer archivos es lento: se atiende la pausa y la
                     // cancelación en cada uno, y el avance sigue saliendo.
@@ -216,18 +213,31 @@ SearchSummary searchTree(const QStringList &roots, const Query &query, const Sea
                     if (cancel.isCancelled()) {
                         return;
                     }
-                    FileContent content(childPath(folder.path, entry.name), options.maxContentBytes);
+                    FileContent content(childPath(folder.path, entry.name), options, cancel);
                     matched = query.matches(itemFrom(entry), &content);
                     if (content.wasOpened()) {
                         ++progress.filesRead;
                         deliver(false);
+                    }
+                    if (matched && content.wasOpened() && content.text() != nullptr) {
+                        // El trozo con la primera coincidencia, para enseñarlo.
+                        for (const QString &term : query.contentTerms()) {
+                            const content::Snippet snippet =
+                                content::snippetAround(*content.text(), term, query.caseSensitivity());
+                            if (!snippet.text.isEmpty()) {
+                                snippetText = snippet.text;
+                                snippetStart = snippet.start;
+                                snippetLength = snippet.length;
+                                break;
+                            }
+                        }
                     }
                 } else {
                     matched = query.matches(entry);
                 }
                 if (matched) {
                     ++progress.hits;
-                    batch.push_back({folder.path, std::move(entry)});
+                    batch.push_back({folder.path, std::move(entry), snippetText, snippetStart, snippetLength});
                     if (progress.hits >= options.maxHits) {
                         summary.truncated = true;
                     }

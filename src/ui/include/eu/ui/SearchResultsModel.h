@@ -24,6 +24,12 @@ class SearchResultsModel : public QAbstractTableModel
     Q_OBJECT
 
 public:
+    /// Dónde está la coincidencia dentro del fragmento (columna Fragmento).
+    enum Role {
+        SnippetStartRole = Qt::UserRole + 40,
+        SnippetLengthRole,
+    };
+
     enum Column {
         NameColumn,
         FolderColumn,
@@ -31,6 +37,7 @@ public:
         TypeColumn,
         ModifiedColumn,
         OriginColumn,   ///< "Índice" o "Disco": de dónde sale el resultado.
+        SnippetColumn,  ///< En las búsquedas en contenido: el trozo de texto con la coincidencia.
         ColumnCount,
     };
 

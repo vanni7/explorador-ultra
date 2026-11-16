@@ -139,6 +139,16 @@ No medido: escrituras (copias dentro del mismo disco), memorias USB, unidades de
 
 El coste es arrancar el auxiliar una vez por hilo y pasar cada imagen por un PNG sin comprimir. Se acepta a cambio de que un archivo dañado no cierre la aplicación. Medido con un límite de memoria `RLIMIT_DATA` de 3 GB en el auxiliar; con `RLIMIT_AS` no se abría ningún PDF (el lector reserva mucho espacio de direcciones que no usa).
 
+### Búsqueda en contenido (Fase 4, 16-nov)
+`eu-bench grep <carpeta> <texto>`: lee cada documento en el proceso auxiliar, un hilo, caché caliente.
+
+| Carpeta | Texto | Resultado | Tiempo |
+|---|---|---|---|
+| `PDFS/WALTER RISO` (48 libros en PDF, SSD) | «felicidad» | 42 libros | 20,0 s |
+| ídem | «afrontamiento» (partida con guion en muchos) | 32 libros | 19,4 s |
+
+Unos 0,4 s por libro: es sacar el texto entero de cada PDF. Repetir la búsqueda cuesta lo mismo; para eso es el índice de texto completo (paso 2c).
+
 ### No medido todavía (pendiente)
 - Tiempo de apertura real de una carpeta en Archivos de GNOME (no hay forma fiable de automatizarlo; `gio list` es una aproximación de su motor, no de su interfaz).
 - Caché fría, HDD, USB y unidades de red.

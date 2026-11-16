@@ -1,6 +1,8 @@
 // Explorador Ultra — SPDX-License-Identifier: GPL-3.0-or-later
 #include "eu/search/Searcher.h"
 
+#include "../support/TestMedia.h"
+
 #include <QDir>
 #include <QElapsedTimer>
 #include <QFile>
@@ -205,10 +207,30 @@ private slots:
         QCOMPARE(found.paths, expected);
         QVERIFY(found.summary.progress.filesRead >= 5);
 
-        // Con la extensión por delante solo se abren los que la cumplen.
+        // Un tipo sin texto (binario) ni se abre, aunque la extensión lo pida.
         const Collected narrowed = run({root}, QStringLiteral("content:riso ext:dat"), options);
         QVERIFY(narrowed.paths.isEmpty());
-        QCOMPARE(narrowed.summary.progress.filesRead, 1);
+        QCOMPARE(narrowed.summary.progress.filesRead, 0);
+
+        // Cada resultado trae el trozo de texto con la coincidencia.
+        std::vector<Hit> hits;
+        searchTree({root}, Query::parse(QStringLiteral("content:\"walter riso\"")).value(), options, {}, nullptr,
+                   [&](std::vector<Hit> &&batch, const SearchProgress &) {
+            hits.insert(hits.end(), batch.begin(), batch.end());
+        });
+        QCOMPARE(int(hits.size()), 1);
+        QCOMPARE(hits.front().snippet.mid(hits.front().snippetStart, hits.front().snippetLength),
+                 QStringLiteral("Walter Riso"));
+
+#ifdef EU_HAVE_LIBARCHIVE
+        // También dentro de los documentos de oficina.
+        QVERIFY(eu::testsupport::writeZip(root + QStringLiteral("/notas/informe.docx"), {
+            {QStringLiteral("word/document.xml"),
+             "<?xml version=\"1.0\"?><w:document xmlns:w=\"w\"><w:body><w:p><w:r><w:t>Apuntes de Riso</w:t>"
+             "</w:r></w:p></w:body></w:document>"}}));
+        const Collected documents = run({root}, QStringLiteral("content:\"apuntes de riso\""), options);
+        QCOMPARE(documents.paths, QStringList{root + QStringLiteral("/notas/informe.docx")});
+#endif
 
         QCOMPARE(run({root}, QStringLiteral("content:\"Walter Riso\""), options).paths,
                  QStringList{root + QStringLiteral("/notas/lista.txt")});

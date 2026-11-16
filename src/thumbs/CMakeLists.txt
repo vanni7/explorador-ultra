@@ -16,7 +16,7 @@ add_library(eu_thumbs STATIC
 add_library(eu::thumbs ALIAS eu_thumbs)
 
 target_include_directories(eu_thumbs PUBLIC include)
-target_link_libraries(eu_thumbs PUBLIC eu::core eu::tasks eu::fs eu::meta Qt6::Gui)
+target_link_libraries(eu_thumbs PUBLIC eu::core eu::tasks eu::fs eu::meta eu::content Qt6::Gui)
 eu_target_defaults(eu_thumbs)
 
 # Bibliotecas opcionales: detectadas en cmake/EuOptionalDeps.cmake.

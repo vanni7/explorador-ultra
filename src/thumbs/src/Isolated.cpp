@@ -1,6 +1,8 @@
 // Explorador Ultra — SPDX-License-Identifier: GPL-3.0-or-later
 #include "eu/thumbs/Isolated.h"
 
+#include "eu/content/TextExtractor.h"
+
 #include <QCoreApplication>
 #include <QDir>
 #include <QElapsedTimer>
@@ -104,6 +106,34 @@ public:
         return sections;
     }
 
+    core::Result<QString> text(const QString &path, const tasks::CancelToken &cancel)
+    {
+        if (!ensureRunning()) {
+            return content::extractText(path, cancel);
+        }
+        const QString out = m_scratch->filePath(QStringLiteral("texto.txt"));
+        QFile::remove(out);
+        const core::Result<QJsonObject> reply =
+            ask({{QStringLiteral("op"), QStringLiteral("text")}, {QStringLiteral("path"), path},
+                 {QStringLiteral("out"), out}},
+                path, cancel);
+        if (!reply.ok()) {
+            return reply.error();
+        }
+        if (!reply.value().value(QStringLiteral("ok")).toBool()) {
+            return core::Error{core::ErrorCode(reply.value().value(QStringLiteral("code")).toInt(int(core::ErrorCode::Unknown))),
+                               reply.value().value(QStringLiteral("message")).toString(), path, 0};
+        }
+        QFile file(out);
+        if (!file.open(QIODevice::ReadOnly)) {
+            return core::Error{core::ErrorCode::IoError, tr("No se pudo leer el texto extraído"), path, 0};
+        }
+        const QString text = QString::fromUtf8(file.readAll());
+        file.close();
+        QFile::remove(out);
+        return text;
+    }
+
     core::Result<QImage> render(const ThumbnailRequest &request, const tasks::CancelToken &cancel)
     {
         if (!ensureRunning()) {
@@ -195,6 +225,19 @@ bool hasThumbnailHelper()
 void setThumbnailHelperTimeout(std::chrono::milliseconds timeout)
 {
     s_timeoutMs = timeout.count();
+}
+
+core::Result<QString> extractTextIsolated(const QString &path, const tasks::CancelToken &cancel)
+{
+    if (cancel.isCancelled()) {
+        return core::Error{core::ErrorCode::Cancelled, tr("Cancelado"), path, 0};
+    }
+    // El texto plano se lee aquí: no hay decodificador que pueda romperse y
+    // es lo más abundante en una búsqueda.
+    if (content::textSourceFor(path) == content::TextSource::Plain) {
+        return content::extractText(path, cancel);
+    }
+    return helperForThisThread().text(path, cancel);
 }
 
 QList<meta::Section> readMetadataIsolated(const QString &path, const tasks::CancelToken &cancel)

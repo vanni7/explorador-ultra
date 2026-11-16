@@ -14,6 +14,7 @@
 //   Metadatos: {"op":"meta","path":"…"}
 //              -> {"ok":true,"sections":[{"title":"Cámara","fields":[["ISO","200"],…]}]}
 
+#include "eu/content/TextExtractor.h"
 #include "eu/meta/Metadata.h"
 #include "eu/thumbs/Thumbnail.h"
 
@@ -83,6 +84,23 @@ int main(int argc, char *argv[])
         }
         if (!hangOn.isEmpty() && path.contains(hangOn)) {
             QThread::sleep(3600);
+        }
+        if (request.value(QStringLiteral("op")).toString() == QLatin1String("text")) {
+            // Texto: {"op":"text","path":"…","out":"…"} -> el texto en UTF-8 en "out".
+            const eu::core::Result<QString> text = eu::content::extractText(path, {});
+            if (!text.ok()) {
+                reply({{QStringLiteral("ok"), false}, {QStringLiteral("code"), int(text.error().code)},
+                       {QStringLiteral("message"), text.error().message}});
+                continue;
+            }
+            QSaveFile file(request.value(QStringLiteral("out")).toString());
+            if (!file.open(QIODevice::WriteOnly) || file.write(text.value().toUtf8()) < 0 || !file.commit()) {
+                reply({{QStringLiteral("ok"), false}, {QStringLiteral("code"), int(eu::core::ErrorCode::IoError)},
+                       {QStringLiteral("message"), QStringLiteral("No se pudo escribir el texto")}});
+                continue;
+            }
+            reply({{QStringLiteral("ok"), true}});
+            continue;
         }
         if (request.value(QStringLiteral("op")).toString() == QLatin1String("meta")) {
             // Metadatos: {"op":"meta","path":"…"} -> {"ok":true,"sections":[{"title":…,"fields":[[l,v],…]}]}

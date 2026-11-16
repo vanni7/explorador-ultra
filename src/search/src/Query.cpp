@@ -9,6 +9,7 @@
 #include <QSet>
 
 #include <algorithm>
+#include <functional>
 #include <limits>
 #include <vector>
 
@@ -1207,6 +1208,19 @@ core::Result<Query> Query::parse(const QString &text, const QueryOptions &option
     query.m_unavailable = parser.unavailable();
     query.m_text = text;
     query.m_usesContent = query.m_root != nullptr && nodeUsesContent(*query.m_root);
+    query.m_caseSensitivity = options.caseSensitive ? Qt::CaseSensitive : Qt::CaseInsensitive;
+    if (query.m_root != nullptr) {
+        // Los textos de contenido de la consulta, salvo los negados.
+        const std::function<void(const Query::Node &, bool)> collect = [&](const Query::Node &node, bool negated) {
+            if (node.kind == Kind::Content && !negated && !node.text.isEmpty()) {
+                query.m_contentTerms.append(node.text);
+            }
+            for (const NodePtr &child : node.children) {
+                collect(*child, negated != (node.kind == Kind::Not));
+            }
+        };
+        collect(*query.m_root, false);
+    }
     query.m_nameHints = query.m_root != nullptr ? nameHintsOf(*query.m_root) : QStringList();
     return query;
 }

@@ -79,6 +79,10 @@ public:
     /// true si la consulta mira dentro de los archivos (`content:` o términos
     /// con `termsInContent`): hay que evaluarla con un ContentSource.
     bool usesContent() const { return m_usesContent; }
+    /// Los textos que se buscan dentro de los archivos (para mostrar un
+    /// fragmento con la coincidencia), en el orden de la consulta.
+    QStringList contentTerms() const { return m_contentTerms; }
+    Qt::CaseSensitivity caseSensitivity() const { return m_caseSensitivity; }
 
     /// Textos de los que el nombre de todo elemento que cumpla la consulta
     /// contiene con seguridad al menos uno (sin distinguir mayúsculas). Vacío
@@ -101,6 +105,8 @@ private:
     QStringList m_unavailable;
     QString m_text;
     bool m_usesContent = false;
+    QStringList m_contentTerms;
+    Qt::CaseSensitivity m_caseSensitivity = Qt::CaseInsensitive;
     QStringList m_nameHints;
 };
 

@@ -21,6 +21,11 @@ struct Hit
 {
     QString directory;   ///< Carpeta que lo contiene (ruta completa, con "/").
     fs::Entry entry;
+    /// En las búsquedas en contenido: el trozo de texto con la coincidencia,
+    /// y dónde está ella dentro del trozo (para resaltarla).
+    QString snippet;
+    int snippetStart = 0;
+    int snippetLength = 0;
 
     QString path() const;
 };
@@ -46,8 +51,13 @@ struct SearchOptions
     bool crossDevices = false;
     /// Bajar a las subcarpetas. Sin esto solo se mira dentro de cada raíz.
     bool recursive = true;
-    /// Al buscar en el contenido, los archivos mayores que esto no se leen.
+    /// Al buscar en el contenido, los archivos de texto mayores que esto no
+    /// se leen (los documentos tienen su propio tope en content::ExtractLimits).
     qint64 maxContentBytes = 20 * 1000 * 1000;
+    /// Quién da el texto de un archivo para buscar en él. Vacío: se saca en
+    /// este proceso con content::extractText. La interfaz pone uno que lee
+    /// los documentos en el proceso auxiliar (un PDF dañado no la cierra).
+    std::function<core::Result<QString>(const QString &, const tasks::CancelToken &)> textProvider;
     /// Tope de resultados. Al alcanzarlo la búsqueda termina y se marca
     /// `truncated`: una consulta que lo cumple todo no debe agotar la memoria.
     qint64 maxHits = 200000;

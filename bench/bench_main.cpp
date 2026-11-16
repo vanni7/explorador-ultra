@@ -8,6 +8,7 @@
 //   eu-bench copy    <origen> <carpetaDestino>   compara formas de copiar un archivo grande
 //   eu-bench walk    <carpeta> [carpeta…]   recorre los árboles a la vez (un hilo cada uno)
 //   eu-bench yield   <archivo-grande> <carpeta>   listar mientras se lee, cediendo o no el disco
+//   eu-bench grep    <carpeta> <texto>  busca el texto dentro de los documentos (aislado)
 //   eu-bench thumbs  <carpeta> [lado]   miniaturas de una carpeta, en el proceso y aisladas
 //   eu-bench index   <carpeta> <archivo.db> [consulta…]   construye el índice y busca en él
 //
@@ -18,6 +19,7 @@
 #include "eu/fs/DirectoryLister.h"
 #include "eu/fs/Volumes.h"
 #include "eu/index/Index.h"
+#include "eu/search/Searcher.h"
 #include "eu/thumbs/Isolated.h"
 #include "eu/thumbs/Thumbnail.h"
 #include "eu/tasks/Scheduler.h"
@@ -461,6 +463,34 @@ int commandYield(const QString &bigFile, const QString &folder)
     return 0;
 }
 
+/// Busca un texto dentro de los documentos de una carpeta y sus subcarpetas,
+/// leyéndolos en el proceso auxiliar como hace la aplicación.
+int commandGrep(const QString &folder, const QString &text)
+{
+    const auto query = eu::search::Query::parse(QStringLiteral("content:\"%1\"").arg(text));
+    eu::search::SearchOptions options;
+    options.textProvider = [](const QString &path, const eu::tasks::CancelToken &cancel) {
+        return eu::thumbs::extractTextIsolated(path, cancel);
+    };
+    QElapsedTimer timer;
+    timer.start();
+    QStringList found;
+    const eu::search::SearchSummary summary = eu::search::searchTree(
+        {folder}, query.value(), options, {}, nullptr, [&](std::vector<eu::search::Hit> &&hits, const eu::search::SearchProgress &) {
+            for (const eu::search::Hit &hit : hits) {
+                found.append(hit.entry.name + QStringLiteral("  →  ") + hit.snippet);
+            }
+        });
+    report(QStringLiteral("buscar en el contenido «%1»").arg(text), timer.nsecsElapsed(),
+           QStringLiteral("%1 resultados; %2 archivos leídos; %3 carpetas")
+               .arg(summary.progress.hits).arg(summary.progress.filesRead).arg(summary.progress.foldersScanned));
+    for (const QString &line : std::as_const(found).mid(0, 5)) {
+        out() << "    " << line << '\n';
+    }
+    out().flush();
+    return 0;
+}
+
 /// Genera las miniaturas de los archivos de una carpeta dos veces: en este
 /// proceso y en el auxiliar aislado, para saber cuánto cuesta aislar.
 int commandThumbs(const QString &folder, int side)
@@ -574,6 +604,9 @@ int main(int argc, char *argv[])
     }
     if (command == QStringLiteral("copy") && arguments.size() == 4) {
         return commandCopy(arguments[2], arguments[3]);
+    }
+    if (command == QStringLiteral("grep") && arguments.size() == 4) {
+        return commandGrep(QDir::cleanPath(arguments[2]), arguments[3]);
     }
     if (command == QStringLiteral("thumbs") && arguments.size() >= 3) {
         return commandThumbs(QDir::cleanPath(arguments[2]), arguments.size() >= 4 ? arguments[3].toInt() : 256);

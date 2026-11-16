@@ -8,5 +8,5 @@ add_library(eu_search STATIC
 add_library(eu::search ALIAS eu_search)
 
 target_include_directories(eu_search PUBLIC include)
-target_link_libraries(eu_search PUBLIC eu::core eu::fs Qt6::Core)
+target_link_libraries(eu_search PUBLIC eu::core eu::fs eu::content Qt6::Core)
 eu_target_defaults(eu_search)

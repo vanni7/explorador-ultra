@@ -2,6 +2,7 @@
 #include "eu/ui/BrowserPane.h"
 #include "eu/archive/Archive.h"
 #include "eu/ui/ThumbnailView.h"
+#include "eu/thumbs/Isolated.h"
 
 #include <utility>
 
@@ -90,6 +91,61 @@ public:
 
 private:
     DirectoryModel *m_model;
+};
+
+/// Pinta el fragmento de una búsqueda en contenido con la coincidencia en
+/// negrita sobre el color de resaltado.
+class SnippetDelegate : public QStyledItemDelegate
+{
+public:
+    using QStyledItemDelegate::QStyledItemDelegate;
+
+    void paint(QPainter *painter, const QStyleOptionViewItem &option, const QModelIndex &index) const override
+    {
+        QStyleOptionViewItem opt = option;
+        initStyleOption(&opt, index);
+        const QString text = opt.text;
+        opt.text.clear();
+        const QWidget *widget = opt.widget;
+        QStyle *style = widget ? widget->style() : QApplication::style();
+        style->drawControl(QStyle::CE_ItemViewItem, &opt, painter, widget);
+        if (text.isEmpty()) {
+            return;
+        }
+        const int start = qBound(0, index.data(SearchResultsModel::SnippetStartRole).toInt(), int(text.size()));
+        const int length = qBound(0, index.data(SearchResultsModel::SnippetLengthRole).toInt(), int(text.size()) - start);
+        const QRect area = opt.rect.adjusted(4, 0, -4, 0);
+        painter->save();
+        painter->setClipRect(area);
+        const bool selected = opt.state & QStyle::State_Selected;
+        const QColor normal = opt.palette.color(selected ? QPalette::HighlightedText : QPalette::Text);
+        QFont bold = opt.font;
+        bold.setBold(true);
+        const QFontMetrics regularMetrics(opt.font);
+        const QFontMetrics boldMetrics(bold);
+        int x = area.left();
+        const int baseline = area.top() + (area.height() + regularMetrics.ascent() - regularMetrics.descent()) / 2;
+        const auto piece = [&](const QString &part, bool match) {
+            if (part.isEmpty()) {
+                return;
+            }
+            const QFontMetrics &metrics = match ? boldMetrics : regularMetrics;
+            const int width = metrics.horizontalAdvance(part);
+            if (match) {
+                QColor mark = opt.palette.color(QPalette::Highlight);
+                mark.setAlpha(selected ? 120 : 70);
+                painter->fillRect(QRect(x - 1, area.top() + 2, width + 2, area.height() - 4), mark);
+            }
+            painter->setFont(match ? bold : opt.font);
+            painter->setPen(normal);
+            painter->drawText(x, baseline, part);
+            x += width;
+        };
+        piece(text.left(start), false);
+        piece(text.mid(start, length), true);
+        piece(text.mid(start + length), false);
+        painter->restore();
+    }
 };
 
 /// La lista de archivos, con arrastrar y soltar y selección con recuadro.
@@ -463,6 +519,9 @@ BrowserPane::BrowserPane(tasks::Scheduler &scheduler, fs::DirectoryWatcher &watc
     m_resultsView->header()->resizeSection(SearchResultsModel::TypeColumn, 170);
     m_resultsView->header()->resizeSection(SearchResultsModel::ModifiedColumn, 150);
     m_resultsView->header()->resizeSection(SearchResultsModel::OriginColumn, 70);
+    m_resultsView->header()->resizeSection(SearchResultsModel::SnippetColumn, 360);
+    m_resultsView->setItemDelegateForColumn(SearchResultsModel::SnippetColumn, new SnippetDelegate(m_resultsView));
+    m_resultsView->setColumnHidden(SearchResultsModel::SnippetColumn, true);
 
     auto *searchLayout = new QVBoxLayout(m_searchPage);
     searchLayout->setContentsMargins(0, 0, 0, 0);
@@ -964,7 +1023,13 @@ void BrowserPane::startSearch()
     search::SearchOptions options;
     options.includeHidden = m_model->showHidden();
     options.recursive = spec.scope != SearchScope::Folder;
+    // El texto de PDF y documentos se saca en el proceso auxiliar.
+    options.textProvider = [](const QString &path, const tasks::CancelToken &cancel) {
+        return thumbs::extractTextIsolated(path, cancel);
+    };
     m_searchReadsContent = parsedQuery.value().usesContent();
+    // La columna del fragmento, solo cuando se busca en el contenido.
+    m_resultsView->setColumnHidden(SearchResultsModel::SnippetColumn, !m_searchReadsContent);
 
     // El índice de cada carpeta de partida, si lo tiene. Si alguna no lo
     // tiene, o el índice no puede contestar esta consulta, se recorre el disco.

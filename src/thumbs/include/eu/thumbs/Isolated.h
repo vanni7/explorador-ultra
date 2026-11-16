@@ -24,6 +24,11 @@ core::Result<QImage> renderThumbnailIsolated(const ThumbnailRequest &request, co
 /// viene vacía. Sin auxiliar, se lee en este proceso.
 QList<meta::Section> readMetadataIsolated(const QString &path, const tasks::CancelToken &cancel);
 
+/// El texto de un documento para buscar en él (content::extractText), leído
+/// en el proceso auxiliar si no es texto plano: un PDF o un DOCX dañados no
+/// cierran la aplicación.
+core::Result<QString> extractTextIsolated(const QString &path, const tasks::CancelToken &cancel);
+
 /// true si está el auxiliar (si no, renderThumbnailIsolated no aísla).
 bool hasThumbnailHelper();
 

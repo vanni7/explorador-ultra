@@ -355,7 +355,13 @@ core::Result<QString> extractText(const QString &path, const tasks::CancelToken 
             if (cancel.isCancelled()) {
                 return core::Error{core::ErrorCode::Cancelled, tr("Cancelado"), path, 0};
             }
-            text += document.getAllText(page).text();
+            QString pageText = document.getAllText(page).text();
+            // PDFium marca con U+FFFE los guiones de fin de línea y algunos PDF
+            // traen guiones blandos (U+00AD): se quitan para que las palabras
+            // partidas se encuentren enteras ("afron-tamiento").
+            pageText.remove(QChar(0xFFFE));
+            pageText.remove(QChar(0x00AD));
+            text += pageText;
             text += QLatin1Char('\n');
         }
 #endif
