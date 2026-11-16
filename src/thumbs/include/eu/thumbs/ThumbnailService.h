@@ -8,6 +8,8 @@
 #include <QObject>
 #include <QSet>
 
+#include <memory>
+
 namespace eu::thumbs {
 
 /// Pide miniaturas en segundo plano y avisa cuando están (SPEC §5.5).
@@ -20,7 +22,9 @@ class ThumbnailService : public QObject
     Q_OBJECT
 
 public:
-    ThumbnailService(tasks::Scheduler &scheduler, ThumbnailCache &cache, QObject *parent = nullptr);
+    /// La caché es compartida: una tarea que aún esté generando una miniatura
+    /// cuando se destruye el servicio (o la ventana) la sigue teniendo.
+    ThumbnailService(tasks::Scheduler &scheduler, std::shared_ptr<ThumbnailCache> cache, QObject *parent = nullptr);
     ~ThumbnailService() override;
 
     /// Si está en memoria la devuelve ya. Si no, la pide (salvo que ya esté
@@ -34,7 +38,7 @@ public:
     void cancelAll();
 
     int pendingCount() const { return int(m_pending.size()); }
-    ThumbnailCache &cache() { return m_cache; }
+    ThumbnailCache &cache() { return *m_cache; }
 
 signals:
     /// La miniatura de `path` ya está en la caché (o falló: entonces el
@@ -51,7 +55,7 @@ private:
     void onFinished(const QString &key, quint64 id);
 
     tasks::Scheduler &m_scheduler;
-    ThumbnailCache &m_cache;
+    std::shared_ptr<ThumbnailCache> m_cache;
     QHash<QString, Pending> m_pending;   ///< Por clave de la caché.
     quint64 m_lastId = 0;
 };

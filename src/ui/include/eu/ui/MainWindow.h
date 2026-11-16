@@ -214,7 +214,7 @@ private:
     QAction *m_searchAction = nullptr;
     QLineEdit *m_searchEdit = nullptr;
     index::IndexService *m_indexService = nullptr;
-    std::unique_ptr<thumbs::ThumbnailCache> m_thumbnailCache;
+    std::shared_ptr<thumbs::ThumbnailCache> m_thumbnailCache;
     thumbs::ThumbnailService *m_thumbnailService = nullptr;
     QAction *m_detailsAction = nullptr;
     QAction *m_thumbnailsAction = nullptr;

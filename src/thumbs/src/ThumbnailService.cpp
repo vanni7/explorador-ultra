@@ -6,8 +6,9 @@
 
 namespace eu::thumbs {
 
-ThumbnailService::ThumbnailService(tasks::Scheduler &scheduler, ThumbnailCache &cache, QObject *parent)
-    : QObject(parent), m_scheduler(scheduler), m_cache(cache)
+ThumbnailService::ThumbnailService(tasks::Scheduler &scheduler, std::shared_ptr<ThumbnailCache> cache,
+                                   QObject *parent)
+    : QObject(parent), m_scheduler(scheduler), m_cache(std::move(cache))
 {
 }
 
@@ -18,7 +19,7 @@ ThumbnailService::~ThumbnailService()
 
 ThumbnailCache::Entry ThumbnailService::request(const ThumbnailRequest &request)
 {
-    ThumbnailCache::Entry entry = m_cache.lookupMemory(request);
+    ThumbnailCache::Entry entry = m_cache->lookupMemory(request);
     if (entry.state != ThumbnailCache::State::Missing) {
         return entry;
     }
@@ -31,7 +32,9 @@ ThumbnailCache::Entry ThumbnailService::request(const ThumbnailRequest &request)
     }
     const QPointer<ThumbnailService> self(this);
     const quint64 id = ++m_lastId;
-    ThumbnailCache *cache = &m_cache;   // vive más que el servicio (lo crea quien crea el servicio)
+    // La tarea guarda su propia referencia a la caché: puede seguir corriendo
+    // cuando el servicio ya no existe (se cierra la ventana a mitad).
+    std::shared_ptr<ThumbnailCache> cache = m_cache;
     // Disco y decodificación en una tarea; en un disco lento cede el paso a
     // abrir carpetas, como el resto del trabajo de fondo.
     // Lo lento (documentos que pasan por LibreOffice, videos) va detrás de

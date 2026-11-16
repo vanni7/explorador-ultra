@@ -527,8 +527,9 @@ private slots:
     void serviceGeneratesOnceAndNotifies()
     {
         QTemporaryDir cacheDir;
-        ThumbnailCache cache(cacheDir.path());
-        ThumbnailService service(m_scheduler, cache);
+        auto shared = std::make_shared<ThumbnailCache>(cacheDir.path());
+        ThumbnailCache &cache = *shared;
+        ThumbnailService service(m_scheduler, shared);
         QSignalSpy ready(&service, &ThumbnailService::ready);
 
         QVERIFY(testImage(500, 500).save(file(QStringLiteral("servicio.png"))));
@@ -560,18 +561,19 @@ private slots:
     void obsoleteRequestsAreCancelled()
     {
         // Un solo hilo de miniaturas ocupado: lo demás queda en cola.
+        std::atomic<bool> release{false};   // antes que el planificador: vive más que sus tareas
         tasks::SchedulerConfig config;
         config.threads[tasks::Category::Thumbnails] = 1;
         tasks::Scheduler scheduler(config);
-        std::atomic<bool> release{false};
         tasks::TaskHandle blocker = scheduler.submit(tasks::Category::Thumbnails, tasks::Priority::UserInteraction,
-                                                     [&](const tasks::CancelToken &) {
-            while (!release) {
+                                                     [&](const tasks::CancelToken &cancel) {
+            while (!release && !cancel.isCancelled()) {
                 QThread::msleep(1);
             }
         });
-        ThumbnailCache cache{QString()};
-        ThumbnailService service(scheduler, cache);
+        auto shared = std::make_shared<ThumbnailCache>(QString());
+        ThumbnailCache &cache = *shared;
+        ThumbnailService service(scheduler, shared);
         QSignalSpy ready(&service, &ThumbnailService::ready);
         QStringList paths;
         for (int i = 0; i < 5; ++i) {

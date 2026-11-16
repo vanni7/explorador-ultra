@@ -77,9 +77,9 @@ MainWindow::MainWindow(tasks::Scheduler &scheduler, std::shared_ptr<journal::Jou
     m_indexService->setExcludedNames({trash::trashFolderName()});
     // Miniaturas: en la carpeta de caché del sistema (se puede borrar sin
     // perder nada), con 256 MB como mucho en memoria (SPEC §5.5).
-    m_thumbnailCache = std::make_unique<thumbs::ThumbnailCache>(
+    m_thumbnailCache = std::make_shared<thumbs::ThumbnailCache>(
         QStandardPaths::writableLocation(QStandardPaths::CacheLocation) + QStringLiteral("/miniaturas"));
-    m_thumbnailService = new thumbs::ThumbnailService(m_scheduler, *m_thumbnailCache, this);
+    m_thumbnailService = new thumbs::ThumbnailService(m_scheduler, m_thumbnailCache, this);
     setWindowTitle(core::applicationName());
     resize(1180, 720);
 
