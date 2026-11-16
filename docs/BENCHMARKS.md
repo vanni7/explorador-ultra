@@ -129,6 +129,16 @@ Sin ceder, en el disco mecánico el listado no terminaba hasta acabar de leer el
 
 No medido: escrituras (copias dentro del mismo disco), memorias USB, unidades de red, Windows y macOS.
 
+### Miniaturas: aisladas en el proceso auxiliar o en el propio proceso (Fase 3, 15-nov)
+`eu-bench thumbs <carpeta> 256`, un hilo, caché caliente, sin caché de miniaturas (se generan todas):
+
+| Carpeta | En el proceso | En `eu-thumbnailer` | Coste de aislar |
+|---|---|---|---|
+| `~/Imágenes` (17 fotos y capturas) | 0,66 s | 0,72 s | +9 % |
+| `PDFS/WALTER RISO` (48 PDF, primera página) | 0,69 s | 0,85 s | +24 % |
+
+El coste es arrancar el auxiliar una vez por hilo y pasar cada imagen por un PNG sin comprimir. Se acepta a cambio de que un archivo dañado no cierre la aplicación. Medido con un límite de memoria `RLIMIT_DATA` de 3 GB en el auxiliar; con `RLIMIT_AS` no se abría ningún PDF (el lector reserva mucho espacio de direcciones que no usa).
+
 ### No medido todavía (pendiente)
 - Tiempo de apertura real de una carpeta en Archivos de GNOME (no hay forma fiable de automatizarlo; `gio list` es una aproximación de su motor, no de su interfaz).
 - Caché fría, HDD, USB y unidades de red.

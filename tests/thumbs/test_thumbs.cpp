@@ -484,6 +484,20 @@ private slots:
         QCOMPARE(thumbnail.value().size(), QSize(128, 85));
         QVERIFY(isReddish(thumbnail.value().pixel(10, 40)));
 
+        // Un PDF también (con un límite de memoria mal elegido, el lector de
+        // PDF no arrancaba dentro del auxiliar).
+        if (QImageReader::supportedImageFormats().contains("pdf")) {
+            const QString pdf = file(QStringLiteral("aislado.pdf"));
+            {
+                QPdfWriter writer(pdf);
+                QPainter painter(&writer);
+                painter.fillRect(painter.viewport(), Qt::red);
+            }
+            const auto page = renderThumbnailIsolated(requestFor(pdf, 128), {});
+            QVERIFY2(page.ok(), page.ok() ? "" : qPrintable(page.error().message));
+            QCOMPARE(page.value().height(), 128);
+        }
+
         // Un archivo que cierra el decodificador: aquí solo es un error…
         QVERIFY(testImage(50, 50).save(file(QStringLiteral("x__revienta__.png"))));
         const auto crashed = renderThumbnailIsolated(requestFor(file(QStringLiteral("x__revienta__.png"))), {});

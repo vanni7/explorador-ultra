@@ -47,10 +47,12 @@ int main(int argc, char *argv[])
     qputenv("QT_QPA_PLATFORM", "offscreen");
 #ifdef Q_OS_UNIX
     // Un archivo hecho para agotar la memoria no se lleva el equipo por
-    // delante: este proceso no puede pasar de 3 GB.
+    // delante: este proceso no puede usar más de 3 GB. RLIMIT_DATA y no
+    // RLIMIT_AS: el lector de PDF reserva mucho espacio de direcciones que no
+    // llega a usar, y con RLIMIT_AS no podía abrir ningún PDF.
     struct rlimit limit;
     limit.rlim_cur = limit.rlim_max = rlim_t(3) * 1024 * 1024 * 1024;
-    setrlimit(RLIMIT_AS, &limit);
+    setrlimit(RLIMIT_DATA, &limit);
 #endif
     QGuiApplication application(argc, argv);
 
