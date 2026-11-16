@@ -34,6 +34,8 @@ public:
     virtual ~ContentSource() = default;
     /// El texto del archivo, o nullptr si no se puede leer como texto.
     virtual const QString *text() = 0;
+    /// ¿Lleva esta etiqueta? (filtro tag:). Sin etiquetas, nunca.
+    virtual bool hasTag(const QString &tag) { Q_UNUSED(tag) return false; }
 };
 
 struct QueryOptions
@@ -79,6 +81,8 @@ public:
     /// true si la consulta mira dentro de los archivos (`content:` o términos
     /// con `termsInContent`): hay que evaluarla con un ContentSource.
     bool usesContent() const { return m_usesContent; }
+    /// Las etiquetas que pide la consulta (tag:), sin repetir.
+    QStringList tagNames() const { return m_tagNames; }
     /// Los textos que se buscan dentro de los archivos (para mostrar un
     /// fragmento con la coincidencia), en el orden de la consulta.
     QStringList contentTerms() const { return m_contentTerms; }
@@ -110,6 +114,7 @@ private:
     QString m_text;
     bool m_usesContent = false;
     QStringList m_contentTerms;
+    QStringList m_tagNames;
     QStringList m_requiredContentTerms;
     Qt::CaseSensitivity m_caseSensitivity = Qt::CaseInsensitive;
     QStringList m_nameHints;

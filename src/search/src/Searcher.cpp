@@ -8,6 +8,7 @@
 #include <QFile>
 #include <QCoreApplication>
 #include <QFileInfo>
+#include <QSet>
 #include <QStringDecoder>
 
 #include <chrono>
@@ -66,9 +67,15 @@ QString placeOf(const QString &fileName, const content::Snippet &snippet)
 class FileContent : public ContentSource
 {
 public:
-    FileContent(QString path, const SearchOptions &options, ContentCache *cache, const tasks::CancelToken &cancel)
-        : m_path(std::move(path)), m_options(options), m_cache(cache), m_cancel(cancel)
+    FileContent(QString path, const SearchOptions &options, ContentCache *cache, const tasks::CancelToken &cancel,
+                const QHash<QString, QSet<QString>> *tagged = nullptr)
+        : m_path(std::move(path)), m_options(options), m_cache(cache), m_cancel(cancel), m_tagged(tagged)
     {
+    }
+
+    bool hasTag(const QString &tag) override
+    {
+        return m_tagged != nullptr && m_tagged->value(tag.toCaseFolded()).contains(m_path);
     }
 
     const QString *text() override
@@ -123,6 +130,7 @@ private:
     const SearchOptions &m_options;
     ContentCache *m_cache = nullptr;
     const tasks::CancelToken &m_cancel;
+    const QHash<QString, QSet<QString>> *m_tagged = nullptr;
     QString m_text;
     bool m_loaded = false;
     bool m_ok = false;
@@ -199,10 +207,17 @@ SearchSummary searchTree(const QStringList &roots, const Query &query, const Sea
     listOptions.firstBatchSize = 2000;
     listOptions.batchSize = 2000;
 
-    const bool readsContent = query.usesContent();
+    // Las rutas de cada etiqueta que pide la consulta, una vez.
+    QHash<QString, QSet<QString>> tagged;
+    const bool usesTags = !query.tagNames().isEmpty();
+    for (const QString &tag : query.tagNames()) {
+        const QStringList paths = options.pathsWithTag ? options.pathsWithTag(tag) : QStringList();
+        tagged.insert(tag.toCaseFolded(), QSet<QString>(paths.constBegin(), paths.constEnd()));
+    }
+    const bool readsContent = query.usesContent() || usesTags;
     // Los textos guardados del índice de contenido, si los hay.
     std::unique_ptr<ContentCache> contentCache;
-    if (readsContent && options.contentCache) {
+    if (query.usesContent() && options.contentCache) {
         contentCache = options.contentCache();
         if (contentCache) {
             contentCache->prepare(query.requiredContentTerms(), query.caseSensitivity());
@@ -253,7 +268,8 @@ SearchSummary searchTree(const QStringList &roots, const Query &query, const Sea
                     if (cancel.isCancelled()) {
                         return;
                     }
-                    FileContent content(childPath(folder.path, entry.name), options, contentCache.get(), cancel);
+                    FileContent content(childPath(folder.path, entry.name), options, contentCache.get(), cancel,
+                                        &tagged);
                     matched = query.matches(itemFrom(entry), &content);
                     if (content.wasOpened()) {
                         ++progress.filesRead;

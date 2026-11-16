@@ -8,6 +8,7 @@
 
 #include <QCoreApplication>
 #include <QFile>
+#include <QFileInfo>
 
 #include <cerrno>
 #include <dirent.h>
@@ -81,6 +82,17 @@ bool fillFromSystem(int directoryFd, const char *name, Entry &entry)
 }
 
 } // namespace
+
+core::Result<Entry> entryFor(const QString &path)
+{
+    Entry entry;
+    entry.name = QFileInfo(path).fileName();
+    if (!fillFromSystem(AT_FDCWD, QFile::encodeName(path).constData(), entry)) {
+        return core::errorFromErrno(errno, path);
+    }
+    entry.isHidden = entry.name.startsWith(QLatin1Char('.'));
+    return entry;
+}
 
 core::Status listDirectory(const QString &path, const ListOptions &options,
                            const tasks::CancelToken &cancel, const BatchCallback &onBatch)

@@ -1390,6 +1390,8 @@ void BrowserPane::applyFilterText(const QString &text)
     } else if (parsedQuery.value().usesContent()) {
         // El filtro no abre archivos: se dice, en vez de dejar la lista vacía sin más.
         m_filterProblem = tr("content: solo funciona en el buscador (Ctrl+F)");
+    } else if (!parsedQuery.value().tagNames().isEmpty()) {
+        m_filterProblem = tr("tag: solo funciona en el buscador (Ctrl+F)");
     }
     m_model->setFilter(parsedQuery.value());
     updateFilterInfo();

@@ -85,6 +85,8 @@ struct SearchOptions
     /// Crea, en el hilo de la búsqueda, la consulta a los textos guardados.
     /// Vacío o nulo: se lee todo del disco. Los resultados son los mismos.
     std::function<std::unique_ptr<ContentCache>()> contentCache;
+    /// Para tag:: las rutas que llevan esa etiqueta. Vacío: tag: no encuentra nada.
+    std::function<QStringList(const QString &tag)> pathsWithTag;
     /// Tope de resultados. Al alcanzarlo la búsqueda termina y se marca
     /// `truncated`: una consulta que lo cumple todo no debe agotar la memoria.
     qint64 maxHits = 200000;

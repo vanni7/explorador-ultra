@@ -571,7 +571,8 @@ bool Index::canAnswer(const QStringList &roots, const search::Query &query,
 {
     // Lo que el índice no sabe: el contenido de los archivos. Y lo que no
     // recorre igual que la búsqueda directa: otras unidades.
-    if (roots.isEmpty() || query.usesContent() || !options.recursive || options.crossDevices) {
+    if (roots.isEmpty() || query.usesContent() || !query.tagNames().isEmpty() || !options.recursive
+        || options.crossDevices) {
         return false;
     }
     for (const QString &root : roots) {
