@@ -1635,20 +1635,8 @@ void MainWindow::updateTabTitle(BrowserPane *pane)
 
 void MainWindow::restoreSession()
 {
+    loadPreferences();
     QSettings settings;
-    restoreGeometry(settings.value(QStringLiteral("window/geometry")).toByteArray());
-    m_splitter->restoreState(settings.value(QStringLiteral("window/splitter")).toByteArray());
-    m_showHiddenAction->setChecked(settings.value(QStringLiteral("view/showHidden"), false).toBool());
-    m_binaryUnitsAction->setChecked(settings.value(QStringLiteral("view/binaryUnits"), false).toBool());
-    m_folderSizesAction->setChecked(settings.value(QStringLiteral("view/folderSizes"), false).toBool());
-    setThumbnailSize(settings.value(QStringLiteral("view/thumbnailSize"), 160).toInt());
-    const bool thumbnails = settings.value(QStringLiteral("view/mode")).toString() == QLatin1String("miniaturas");
-    (thumbnails ? m_thumbnailsAction : m_detailsAction)->setChecked(true);
-    // El alcance y "en el contenido" no se guardan: una búsqueda en todos los
-    // discos no debe heredarse sin querer de la sesión anterior.
-    m_searchCaseAction->setChecked(settings.value(QStringLiteral("search/caseSensitive"), false).toBool());
-    m_recentSearches = settings.value(QStringLiteral("search/recent")).toStringList();
-
     const QStringList paths = settings.value(QStringLiteral("session/tabs")).toStringList();
     for (const QString &path : paths) {
         // Si la carpeta ya no existe, la pestaña lo indica y ofrece reintentar;
@@ -1662,6 +1650,23 @@ void MainWindow::restoreSession()
                                        m_tabs->count() - 1));
     }
     updateStatus();
+}
+
+void MainWindow::loadPreferences()
+{
+    QSettings settings;
+    restoreGeometry(settings.value(QStringLiteral("window/geometry")).toByteArray());
+    m_splitter->restoreState(settings.value(QStringLiteral("window/splitter")).toByteArray());
+    m_showHiddenAction->setChecked(settings.value(QStringLiteral("view/showHidden"), false).toBool());
+    m_binaryUnitsAction->setChecked(settings.value(QStringLiteral("view/binaryUnits"), false).toBool());
+    m_folderSizesAction->setChecked(settings.value(QStringLiteral("view/folderSizes"), false).toBool());
+    setThumbnailSize(settings.value(QStringLiteral("view/thumbnailSize"), 160).toInt());
+    const bool thumbnails = settings.value(QStringLiteral("view/mode")).toString() == QLatin1String("miniaturas");
+    (thumbnails ? m_thumbnailsAction : m_detailsAction)->setChecked(true);
+    // El alcance y "en el contenido" no se guardan: una búsqueda en todos los
+    // discos no debe heredarse sin querer de la sesión anterior.
+    m_searchCaseAction->setChecked(settings.value(QStringLiteral("search/caseSensitive"), false).toBool());
+    m_recentSearches = settings.value(QStringLiteral("search/recent")).toStringList();
 }
 
 void MainWindow::saveSession()

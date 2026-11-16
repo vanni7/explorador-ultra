@@ -149,6 +149,7 @@ int main(int argc, char *argv[])
 
         const QStringList arguments = parser.positionalArguments();
         if (!arguments.isEmpty()) {
+            window.loadPreferences();   // la vista y demás preferencias valen también así
             window.openTab(QDir(arguments.first()).absolutePath());
         } else if (smokeTest || parser.isSet(screenshotOption)) {
             window.openTab(QDir::homePath());   // la prueba no debe depender de una sesión guardada

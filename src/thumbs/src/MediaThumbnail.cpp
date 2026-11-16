@@ -49,7 +49,7 @@ void drawDuration(QImage &image, qint64 milliseconds)
     QPainter painter(&image);
     painter.setRenderHint(QPainter::Antialiasing);
     QFont font;
-    font.setPixelSize(std::max(9, std::min(image.width(), image.height()) / 9));
+    font.setPixelSize(std::max(9, std::min(image.width(), image.height()) / 12));
     font.setBold(true);
     painter.setFont(font);
     const QString text = durationText(milliseconds);

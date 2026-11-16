@@ -85,6 +85,10 @@ public:
     /// Restaura pestañas y geometría de la sesión anterior. Si no hay sesión
     /// guardada, abre la carpeta personal.
     void restoreSession();
+    /// Lee las preferencias guardadas (vista, ocultos, unidades de tamaño…)
+    /// sin abrir pestañas. restoreSession() ya lo hace; hay que llamarlo
+    /// cuando la ventana se abre directamente en una carpeta.
+    void loadPreferences();
 
     FileActions *fileActions() const { return m_actions; }
 
