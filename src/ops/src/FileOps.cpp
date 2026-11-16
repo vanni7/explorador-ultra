@@ -7,6 +7,10 @@
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
+#include <QSaveFile>
+#include <QJsonObject>
+#include <QJsonDocument>
+#include <QDirIterator>
 #include <QTimeZone>
 
 #include <array>
@@ -331,6 +335,26 @@ QString partialSuffix()
     return QStringLiteral(".eu-parcial");
 }
 
+QString checkpointSuffix()
+{
+    return QStringLiteral(".eu-punto");
+}
+
+void removePartialsUnder(const QString &target)
+{
+    const FileStamp stamp = stampOf(target);
+    if (stamp.isDirectory && !stamp.isSymlink) {
+        QDirIterator it(target, {QStringLiteral("*") + partialSuffix(), QStringLiteral("*") + checkpointSuffix()},
+                        QDir::Files | QDir::Hidden | QDir::System, QDirIterator::Subdirectories);
+        while (it.hasNext()) {
+            QFile::remove(it.next());
+        }
+        return;
+    }
+    QFile::remove(target + partialSuffix());
+    QFile::remove(target + checkpointSuffix());
+}
+
 namespace {
 
 core::Status copyFileOnce(const QString &source, const QString &target, const tasks::CancelToken &cancel,
@@ -377,22 +401,98 @@ core::Status copyFileOnce(const QString &source, const QString &target, const ta
     }
 
     const QString partialPath = target + partialSuffix();
-    QFile::remove(partialPath);   // resto de una copia anterior interrumpida
-    QFile output(partialPath);
-    if (!output.open(QIODevice::WriteOnly | QIODevice::NewOnly)) {
-        return fromQFile(output, partialPath);
-    }
+    const QString checkpointPath = target + checkpointSuffix();
+    const qint64 sourceSize = input.size();
+    const qint64 sourceMs = QFileInfo(source).lastModified(QTimeZone::UTC).toMSecsSinceEpoch();
+    const bool resumable = options.resumable && sourceSize >= kResumableFromBytes;
 
-    // Si algo sale mal a partir de aquí, el temporal no debe quedar en el disco.
-    const auto fail = [&](core::Error error) -> core::Status {
+    // ¿Hay una copia anterior cortada que se pueda seguir? Solo si su punto
+    // de control es de este mismo original, sin cambios, y el temporal tiene
+    // al menos lo anotado (lo que haya después del punto no se da por bueno).
+    qint64 resumeAt = 0;
+    if (resumable) {
+        QFile checkpoint(checkpointPath);
+        if (checkpoint.open(QIODevice::ReadOnly)) {
+            const QJsonObject saved = QJsonDocument::fromJson(checkpoint.readAll()).object();
+            const qint64 bytes = saved.value(QStringLiteral("bytes")).toInteger();
+            if (saved.value(QStringLiteral("origen")).toString() == source
+                && saved.value(QStringLiteral("tamano")).toInteger() == sourceSize
+                && saved.value(QStringLiteral("fecha")).toInteger() == sourceMs && bytes > 0 && bytes <= sourceSize
+                && QFileInfo(partialPath).size() >= bytes) {
+                resumeAt = bytes;
+            }
+        }
+    }
+    QFile output(partialPath);
+    if (resumeAt > 0 && !(output.open(QIODevice::ReadWrite) && output.resize(resumeAt) && output.seek(resumeAt)
+                          && input.seek(resumeAt))) {
         output.close();
-        QFile::remove(partialPath);
+        resumeAt = 0;
+    }
+    if (resumeAt == 0) {
+        QFile::remove(partialPath);   // resto de una copia anterior que no sirve
+        QFile::remove(checkpointPath);
+        if (!output.open(QIODevice::WriteOnly | QIODevice::NewOnly)) {
+            return fromQFile(output, partialPath);
+        }
+    }
+    qint64 confirmed = resumeAt;   // bytes sincronizados y anotados en el punto de control
+
+    // Si algo sale mal a partir de aquí, el temporal no debe quedar en el
+    // disco… salvo en una copia reanudable con algo ya confirmado, si el
+    // fallo no es de la copia misma (cancelar, el disco, el cable).
+    const auto failKeeping = [&](core::Error error, bool keep) -> core::Status {
+        output.close();
+        if (!(keep && resumable && confirmed > 0)) {
+            QFile::remove(partialPath);
+            QFile::remove(checkpointPath);
+        }
         return error;
+    };
+    const auto fail = [&](core::Error error) -> core::Status { return failKeeping(std::move(error), true); };
+    const auto saveCheckpoint = [&]() -> bool {
+        if (!syncToDisk(output)) {
+            return false;
+        }
+        const QJsonObject saved{{QStringLiteral("origen"), source},
+                                {QStringLiteral("tamano"), sourceSize},
+                                {QStringLiteral("fecha"), sourceMs},
+                                {QStringLiteral("bytes"), output.pos()}};
+        QSaveFile file(checkpointPath);
+        if (!file.open(QIODevice::WriteOnly) || file.write(QJsonDocument(saved).toJson(QJsonDocument::Compact)) < 0
+            || !file.commit()) {
+            return false;
+        }
+        confirmed = output.pos();
+        return true;
     };
 
     std::optional<Hasher> sourceHash;
     if (options.verify) {
         sourceHash.emplace(options.algorithm);
+    }
+    if (resumeAt > 0) {
+        // Lo que ya estaba copiado cuenta en el avance y, si se comprueba la
+        // copia, en el hash del original (se lee esa parte, no se reescribe).
+        if (sourceHash) {
+            QFile prefix(source);
+            if (!prefix.open(QIODevice::ReadOnly)) {
+                return fail(fromQFile(prefix, source));
+            }
+            std::vector<char> chunk(1024 * 1024);
+            qint64 left = resumeAt;
+            while (left > 0) {
+                const qint64 read = prefix.read(chunk.data(), std::min<qint64>(left, qint64(chunk.size())));
+                if (read <= 0) {
+                    return fail(fromQFile(prefix, source));
+                }
+                sourceHash->addData(chunk.data(), read);
+                left -= read;
+            }
+        }
+        if (progress) {
+            progress(resumeAt);
+        }
     }
     std::vector<char> buffer(1024 * 1024);
     while (true) {
@@ -421,6 +521,9 @@ core::Status copyFileOnce(const QString &source, const QString &target, const ta
         if (output.write(buffer.data(), read) != read) {
             return fail(fromQFile(output, partialPath));
         }
+        if (resumable && output.pos() - confirmed >= kCheckpointEveryBytes && !saveCheckpoint()) {
+            return fail(lastSystemError(checkpointPath));
+        }
         if (progress) {
             progress(read);
         }
@@ -442,11 +545,12 @@ core::Status copyFileOnce(const QString &source, const QString &target, const ta
         }
         if (written.value() != sourceHash->result()) {
             *verifyFailed = true;
-            return fail(core::Error{core::ErrorCode::Corrupted,
+            return failKeeping(core::Error{core::ErrorCode::Corrupted,
                                     QCoreApplication::translate("eu::ops", "La copia no es igual al original "
                                                                            "(comprobado con %1); no se ha dejado.")
                                         .arg(hashAlgorithmName(options.algorithm)),
-                                    target, 0});
+                                    target, 0},
+                               false);   // una copia mala no se conserva para seguirla
         }
     }
 
@@ -465,8 +569,10 @@ core::Status copyFileOnce(const QString &source, const QString &target, const ta
     const core::Status renamed = renameNoReplace(partialPath, target);
     if (!renamed.ok()) {
         QFile::remove(partialPath);
+        QFile::remove(checkpointPath);
         return renamed;
     }
+    QFile::remove(checkpointPath);
     return {};
 }
 

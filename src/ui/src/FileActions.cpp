@@ -58,6 +58,8 @@ FileActions::~FileActions()
 {
     // Las tareas no tocan este objeto, así que no hace falta esperarlas: basta
     // pedirles que paren. El planificador las espera al destruirse.
+    // Lo que se corte ahora queda «interrumpido»: al abrir se ofrece reanudarlo.
+    m_closing->store(true);
     for (const auto &transfer : m_transfers) {
         transfer->gate->setPaused(false);
     }
@@ -314,6 +316,9 @@ quint64 FileActions::queueTransfer(ActionKind kind, const QString &description, 
     transfer->info.verifies = options.copy.verify;
     transfer->directory = directory;
     transfer->devicePaths = devicePaths;
+    // Archivos grandes: se pueden seguir donde se quedaron.
+    options.copy.resumable = true;
+    options.leaveOpenIfCancelled = [closing = m_closing] { return closing->load(); };
     // La pausa se mira entre bloque y bloque de cada archivo.
     options.copy.pausePoint = [gate = transfer->gate](const tasks::CancelToken &cancel) {
         gate->waitWhilePaused(cancel);
@@ -474,6 +479,23 @@ void FileActions::prioritizeTransfer(quint64 id)
 
 void FileActions::clearFinishedTransfers()
 {
+    // Lo que quedó a medias y ya no se va a reintentar: fuera sus temporales.
+    QStringList leftovers;
+    for (const auto &transfer : m_transfers) {
+        if (!transfer->info.isActive() && transfer->info.canRetry) {
+            for (const auto &item : transfer->unfinished) {
+                leftovers.append(item.second);
+            }
+        }
+    }
+    if (!leftovers.isEmpty()) {
+        m_scheduler.submit(tasks::Category::General, tasks::Priority::Background,
+                           [leftovers](const tasks::CancelToken &) {
+            for (const QString &target : leftovers) {
+                ops::removePartialsUnder(target);
+            }
+        });
+    }
     m_transfers.erase(std::remove_if(m_transfers.begin(), m_transfers.end(),
                                      [](const auto &transfer) { return !transfer->info.isActive(); }),
                       m_transfers.end());
@@ -627,6 +649,30 @@ quint64 FileActions::revertInterrupted(const journal::Operation &operation)
                  [operation](const Context &context, ActionResult &result) {
         result.undoneDescription = operation.description;
         result.outcome = ops::Engine(context.journal).revertInterrupted(operation.id);
+    });
+}
+
+quint64 FileActions::resumeInterrupted(const journal::Operation &operation, const ops::TransferOptions &options)
+{
+    const bool moving = operation.kind == journal::OperationKind::Move;
+    QStringList devicePaths;
+    QString directory;
+    if (m_journal) {
+        const auto plan = m_journal->plan(operation.id);
+        if (plan.ok()) {
+            for (const auto &item : plan.value()) {
+                devicePaths << item.first << item.second;
+            }
+            if (!plan.value().isEmpty()) {
+                directory = QFileInfo(plan.value().first().second).absolutePath();
+            }
+        }
+    }
+    const journal::OperationId id = operation.id;
+    return queueTransfer(moving ? ActionKind::Move : ActionKind::Copy, tr("Reanudar: %1").arg(operation.description),
+                         directory, devicePaths, options,
+                         [id](const ops::TransferOptions &again, const Context &context) {
+        return ops::Engine(context.journal).resumeInterrupted(id, again, context.cancel, context.progress);
     });
 }
 

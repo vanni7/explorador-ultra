@@ -500,6 +500,41 @@ private slots:
         QVERIFY(!dropAt(&text, emptyArea, Qt::ControlModifier));
     }
 
+    void interruptedCopyIsResumedAndClosingMidCopyCanBeResumed()
+    {
+        QTemporaryDir data;
+        QTemporaryDir directory;
+        QVERIFY(QDir(directory.path()).mkdir(QStringLiteral("fotos")));
+        QVERIFY(QDir(directory.path()).mkdir(QStringLiteral("destino")));
+        for (int i = 0; i < 6; ++i) {
+            writeFile(directory.filePath(QStringLiteral("fotos/foto%1.raw").arg(i)), 1'000'000);
+        }
+        const QString source = directory.filePath(QStringLiteral("fotos"));
+        const QString destination = directory.filePath(QStringLiteral("destino"));
+        QProcess process;
+        process.start(QCoreApplication::applicationDirPath() + QStringLiteral("/eu-crash-helper"),
+                      {data.filePath(QStringLiteral("historial.db")), source, destination,
+                       QStringLiteral("2500000"), QStringLiteral("copiar")});
+        QVERIFY(process.waitForFinished(60000));
+        QCOMPARE(process.exitCode(), 42);
+
+        // Al abrir se elige reanudar: termina lo que faltaba, sin duplicar.
+        {
+            MainWindow window(m_scheduler, openJournal(data));
+            window.setRecoveryChoice([](const QList<journal::Operation> &) {
+                return MainWindow::RecoveryChoice::Resume;
+            });
+            window.checkInterruptedOperations();
+            QTRY_COMPARE_WITH_TIMEOUT(QDir(destination + QStringLiteral("/fotos")).entryList(QDir::Files).size(), 6,
+                                      20000);
+            QVERIFY(waitIdle(window));
+            QCOMPARE(QDir(destination).entryList(QDir::Dirs | QDir::NoDotAndDotDot), QStringList{QStringLiteral("fotos")});
+            QCOMPARE(window.transfersPanel()->list()->topLevelItemCount(), 1);
+        }
+        auto journal = openJournal(data);
+        QVERIFY(journal->incompleteOperations().value().isEmpty());
+    }
+
     void interruptedOperationIsOfferedAndReverted()
     {
         QTemporaryDir data;

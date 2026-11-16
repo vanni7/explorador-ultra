@@ -117,6 +117,7 @@ public:
     enum class RecoveryChoice {
         Revert,   ///< Deshacer lo que alcanzaron a hacer.
         Discard,  ///< Dejar lo hecho y limpiar los archivos a medio escribir.
+        Resume,   ///< Copiar y mover: terminar lo que faltaba.
         Later,    ///< No tocar nada; se volverá a preguntar en el próximo arranque.
     };
     /// Sustituye el diálogo de recuperación (para las pruebas).

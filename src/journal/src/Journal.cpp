@@ -18,7 +18,7 @@ namespace {
 
 /// Versión actual del esquema. Cada cambio de tablas añade una migración a
 /// `migrations` y sube este número; nunca se edita una migración ya publicada.
-constexpr int currentSchemaVersion = 1;
+constexpr int currentSchemaVersion = 2;
 
 const char *const migrationToV1[] = {
     "CREATE TABLE operations ("
@@ -40,6 +40,17 @@ const char *const migrationToV1[] = {
     "  result_modified_ms INTEGER NOT NULL DEFAULT 0)",
     "CREATE INDEX steps_by_operation ON steps(operation_id, sequence)",
     "CREATE INDEX operations_by_state ON operations(state)",
+};
+
+/// v2: el plan de copiar y mover (qué va a dónde), para reanudarlas tras un
+/// cierre inesperado (SPEC §9).
+const char *const migrationToV2[] = {
+    "CREATE TABLE plan_items ("
+    "  operation_id INTEGER NOT NULL REFERENCES operations(id) ON DELETE CASCADE,"
+    "  sequence INTEGER NOT NULL,"
+    "  source TEXT NOT NULL,"
+    "  target TEXT NOT NULL,"
+    "  PRIMARY KEY(operation_id, sequence))",
 };
 
 core::Error databaseError(const QSqlError &error, const QString &path)
@@ -176,7 +187,78 @@ core::Status Journal::prepareDatabase()
             return databaseError(error, m_filePath);
         }
     }
+    if (version < 2) {
+        if (!database.transaction()) {
+            return databaseError(database.lastError(), m_filePath);
+        }
+        for (const char *statement : migrationToV2) {
+            if (!query.exec(QString::fromLatin1(statement))) {
+                const QSqlError error = query.lastError();
+                database.rollback();
+                return databaseError(error, m_filePath);
+            }
+        }
+        if (!query.exec(QStringLiteral("PRAGMA user_version=2")) || !database.commit()) {
+            const QSqlError error = database.lastError();
+            database.rollback();
+            return databaseError(error, m_filePath);
+        }
+    }
     return {};
+}
+
+core::Status Journal::setPlan(OperationId operation, const QList<QPair<QString, QString>> &items)
+{
+    Connection connection(*this);
+    QSqlDatabase &database = connection.database();
+    database.transaction();
+    QSqlQuery query(database);
+    query.prepare(QStringLiteral("INSERT INTO plan_items(operation_id, sequence, source, target) VALUES(?, ?, ?, ?)"));
+    for (qsizetype i = 0; i < items.size(); ++i) {
+        query.addBindValue(operation);
+        query.addBindValue(int(i));
+        query.addBindValue(items[i].first);
+        query.addBindValue(items[i].second);
+        if (!query.exec()) {
+            const QSqlError error = query.lastError();
+            database.rollback();
+            return databaseError(error, m_filePath);
+        }
+    }
+    if (!database.commit()) {
+        return databaseError(database.lastError(), m_filePath);
+    }
+    return {};
+}
+
+core::Status Journal::setPlanTarget(OperationId operation, int index, const QString &target)
+{
+    Connection connection(*this);
+    QSqlQuery query(connection.database());
+    query.prepare(QStringLiteral("UPDATE plan_items SET target=? WHERE operation_id=? AND sequence=?"));
+    query.addBindValue(target);
+    query.addBindValue(operation);
+    query.addBindValue(index);
+    if (!query.exec()) {
+        return databaseError(query.lastError(), m_filePath);
+    }
+    return {};
+}
+
+core::Result<QList<QPair<QString, QString>>> Journal::plan(OperationId operation) const
+{
+    Connection connection(*this);
+    QSqlQuery query(connection.database());
+    query.prepare(QStringLiteral("SELECT source, target FROM plan_items WHERE operation_id=? ORDER BY sequence"));
+    query.addBindValue(operation);
+    if (!query.exec()) {
+        return databaseError(query.lastError(), m_filePath);
+    }
+    QList<QPair<QString, QString>> items;
+    while (query.next()) {
+        items.append({query.value(0).toString(), query.value(1).toString()});
+    }
+    return items;
 }
 
 int Journal::schemaVersion() const

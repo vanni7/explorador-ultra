@@ -33,6 +33,10 @@ int main(int argc, char *argv[])
     const eu::tasks::CancelToken cancel;
     if (arguments[5] == QStringLiteral("mover")) {
         engine.move({arguments[2]}, arguments[3], eu::ops::CollisionPolicy::Skip, cancel, dieWhenReached);
+    } else if (arguments[5] == QStringLiteral("copiar-reanudable")) {
+        eu::ops::TransferOptions options(eu::ops::CollisionPolicy::Skip);
+        options.copy.resumable = true;
+        engine.copy({arguments[2]}, arguments[3], options, cancel, dieWhenReached);
     } else {
         engine.copy({arguments[2]}, arguments[3], eu::ops::CollisionPolicy::Skip, cancel, dieWhenReached);
     }

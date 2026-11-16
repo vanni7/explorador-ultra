@@ -86,10 +86,24 @@ struct CopyOptions
     /// Se llama entre bloque y bloque: si la transferencia está en pausa,
     /// espera ahí (y vuelve si se cancela). Vacío: sin pausa.
     std::function<void(const tasks::CancelToken &)> pausePoint;
+    /// Reanudable: en archivos grandes, lo escrito se sincroniza y se anota
+    /// cada 64 MB; si la copia se corta (cancelar, error del disco, cierre),
+    /// el temporal se conserva y la próxima copia al mismo destino sigue
+    /// desde ahí, si el original no cambió (mismo tamaño y fecha).
+    bool resumable = false;
 };
 
 /// Sufijo del archivo temporal que usa copyFile mientras escribe.
 QString partialSuffix();
+/// Sufijo del punto de control de una copia reanudable ("<destino>.eu-punto").
+QString checkpointSuffix();
+/// Borra los temporales y puntos de control de copias a medias: los de
+/// `target` si es un archivo, o todos los que haya dentro si es una carpeta.
+void removePartialsUnder(const QString &target);
+/// Una copia reanudable solo se plantea a partir de este tamaño.
+constexpr qint64 kResumableFromBytes = 32LL * 1024 * 1024;
+/// Cada cuánto se sincroniza y se anota el punto de control.
+constexpr qint64 kCheckpointEveryBytes = 64LL * 1024 * 1024;
 
 /// Copia un archivo normal. Escribe en `<target>.eu-parcial`, sincroniza a
 /// disco, copia permisos y fecha, y solo entonces lo renombra al nombre final:

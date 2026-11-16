@@ -789,6 +789,55 @@ private slots:
         QVERIFY(journal->incompleteOperations().value().isEmpty());
         QCOMPARE(treeOf(folder).size(), 6);
     }
+
+    void killedMidCopyIsResumedFromItsCheckpoint()
+    {
+        const QString helper = QCoreApplication::applicationDirPath() + QStringLiteral("/eu-crash-helper");
+        QTemporaryDir directory;
+        QTemporaryDir journalDirectory;
+        const QString journalPath = journalDirectory.filePath(QStringLiteral("h.db"));
+        const QString folder = directory.filePath(QStringLiteral("origen"));
+        QByteArray big(100 * 1024 * 1024, Qt::Uninitialized);
+        for (qsizetype i = 0; i < big.size(); ++i) {
+            big[i] = char((i * 7 + i / 4096) % 253);
+        }
+        writeFile(folder + QStringLiteral("/grande.bin"), big);
+        writeFile(folder + QStringLiteral("/pequeno.txt"), "pequeño");
+        const QString destination = directory.filePath(QStringLiteral("destino"));
+        QVERIFY(QDir().mkdir(destination));
+
+        // Muere a los 80 MB: el punto de control de los 64 MB ya está escrito.
+        QProcess process;
+        process.start(helper, {journalPath, folder, destination, QString::number(80LL * 1024 * 1024),
+                               QStringLiteral("copiar-reanudable")});
+        QVERIFY(process.waitForFinished(120000));
+        QCOMPARE(process.exitCode(), 42);
+        QVERIFY(QFileInfo::exists(destination + QStringLiteral("/origen/grande.bin") + partialSuffix()));
+        QVERIFY(QFileInfo::exists(destination + QStringLiteral("/origen/grande.bin") + checkpointSuffix()));
+
+        auto journal = journal::Journal::open(journalPath).value();
+        const auto incomplete = journal->incompleteOperations().value();
+        QCOMPARE(incomplete.size(), 1);
+        QCOMPARE(journal->plan(incomplete.first().id).value().size(), 1);
+        Engine engine(journal);
+        TransferOptions options(CollisionPolicy::Skip);
+        options.copy.resumable = true;
+        options.copy.verify = true;   // también el hash, contando la parte ya copiada
+        qint64 previous = 0;
+        qint64 biggestJump = 0;
+        const Outcome resumed = engine.resumeInterrupted(incomplete.first().id, options, m_noCancel,
+                                                         [&](const Progress &progress) {
+            biggestJump = std::max(biggestJump, progress.bytesDone - previous);
+            previous = progress.bytesDone;
+        });
+        QVERIFY2(resumed.ok(), qPrintable(describe(resumed)));
+        // Lo ya copiado entra de golpe en el avance: no empezó de cero.
+        QVERIFY2(biggestJump >= 64LL * 1024 * 1024, qPrintable(QString::number(biggestJump)));
+        QCOMPARE(readFile(destination + QStringLiteral("/origen/grande.bin")), big);
+        QCOMPARE(treeOf(destination + QStringLiteral("/origen")), treeOf(folder));
+        QVERIFY(journal->incompleteOperations().value().isEmpty());
+        QCOMPARE(journal->operation(incomplete.first().id).value().state, journal::OperationState::Cancelled);
+    }
 };
 
 QTEST_GUILESS_MAIN(TestEngine)

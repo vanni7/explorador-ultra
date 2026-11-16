@@ -97,6 +97,11 @@ public:
 
     Outcome outcome;
     Progress progress;
+    /// Se llama cuando un elemento de primer nivel ya sabe su destino.
+    std::function<void(const QString &)> onTopLevelTarget;
+    /// Reintento o reanudación: los destinos son los que dejó la vez anterior,
+    /// así que las carpetas se completan y lo que ya llegó idéntico no se repite.
+    bool retrying = false;
 
     bool begin(journal::OperationKind kind, const QString &description)
     {
@@ -114,6 +119,9 @@ public:
     {
         if (outcome.operationId == 0) {
             return;
+        }
+        if (outcome.cancelled && m_collisions.leaveOpenIfCancelled && m_collisions.leaveOpenIfCancelled()) {
+            return;   // queda como interrumpida, para reanudarla
         }
         journal::OperationState state = journal::OperationState::Completed;
         if (outcome.cancelled) {
@@ -284,6 +292,9 @@ public:
         if (chosenTarget != nullptr) {
             *chosenTarget = resolved.target.isEmpty() ? joinPath(directory, name) : resolved.target;
         }
+        if (topLevel && onTopLevelTarget && !resolved.target.isEmpty()) {
+            onTopLevelTarget(resolved.target);   // al plan: por si hay que reanudar
+        }
         switch (resolved.what) {
         case Resolution::Skip:
             return true;
@@ -348,6 +359,16 @@ private:
         };
 
         CollisionPolicy policy = m_forAll.value_or(m_collisions.policy);
+        if (retrying && bothFolders) {
+            return {Resolution::Merge, target};
+        }
+        if (retrying && (policy == CollisionPolicy::Overwrite || policy == CollisionPolicy::OverwriteIfNewer)) {
+            const core::Result<bool> same = sameContent(source, target, m_collisions.comparison, m_cancel);
+            if (same.ok() && same.value()) {
+                outcome.identical.append(source);
+                return skip();
+            }
+        }
         if (policy == CollisionPolicy::Ask) {
             if (bothFolders) {
                 return {Resolution::Merge, target};   // se pregunta por cada archivo de dentro
@@ -616,7 +637,20 @@ Outcome Engine::transferAll(const QStringList &sources, const QString &destinati
     if (!run.begin(moving ? journal::OperationKind::Move : journal::OperationKind::Copy, description)) {
         return run.outcome;
     }
+    // El plan, para poder reanudar tras un cierre inesperado (SPEC §9).
+    QList<QPair<QString, QString>> plan;
     for (const QString &source : sources) {
+        plan.append({source, joinPath(destinationDirectory, QFileInfo(source).fileName())});
+    }
+    m_journal->setPlan(run.outcome.operationId, plan);
+    int index = 0;
+    for (const QString &source : sources) {
+        const int position = index++;
+        run.onTopLevelTarget = [&, position](const QString &target) {
+            if (target != plan[position].second) {
+                m_journal->setPlanTarget(run.outcome.operationId, position, target);
+            }
+        };
         if (run.cancelled()) {
             // Lo que ni se empezó por cancelar también queda pendiente.
             run.outcome.unfinished.append({source, joinPath(destinationDirectory, QFileInfo(source).fileName())});
@@ -649,6 +683,7 @@ Outcome Engine::retry(const QList<QPair<QString, QString>> &items, bool moving, 
         again.policy = CollisionPolicy::SkipIfIdentical;
     }
     Run run(*m_journal, cancel, progress, again);
+    run.retrying = true;
     for (const auto &item : items) {
         measureTree(item.first, cancel, run.progress);
     }
@@ -657,9 +692,14 @@ Outcome Engine::retry(const QList<QPair<QString, QString>> &items, bool moving, 
     if (!run.begin(moving ? journal::OperationKind::Move : journal::OperationKind::Copy, description)) {
         return run.outcome;
     }
+    m_journal->setPlan(run.outcome.operationId, items);
     for (const auto &item : items) {
         if (run.cancelled()) {
             run.outcome.unfinished.append(item);
+            continue;
+        }
+        // Al mover, lo que ya llegó entero dejó de estar en el origen.
+        if (moving && !stampOf(item.first).exists && stampOf(item.second).exists) {
             continue;
         }
         const QFileInfo target(item.second);
@@ -669,6 +709,27 @@ Outcome Engine::retry(const QList<QPair<QString, QString>> &items, bool moving, 
     }
     run.finish();
     return run.outcome;
+}
+
+Outcome Engine::resumeInterrupted(journal::OperationId operationId, const TransferOptions &options,
+                                  const tasks::CancelToken &cancel, const ProgressCallback &progress)
+{
+    Outcome outcome;
+    const core::Result<journal::Operation> operation = m_journal->operation(operationId);
+    const core::Result<QList<QPair<QString, QString>>> plan = m_journal->plan(operationId);
+    if (!operation.ok() || !plan.ok()) {
+        outcome.errors.append(operation.ok() ? plan.error() : operation.error());
+        return outcome;
+    }
+    const bool moving = operation.value().kind == journal::OperationKind::Move;
+    if ((!moving && operation.value().kind != journal::OperationKind::Copy) || plan.value().isEmpty()) {
+        outcome.errors.append({core::ErrorCode::NotSupported,
+                               tr("Esta operación no se puede reanudar; se puede revertir o dar por perdida."), {}, 0});
+        return outcome;
+    }
+    // La interrumpida queda cerrada; lo que falta se hace como una operación nueva.
+    m_journal->finishOperation(operationId, journal::OperationState::Cancelled);
+    return retry(plan.value(), moving, options, cancel, progress);
 }
 
 Outcome Engine::trash(const QStringList &paths, const tasks::CancelToken &cancel)
@@ -949,7 +1010,7 @@ static void settlePendingSteps(journal::Journal &journal, journal::OperationId o
         switch (step.kind) {
         case journal::StepKind::CopyFile: {
             // Si se quedó a medias, lo escrito está en el archivo temporal.
-            QFile::remove(step.target + partialSuffix());
+            removePartialsUnder(step.target);
             const FileStamp source = stampOf(step.source);
             result = stampOf(step.target);
             // El destino con el nombre final solo aparece al terminar; se

@@ -1027,6 +1027,11 @@ void MainWindow::onInterruptedOperationsFound(const QList<journal::Operation> &o
             m_actions->discardInterrupted(operation);
         }
         break;
+    case RecoveryChoice::Resume:
+        for (const journal::Operation &operation : operations) {
+            m_actions->resumeInterrupted(operation, transferOptions(operation.kind == journal::OperationKind::Move));
+        }
+        break;
     case RecoveryChoice::Later:
         report(tr("Las operaciones interrumpidas quedan pendientes; se volverá a preguntar al abrir."), false);
         break;
@@ -1060,16 +1065,25 @@ MainWindow::RecoveryChoice MainWindow::askRecovery(const QList<journal::Operatio
     lines.append(tr("No se perdió ningún archivo: los originales solo se quitan cuando su copia está completa.\n\n"
                     "• Revertir: deshace lo que se alcanzó a hacer y deja todo como estaba antes.\n"
                     "• Descartar: conserva lo ya hecho y borra solo los archivos a medio escribir.\n"
-                    "• Reanudar donde se quedó aún no está disponible (próximamente)."));
+                    "• Reanudar (copiar y mover): termina lo que faltaba; lo ya copiado no se repite y un "
+                    "archivo grande cortado sigue desde donde se quedó."));
     box.setInformativeText(lines.join(QLatin1Char('\n')));
 
     QPushButton *revertButton = box.addButton(tr("Revertir"), QMessageBox::AcceptRole);
     QPushButton *discardButton = box.addButton(tr("Descartar"), QMessageBox::DestructiveRole);
-    // Se muestra deshabilitado y rotulado: no aparenta funcionar (SPEC §25.1).
-    QPushButton *resumeButton = box.addButton(tr("Reanudar (próximamente)"), QMessageBox::ActionRole);
-    resumeButton->setEnabled(false);
+    QPushButton *resumeButton = box.addButton(tr("Reanudar"), QMessageBox::ActionRole);
+    // Solo copiar y mover saben reanudarse.
+    bool allResumable = true;
+    for (const journal::Operation &operation : operations) {
+        allResumable = allResumable
+            && (operation.kind == journal::OperationKind::Copy || operation.kind == journal::OperationKind::Move);
+    }
+    resumeButton->setEnabled(allResumable);
+    if (!allResumable) {
+        resumeButton->setToolTip(tr("Solo se pueden reanudar las copias y los movimientos"));
+    }
     QPushButton *laterButton = box.addButton(tr("Decidir más tarde"), QMessageBox::RejectRole);
-    box.setDefaultButton(revertButton);
+    box.setDefaultButton(allResumable ? resumeButton : revertButton);
     box.setEscapeButton(laterButton);
     box.exec();
     if (box.clickedButton() == revertButton) {
@@ -1077,6 +1091,9 @@ MainWindow::RecoveryChoice MainWindow::askRecovery(const QList<journal::Operatio
     }
     if (box.clickedButton() == discardButton) {
         return RecoveryChoice::Discard;
+    }
+    if (box.clickedButton() == resumeButton) {
+        return RecoveryChoice::Resume;
     }
     return RecoveryChoice::Later;
 }

@@ -139,6 +139,8 @@ public:
     void checkJournalAtStartup();
     quint64 revertInterrupted(const journal::Operation &operation);
     quint64 discardInterrupted(const journal::Operation &operation);
+    /// Reanuda una copia o un movimiento interrumpido (va a la cola de transferencias).
+    quint64 resumeInterrupted(const journal::Operation &operation, const ops::TransferOptions &options);
 
     /// Lee en segundo plano la papelera de todas las unidades conectadas y
     /// avisa con trashListed().
@@ -199,6 +201,8 @@ private:
     QHash<quint64, std::shared_ptr<std::atomic<bool>>> m_ran;
     std::vector<std::unique_ptr<Transfer>> m_transfers;   ///< En el orden de la cola.
     bool m_sequential = true;
+    /// Se pone al cerrar: lo cancelado entonces queda «interrumpido» para reanudarlo.
+    std::shared_ptr<std::atomic<bool>> m_closing = std::make_shared<std::atomic<bool>>(false);
     quint64 m_lastId = 0;
     /// Operaciones que ya se intentó deshacer sin conseguirlo del todo: no se
     /// vuelven a intentar, para que Deshacer no se quede atascado en ellas.

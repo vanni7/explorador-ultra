@@ -61,6 +61,10 @@ struct TransferOptions
     /// Comprobar cada archivo copiado releyéndolo (también al mover entre
     /// unidades, antes de borrar el original). Ver CopyOptions.
     CopyOptions copy;
+    /// Si devuelve true cuando la operación se cancela, no se da por cerrada
+    /// en el historial: queda «interrumpida» y al volver a abrir se ofrece
+    /// reanudarla. La interfaz lo usa al cerrarse con copias en marcha.
+    std::function<bool()> leaveOpenIfCancelled;
 };
 
 /// Avance de una operación larga.
@@ -118,6 +122,13 @@ public:
     /// copiar (se compara su contenido) y lo que quedó a medias se completa.
     Outcome retry(const QList<QPair<QString, QString>> &items, bool moving, const TransferOptions &options,
                   const tasks::CancelToken &cancel, const ProgressCallback &progress = {});
+
+    /// Reanuda una copia o un movimiento que quedó a medias por un cierre
+    /// inesperado (SPEC §9): con el plan guardado en el historial, hace lo que
+    /// falta (lo ya llegado no se repite; el archivo cortado sigue desde su
+    /// punto de control). La operación interrumpida queda cerrada.
+    Outcome resumeInterrupted(journal::OperationId operationId, const TransferOptions &options,
+                              const tasks::CancelToken &cancel, const ProgressCallback &progress = {});
 
     /// Envía a la papelera propia. Si un volumen no admite papelera, ese
     /// elemento queda en `errors` con código NotSupported y no se toca.
