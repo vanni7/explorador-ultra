@@ -47,8 +47,9 @@ struct CollisionDecision
     bool applyToAll = false;   ///< Usarla también en los choques que queden.
     bool cancel = false;       ///< Parar aquí la operación.
 };
-/// Se llama desde el hilo de la operación y espera la respuesta.
-using CollisionAsker = std::function<CollisionDecision(const Conflict &)>;
+/// Se llama desde el hilo de la operación y espera la respuesta (o a que se
+/// cancele la operación: entonces debe volver enseguida).
+using CollisionAsker = std::function<CollisionDecision(const Conflict &, const tasks::CancelToken &)>;
 
 /// Cómo copiar o mover: qué hacer con los choques y si se comprueba cada copia.
 struct TransferOptions

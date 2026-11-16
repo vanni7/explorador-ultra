@@ -8,6 +8,7 @@ add_library(eu_ui STATIC
     src/FileClipboard.cpp
     src/IndexDialog.cpp
     src/ContentIndexDialog.cpp
+    src/TransfersPanel.cpp
     src/InlinePlayer.cpp
     src/MainWindow.cpp
     src/PathBar.cpp
@@ -24,6 +25,7 @@ add_library(eu_ui STATIC
     include/eu/ui/FileClipboard.h
     include/eu/ui/IndexDialog.h
     include/eu/ui/ContentIndexDialog.h
+    include/eu/ui/TransfersPanel.h
     include/eu/ui/InlinePlayer.h
     include/eu/ui/Locations.h
     include/eu/ui/MainWindow.h

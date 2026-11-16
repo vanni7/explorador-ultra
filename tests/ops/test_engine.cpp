@@ -322,6 +322,12 @@ private slots:
                  (QStringList{QStringLiteral("distinto (2).bin"), QStringLiteral("distinto.bin"),
                               QStringLiteral("igual.bin")}));
         QCOMPARE(readFile(merged + QStringLiteral("/origen/distinto (2).bin")), almost);
+        // Copiar otra vez lo mismo no deja otro duplicado: "distinto (2)" ya es idéntico.
+        const Outcome again = engine.copy({folder}, merged, options, m_noCancel);
+        QVERIFY(again.ok());
+        QCOMPARE(again.identical.size(), 2);
+        QVERIFY(!QFileInfo::exists(merged + QStringLiteral("/origen/distinto (3).bin")));
+        QVERIFY(engine.undo(again.operationId, m_noCancel).ok());
         // Deshacer quita solo lo copiado; la carpeta que ya existía se queda.
         QVERIFY(engine.undo(outcome.operationId, m_noCancel).ok());
         QCOMPARE(treeOf(merged + QStringLiteral("/origen")),
@@ -340,7 +346,7 @@ private slots:
         }
         int asked = 0;
         TransferOptions options(CollisionPolicy::Ask);
-        options.ask = [&](const Conflict &conflict) {
+        options.ask = [&](const Conflict &conflict, const tasks::CancelToken &) {
             ++asked;
             [&] { QCOMPARE(conflict.targetStamp.size, 5); }();
             // Al primero: omitir. Al segundo: renombrar, y lo mismo para los que queden.
@@ -356,7 +362,7 @@ private slots:
                                                    QStringLiteral("2.txt"), QStringLiteral("3 (2).txt"),
                                                    QStringLiteral("3.txt")}));
         // Cancelar desde la pregunta para la operación.
-        options.ask = [](const Conflict &) { return CollisionDecision{CollisionPolicy::Skip, false, true}; };
+        options.ask = [](const Conflict &, const tasks::CancelToken &) { return CollisionDecision{CollisionPolicy::Skip, false, true}; };
         const Outcome cancelled = engine.copy(sources, destination, options, m_noCancel);
         QVERIFY(cancelled.cancelled);
     }

@@ -330,10 +330,18 @@ private slots:
         // Lo pegado queda seleccionado.
         QTRY_COMPARE_WITH_TIMEOUT(pane->selectedPaths().size(), 2, 10000);
 
-        // Pegar otra vez en la misma carpeta no sobrescribe: crea copias con otro nombre.
+        // Pegar otra vez donde ya están: se pregunta. Con «mantener los dos»
+        // y «lo mismo con los demás», una sola pregunta y copias con otro nombre.
+        int asked = 0;
+        window.setCollisionAnswerForTesting([&](const ops::Conflict &conflict, const tasks::CancelToken &) {
+            ++asked;
+            [&] { QVERIFY(conflict.target.startsWith(destination)); }();
+            return ops::CollisionDecision{ops::CollisionPolicy::AutoRename, true, false};
+        });
         window.paste();
         QTRY_COMPARE_WITH_TIMEOUT(QDir(destination).entryList(QDir::Files).size(), 4, 10000);
         QVERIFY(waitIdle(window));
+        QCOMPARE(asked, 1);
 
         // Deshacer quita solo esas últimas copias.
         window.undo();
@@ -462,8 +470,11 @@ private slots:
         QVERIFY(QFileInfo::exists(directory.filePath(QStringLiteral("a.txt"))));
         QVERIFY(QFileInfo::exists(folder + QStringLiteral("/b.txt")));
 
-        // Mayús + soltar sobre la carpeta: mueve. Ya hay "a.txt" dentro, así
-        // que se omite sin sobrescribir y el original sigue en su sitio.
+        // Mayús + soltar sobre la carpeta: mueve. Ya hay "a.txt" dentro: se
+        // pregunta; con «Omitir», no se sobrescribe y el original sigue en su sitio.
+        window.setCollisionAnswerForTesting([](const ops::Conflict &, const tasks::CancelToken &) {
+            return ops::CollisionDecision{ops::CollisionPolicy::Skip, false, false};
+        });
         QVERIFY(waitReady(pane));
         std::unique_ptr<QMimeData> onlyA(makeFileMimeData({directory.filePath(QStringLiteral("a.txt"))}, false));
         QSignalSpy reports(&window, &MainWindow::actionReported);

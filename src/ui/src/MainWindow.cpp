@@ -29,6 +29,8 @@
 #include <QDialog>
 #include <QDialogButtonBox>
 #include <QDir>
+#include <QDockWidget>
+#include <QPointer>
 #include <QHBoxLayout>
 #include <QItemSelectionModel>
 #include <QLabel>
@@ -52,6 +54,9 @@
 #include <QToolButton>
 #include <QVBoxLayout>
 #include <QTreeView>
+
+#include <chrono>
+#include <future>
 
 namespace eu::ui {
 
@@ -339,6 +344,7 @@ void MainWindow::createActions()
     fileMenu->addAction(quitAction);
 
     QMenu *viewMenu = menuBar()->addMenu(tr("&Ver"));
+    viewMenu->setObjectName(QStringLiteral("menuVer"));
     viewMenu->addAction(m_detailsAction);
     viewMenu->addAction(m_thumbnailsAction);
     QMenu *sizeMenu = viewMenu->addMenu(tr("Tamaño de las miniaturas"));
@@ -488,15 +494,50 @@ void MainWindow::createProgressWidgets()
     m_cancelButton = new QToolButton(m_progressBox);
     m_cancelButton->setText(tr("Cancelar"));
     m_cancelButton->setToolTip(tr("Detener las operaciones en curso"));
+    m_detailsButton = new QToolButton(m_progressBox);
+    m_detailsButton->setText(tr("Detalles"));
+    m_detailsButton->setToolTip(tr("Ver la cola de transferencias: pausar, reintentar, velocidad…"));
     auto *layout = new QHBoxLayout(m_progressBox);
     layout->setContentsMargins(0, 0, 0, 0);
     layout->addWidget(m_progressLabel);
     layout->addWidget(m_progressBar);
+    layout->addWidget(m_detailsButton);
     layout->addWidget(m_cancelButton);
     statusBar()->addPermanentWidget(m_progressBox);
     m_progressBox->hide();
 
     connect(m_cancelButton, &QToolButton::clicked, m_actions, &FileActions::cancelAll);
+
+    // Panel de la cola de transferencias, abajo; aparece al pedirlo, cuando
+    // hay más de una en la cola o cuando una falla.
+    m_transfersPanel = new TransfersPanel(*m_actions, this);
+    m_transfersDock = new QDockWidget(tr("Transferencias"), this);
+    m_transfersDock->setObjectName(QStringLiteral("transferencias"));
+    m_transfersDock->setWidget(m_transfersPanel);
+    m_transfersDock->setAllowedAreas(Qt::BottomDockWidgetArea | Qt::TopDockWidgetArea);
+    addDockWidget(Qt::BottomDockWidgetArea, m_transfersDock);
+    m_transfersDock->hide();
+    QAction *toggle = m_transfersDock->toggleViewAction();
+    toggle->setText(tr("Transferencias"));
+    toggle->setShortcut(QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_T));
+    for (QAction *menuAction : menuBar()->actions()) {
+        if (menuAction->menu() != nullptr && menuAction->menu()->objectName() == QStringLiteral("menuVer")) {
+            menuAction->menu()->addSeparator();
+            menuAction->menu()->addAction(toggle);
+        }
+    }
+    connect(m_detailsButton, &QToolButton::clicked, m_transfersDock, &QDockWidget::show);
+    connect(m_actions, &FileActions::transfersChanged, this, [this] {
+        int active = 0;
+        bool failed = false;
+        for (const TransferInfo &info : m_actions->transfers()) {
+            active += info.isActive() ? 1 : 0;
+            failed = failed || info.state == TransferInfo::State::Failed;
+        }
+        if (active > 1 || failed) {
+            m_transfersDock->show();
+        }
+    });
     // Crear una carpeta o renombrar tarda milisegundos: el indicador solo
     // aparece si la acción sigue en marcha pasado un momento.
     m_progressDelay.setSingleShot(true);
@@ -811,9 +852,9 @@ void MainWindow::transfer(const QStringList &paths, const QString &destination, 
         return;
     }
     if (!move) {
-        // Copiar sobre la misma carpeta crea "nombre (2)": nunca se sobrescribe.
-        m_requestedCounts.insert(m_actions->copy(paths, destination, ops::CollisionPolicy::AutoRename),
-                                 int(paths.size()));
+        // Copiar sobre la misma carpeta crea "nombre (2)"; en otra, si algo
+        // ya existe, se pregunta qué hacer.
+        m_requestedCounts.insert(m_actions->copy(paths, destination, transferOptions(false)), int(paths.size()));
         return;
     }
     // Mover algo a la carpeta donde ya está no es ninguna operación.
@@ -827,7 +868,41 @@ void MainWindow::transfer(const QStringList &paths, const QString &destination, 
         report(tr("Los elementos ya están en esta carpeta."), false);
         return;
     }
-    m_requestedCounts.insert(m_actions->move(toMove, destination, ops::CollisionPolicy::Skip), int(toMove.size()));
+    m_requestedCounts.insert(m_actions->move(toMove, destination, transferOptions(true)), int(toMove.size()));
+}
+
+ops::TransferOptions MainWindow::transferOptions(bool move)
+{
+    ops::TransferOptions options(ops::CollisionPolicy::Ask);
+    options.copy = TransfersPanel::copyOptionsFromSettings();
+    // La pregunta llega desde el hilo de la transferencia: se muestra aquí y
+    // ese hilo espera la respuesta (o a que se cancele la operación).
+    const QPointer<MainWindow> self(this);
+    options.ask = [self, move](const ops::Conflict &conflict, const tasks::CancelToken &cancel) {
+        auto answer = std::make_shared<std::promise<ops::CollisionDecision>>();
+        std::future<ops::CollisionDecision> future = answer->get_future();
+        QMetaObject::invokeMethod(qApp, [self, conflict, move, answer, cancel] {
+            ops::CollisionDecision decision;
+            decision.cancel = true;
+            if (self && !cancel.isCancelled()) {
+                if (self->m_testCollisionAnswer) {
+                    decision = self->m_testCollisionAnswer(conflict, cancel);
+                } else {
+                    CollisionDialog dialog(conflict, move, self);
+                    dialog.exec();
+                    decision = dialog.decision();
+                }
+            }
+            answer->set_value(decision);
+        }, Qt::QueuedConnection);
+        while (future.wait_for(std::chrono::milliseconds(100)) != std::future_status::ready) {
+            if (cancel.isCancelled()) {
+                return ops::CollisionDecision{ops::CollisionPolicy::Skip, false, true};
+            }
+        }
+        return future.get();
+    };
+    return options;
 }
 
 void MainWindow::trashSelection()
@@ -1041,6 +1116,16 @@ void MainWindow::onActionProgressed(quint64 id, const ops::Progress &progress)
     QString text = progress.itemsTotal > 0
         ? tr("%1… %2 de %3").arg(verb).arg(progress.itemsDone).arg(progress.itemsTotal)
         : tr("%1…").arg(verb);
+    const ActionKind kind = m_runningKinds.value(id, ActionKind::Copy);
+    if (kind == ActionKind::Copy || kind == ActionKind::Move) {
+        const TransferInfo total = m_actions->overallTransfer();
+        if (total.bytesPerSecond > 0) {
+            text += tr(" · %1/s").arg(core::formatSize(qint64(total.bytesPerSecond)));
+        }
+        if (total.secondsLeft >= 0) {
+            text += tr(" · quedan %1").arg(formatDuration(total.secondsLeft));
+        }
+    }
     if (m_actions->runningCount() > 1) {
         text += tr(" (%n operación(es) en curso)", nullptr, m_actions->runningCount());
     }
@@ -1172,7 +1257,20 @@ void MainWindow::onActionFinished(const ActionResult &result)
         }
     }
     if (!outcome.skipped.isEmpty() && result.kind != ActionKind::Extract) {
-        message += tr(" %n omitido(s) porque ya existía(n) en el destino.", nullptr, int(outcome.skipped.size()));
+        const int identical = int(outcome.identical.size());
+        const int others = int(outcome.skipped.size()) - identical;
+        if (identical > 0) {
+            message += tr(" %n omitido(s) por ser idéntico(s) a lo que ya había.", nullptr, identical);
+        }
+        if (others > 0) {
+            message += tr(" %n omitido(s) porque ya existía(n) en el destino.", nullptr, others);
+        }
+    }
+    if (!outcome.replaced.isEmpty()) {
+        message += tr(" %n reemplazado(s); lo anterior está en la papelera.", nullptr, int(outcome.replaced.size()));
+    }
+    if (outcome.verified > 0) {
+        message += tr(" %n comprobado(s) con su hash.", nullptr, outcome.verified);
     }
 
     if (failed == 0) {

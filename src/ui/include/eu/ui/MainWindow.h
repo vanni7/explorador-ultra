@@ -5,6 +5,7 @@
 #include "eu/fs/DeviceMap.h"
 #include "eu/fs/Volumes.h"
 #include "eu/index/ContentIndexService.h"
+#include "eu/ui/TransfersPanel.h"
 #include "eu/index/IndexService.h"
 #include "eu/thumbs/ThumbnailService.h"
 #include "eu/journal/Journal.h"
@@ -21,6 +22,7 @@
 #include <memory>
 
 class QAction;
+class QDockWidget;
 class QLabel;
 class QLineEdit;
 class QProgressBar;
@@ -60,6 +62,9 @@ public:
     /// Los índices de búsqueda de esta ventana.
     index::IndexService *indexService() const { return m_indexService; }
     index::ContentIndexService *contentIndexService() const { return m_contentIndexService; }
+    TransfersPanel *transfersPanel() const { return m_transfersPanel; }
+    /// Para pruebas: responde a los choques de nombre en vez de la ventana.
+    void setCollisionAnswerForTesting(ops::CollisionAsker asker) { m_testCollisionAnswer = std::move(asker); }
     /// Empieza a mantener los índices guardados en la configuración. Si
     /// `mayAsk` y aún no se ha preguntado, muestra el asistente que propone
     /// qué unidades indexar (SPEC §1).
@@ -168,6 +173,8 @@ private:
     void copyToClipboard(bool cut);
     /// Copia o mueve `paths` a `destination` (pegar y soltar acaban aquí).
     void transfer(const QStringList &paths, const QString &destination, bool move);
+    /// Opciones de pegar o soltar: preguntar en los choques y comprobar o no las copias.
+    ops::TransferOptions transferOptions(bool move);
     bool movesByDefault(const QString &source, const QString &destination) const;
     bool askPermanentDelete(const QStringList &paths, const QString &reason);
     void onInterruptedOperationsFound(const QList<journal::Operation> &operations);
@@ -202,6 +209,10 @@ private:
     QLabel *m_progressLabel = nullptr;
     QProgressBar *m_progressBar = nullptr;
     QToolButton *m_cancelButton = nullptr;
+    QToolButton *m_detailsButton = nullptr;
+    QDockWidget *m_transfersDock = nullptr;
+    TransfersPanel *m_transfersPanel = nullptr;
+    ops::CollisionAsker m_testCollisionAnswer;
     QTimer m_progressDelay;   ///< El indicador solo aparece si la acción no es instantánea.
 
     TrashDialog *m_trashDialog = nullptr;

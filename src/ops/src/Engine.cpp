@@ -355,7 +355,7 @@ private:
             if (!m_collisions.ask) {
                 return renamed();
             }
-            const CollisionDecision decision = m_collisions.ask(Conflict{source, target, sourceStamp, targetStamp});
+            const CollisionDecision decision = m_collisions.ask(Conflict{source, target, sourceStamp, targetStamp}, m_cancel);
             if (decision.cancel) {
                 outcome.cancelled = true;
                 return {Resolution::Failed, {}};
@@ -397,6 +397,28 @@ private:
             if (same.value()) {
                 outcome.identical.append(source);
                 return skip();
+            }
+            // También cuenta una copia anterior con número ("foto (2).jpg"):
+            // copiar dos veces lo mismo no debe ir dejando duplicados.
+            if (!sourceStamp.isDirectory) {
+                const qsizetype dot = name.lastIndexOf(QLatin1Char('.'));
+                const QString stem = dot > 0 ? name.left(dot) : name;
+                const QString suffix = dot > 0 ? name.mid(dot) : QString();
+                for (int number = 2; number < 1000; ++number) {
+                    const QString candidate = joinPath(directory, QStringLiteral("%1 (%2)%3").arg(stem).arg(number).arg(suffix));
+                    const FileStamp existing = stampOf(candidate);
+                    if (!existing.exists) {
+                        break;
+                    }
+                    if (existing.size != sourceStamp.size) {
+                        continue;
+                    }
+                    const core::Result<bool> numbered = sameContent(source, candidate, m_collisions.comparison, m_cancel);
+                    if (numbered.ok() && numbered.value()) {
+                        outcome.identical.append(source);
+                        return skip();
+                    }
+                }
             }
             return renamed();
         }

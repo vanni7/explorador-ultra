@@ -91,25 +91,24 @@ void FileActions::cancelTask(quint64 id)
     running->cancel();
     // Si estaba esperando turno, el planificador la descarta sin ejecutarla:
     // se mira cada poco y, cuando conste como terminada sin haber empezado,
-    // se da por cancelada aquí.
-    const auto check = std::make_shared<std::function<void()>>();
-    *check = [this, id, check, self = QPointer<FileActions>(this)] {
-        if (!self || !m_running.contains(id)) {
+    // se da por cancelada aquí. El temporizador se borra solo al acabar.
+    auto *timer = new QTimer(this);
+    timer->setInterval(50);
+    connect(timer, &QTimer::timeout, this, [this, id, timer] {
+        const auto ran = m_ran.value(id);
+        if (!m_running.contains(id) || !ran || ran->load()) {
+            timer->deleteLater();   // ya terminó, o empezó y avisará ella misma
             return;
         }
-        const auto ran = m_ran.value(id);
-        if (m_running.value(id).isFinished() && ran && !ran->load()) {
+        if (m_running.value(id).isFinished()) {
+            timer->deleteLater();
             ActionResult result = m_initial.value(id);
             result.outcome.cancelled = true;
             result.neverRan = true;
             onFinished(result);
-            return;
         }
-        if (ran && !ran->load()) {
-            QTimer::singleShot(50, this, *check);
-        }
-    };
-    QTimer::singleShot(0, this, *check);
+    });
+    timer->start();
 }
 
 int FileActions::runningCount() const

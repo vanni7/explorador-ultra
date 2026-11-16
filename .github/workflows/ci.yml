@@ -25,7 +25,7 @@ jobs:
           - { name: "Ubuntu 24.04 ASan+UBSan", os: ubuntu-24.04, preset: asan }
           - { name: "Windows (MSVC)",      os: windows-latest, preset: release }
           - { name: "macOS Intel",         os: macos-15-intel, preset: release }
-          - { name: "macOS Apple Silicon", os: macos-latest,   preset: release }
+          - { name: "macOS Apple Silicon", os: macos-15,       preset: release }
     steps:
       - uses: actions/checkout@v4
 
