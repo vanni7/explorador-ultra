@@ -1,4 +1,7 @@
 # Cada módulo tiene su propia carpeta de pruebas (Qt Test, ver ADR-0004).
+set(EU_TEST_LOGS "${CMAKE_BINARY_DIR}/test-logs")
+file(MAKE_DIRECTORY "${EU_TEST_LOGS}")
+
 function(eu_add_test name)
     qt_add_executable(${name} ${ARGN})
     target_link_libraries(${name} PRIVATE eu::core eu::tasks eu::fs eu::search eu::index eu::thumbs eu::meta eu::journal eu::ops eu::trash eu::ops_engine eu::ui Qt6::Test)
@@ -12,7 +15,9 @@ function(eu_add_test name)
     # hace de ventana): si no, la CI no recoge lo que escribe la prueba y un
     # fallo queda sin explicar.
     set_target_properties(${name} PROPERTIES WIN32_EXECUTABLE FALSE MACOSX_BUNDLE FALSE)
-    add_test(NAME ${name} COMMAND ${name})
+    # El informe va a la salida y también a build/<preset>/test-logs: si la
+    # salida se pierde (ha pasado en el Windows de la CI), queda el archivo.
+    add_test(NAME ${name} COMMAND ${name} -o "${EU_TEST_LOGS}/${name}.txt,txt" -o "-,txt")
     # Las pruebas no necesitan pantalla: así corren igual en la CI.
     # QT_QPA_PLATFORM: las pruebas no necesitan pantalla.
     # QTEST_FUNCTION_TIMEOUT: Qt corta a los 5 min cada función de prueba; la

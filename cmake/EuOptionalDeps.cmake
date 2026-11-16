@@ -15,8 +15,9 @@ if(PkgConfig_FOUND)
     pkg_check_modules(EU_LIBARCHIVE QUIET IMPORTED_TARGET GLOBAL libarchive>=3.6)
     # Fotos RAW, en la variante de LibRaw segura entre hilos.
     pkg_check_modules(EU_LIBRAW QUIET IMPORTED_TARGET GLOBAL libraw_r>=0.20)
-    # EXIF, XMP e IPTC.
-    pkg_check_modules(EU_EXIV2 QUIET IMPORTED_TARGET GLOBAL exiv2>=0.27)
+    # EXIF, XMP e IPTC. 0.28 o posterior: la 0.27 (Ubuntu 22.04 y 24.04) tiene
+    # otra API (std::auto_ptr); allí no hay EXIF en el panel.
+    pkg_check_modules(EU_EXIV2 QUIET IMPORTED_TARGET GLOBAL exiv2>=0.28)
 endif()
 message(STATUS "Opcionales: FFmpeg=${EU_FFMPEG_FOUND} libarchive=${EU_LIBARCHIVE_FOUND} "
                "LibRaw=${EU_LIBRAW_FOUND} Exiv2=${EU_EXIV2_FOUND}")
