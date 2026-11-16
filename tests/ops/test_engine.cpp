@@ -308,7 +308,7 @@ private slots:
                                  destination + QStringLiteral("/distinto.bin"), comparison, m_noCancel).value(), false);
         }
         Engine engine(m_journal);
-        CollisionOptions options(CollisionPolicy::SkipIfIdentical);
+        TransferOptions options(CollisionPolicy::SkipIfIdentical);
         options.comparison = Comparison::Bytes;
         // Las dos carpetas se juntan y cada archivo decide por su cuenta.
         const QString folder = directory.filePath(QStringLiteral("origen"));
@@ -337,7 +337,7 @@ private slots:
             sources.append(directory.filePath(QStringLiteral("origen/") + name));
         }
         int asked = 0;
-        CollisionOptions options(CollisionPolicy::Ask);
+        TransferOptions options(CollisionPolicy::Ask);
         options.ask = [&](const Conflict &conflict) {
             ++asked;
             [&] { QCOMPARE(conflict.targetStamp.size, 5); }();
@@ -385,6 +385,21 @@ private slots:
         const Outcome skipped = engine.move({source}, destination, CollisionPolicy::Skip, m_noCancel);
         QVERIFY(skipped.ok());
         QCOMPARE(skipped.skipped, QStringList{source});   // carpeta contra carpeta: omitida entera
+    }
+
+    void verifiedCopiesAreCounted()
+    {
+        QTemporaryDir directory;
+        writeFile(directory.filePath(QStringLiteral("origen/a.txt")), "uno");
+        writeFile(directory.filePath(QStringLiteral("origen/sub/b.txt")), "dos");
+        QDir().mkpath(directory.filePath(QStringLiteral("destino")));
+        TransferOptions options(CollisionPolicy::AutoRename);
+        options.copy.verify = true;
+        Engine engine(m_journal);
+        const Outcome outcome = engine.copy({directory.filePath(QStringLiteral("origen"))},
+                                            directory.filePath(QStringLiteral("destino")), options, m_noCancel);
+        QVERIFY2(outcome.ok(), qPrintable(describe(outcome)));
+        QCOMPARE(outcome.verified, 2);
     }
 
     void folderCannotBeCopiedOrMovedIntoItself()

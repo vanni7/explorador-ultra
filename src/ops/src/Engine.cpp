@@ -89,7 +89,7 @@ class Engine::Run
 {
 public:
     Run(journal::Journal &journal, const tasks::CancelToken &cancel, const ProgressCallback &progressCallback,
-        CollisionOptions collisions = {})
+        TransferOptions collisions = {})
         : m_journal(journal), m_cancel(cancel), m_progressCallback(progressCallback),
           m_collisions(std::move(collisions))
     {
@@ -197,9 +197,12 @@ public:
                 return copyFile(source, target, m_cancel, [&](qint64 bytes) {
                     progress.bytesDone += bytes;
                     report(source);
-                });
+                }, m_collisions.copy);
             });
             ++progress.itemsDone;
+            if (ok && m_collisions.copy.verify) {
+                ++outcome.verified;
+            }
             return ok;
         }
 
@@ -478,7 +481,7 @@ private:
     journal::Journal &m_journal;
     const tasks::CancelToken &m_cancel;
     const ProgressCallback &m_progressCallback;
-    CollisionOptions m_collisions;
+    TransferOptions m_collisions;
     std::optional<CollisionPolicy> m_forAll;   ///< "Aplicar a todos" de una pregunta anterior.
 };
 
@@ -550,21 +553,21 @@ Outcome Engine::rename(const QString &path, const QString &newName)
 }
 
 Outcome Engine::copy(const QStringList &sources, const QString &destinationDirectory,
-                     const CollisionOptions &collisions, const tasks::CancelToken &cancel,
+                     const TransferOptions &collisions, const tasks::CancelToken &cancel,
                      const ProgressCallback &progress)
 {
     return transferAll(sources, destinationDirectory, collisions, cancel, progress, false);
 }
 
 Outcome Engine::move(const QStringList &sources, const QString &destinationDirectory,
-                     const CollisionOptions &collisions, const tasks::CancelToken &cancel,
+                     const TransferOptions &collisions, const tasks::CancelToken &cancel,
                      const ProgressCallback &progress)
 {
     return transferAll(sources, destinationDirectory, collisions, cancel, progress, true);
 }
 
 Outcome Engine::transferAll(const QStringList &sources, const QString &destinationDirectory,
-                            const CollisionOptions &collisions, const tasks::CancelToken &cancel,
+                            const TransferOptions &collisions, const tasks::CancelToken &cancel,
                             const ProgressCallback &progress, bool moving)
 {
     Run run(*m_journal, cancel, progress, collisions);

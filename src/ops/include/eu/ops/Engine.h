@@ -27,7 +27,7 @@ enum class CollisionPolicy {
     OverwriteIfNewer, ///< Reemplazar solo si el origen es más reciente; si no, omitir.
     AppendDateTime,   ///< Copiar con la fecha del original: "foto 2026-11-16 14.05.33.jpg".
     SkipIfIdentical,  ///< Omitir si el contenido es idéntico; si no, copiar con otro nombre.
-    Ask,              ///< Preguntar en cada caso (CollisionOptions::ask).
+    Ask,              ///< Preguntar en cada caso (TransferOptions::ask).
 };
 
 /// Un choque de nombres, para preguntar qué hacer.
@@ -49,12 +49,16 @@ struct CollisionDecision
 /// Se llama desde el hilo de la operación y espera la respuesta.
 using CollisionAsker = std::function<CollisionDecision(const Conflict &)>;
 
-struct CollisionOptions
+/// Cómo copiar o mover: qué hacer con los choques y si se comprueba cada copia.
+struct TransferOptions
 {
-    CollisionOptions(CollisionPolicy chosen = CollisionPolicy::AutoRename) : policy(chosen) {}   // NOLINT
+    TransferOptions(CollisionPolicy chosen = CollisionPolicy::AutoRename) : policy(chosen) {}   // NOLINT
     CollisionPolicy policy;
     Comparison comparison = Comparison::Hash;   ///< Para SkipIfIdentical.
     CollisionAsker ask;                         ///< Para Ask. Sin él, Ask renombra.
+    /// Comprobar cada archivo copiado releyéndolo (también al mover entre
+    /// unidades, antes de borrar el original). Ver CopyOptions.
+    CopyOptions copy;
 };
 
 /// Avance de una operación larga.
@@ -76,6 +80,7 @@ struct Outcome
     QStringList skipped;       ///< Elementos omitidos por colisión de nombre (incluye los idénticos).
     QStringList identical;     ///< De ellos, los omitidos por ser idénticos al destino.
     QStringList replaced;      ///< Destinos reemplazados (lo que había está en la papelera).
+    int verified = 0;          ///< Archivos copiados y comprobados con su hash.
     QList<core::Error> errors; ///< Lo que no se pudo hacer, con su causa.
     bool cancelled = false;
 
@@ -98,9 +103,9 @@ public:
     Outcome createFile(const QString &parentDirectory, const QString &name);
     Outcome rename(const QString &path, const QString &newName);
 
-    Outcome copy(const QStringList &sources, const QString &destinationDirectory, const CollisionOptions &collisions,
+    Outcome copy(const QStringList &sources, const QString &destinationDirectory, const TransferOptions &collisions,
                  const tasks::CancelToken &cancel, const ProgressCallback &progress = {});
-    Outcome move(const QStringList &sources, const QString &destinationDirectory, const CollisionOptions &collisions,
+    Outcome move(const QStringList &sources, const QString &destinationDirectory, const TransferOptions &collisions,
                  const tasks::CancelToken &cancel, const ProgressCallback &progress = {});
 
     /// Envía a la papelera propia. Si un volumen no admite papelera, ese
@@ -136,7 +141,7 @@ public:
 private:
     class Run;
     Outcome transferAll(const QStringList &sources, const QString &destinationDirectory,
-                        const CollisionOptions &collisions, const tasks::CancelToken &cancel,
+                        const TransferOptions &collisions, const tasks::CancelToken &cancel,
                         const ProgressCallback &progress, bool moving);
     std::shared_ptr<journal::Journal> m_journal;
 };

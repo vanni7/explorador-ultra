@@ -4,9 +4,11 @@
 #include "eu/core/Error.h"
 #include "eu/tasks/Cancel.h"
 
+#include <QCryptographicHash>
 #include <QString>
 
 #include <functional>
+#include <memory>
 
 namespace eu::ops {
 
@@ -36,6 +38,53 @@ core::Status renameNoReplace(const QString &source, const QString &target);
 /// Se llama con los bytes escritos desde el aviso anterior.
 using CopyProgress = std::function<void(qint64 bytesJustWritten)>;
 
+/// Algoritmos para comprobar que una copia es igual al original (SPEC §13).
+enum class HashAlgorithm {
+    Sha256,   ///< El de fábrica.
+    Sha1,
+    Md5,
+    Crc32,
+};
+/// "SHA-256", "MD5"…
+QString hashAlgorithmName(HashAlgorithm algorithm);
+/// Qué no garantiza (vacío para SHA-256), para decirlo junto a la opción.
+QString hashAlgorithmLimitation(HashAlgorithm algorithm);
+
+/// Calcula un hash por partes.
+class Hasher
+{
+public:
+    explicit Hasher(HashAlgorithm algorithm);
+    ~Hasher();
+    Hasher(const Hasher &) = delete;
+    Hasher &operator=(const Hasher &) = delete;
+
+    void addData(const char *data, qint64 length);
+    QByteArray result();
+
+private:
+    HashAlgorithm m_algorithm;
+    std::unique_ptr<QCryptographicHash> m_hash;
+    quint32 m_crc = 0xFFFFFFFFu;
+};
+
+/// El hash de un archivo, leído del disco (no de la caché del sistema cuando
+/// se puede pedir: Linux y macOS), para comprobar lo que de verdad quedó escrito.
+core::Result<QByteArray> hashFile(const QString &path, HashAlgorithm algorithm, const tasks::CancelToken &cancel);
+
+/// Solo para pruebas: las próximas `times` copias escriben un byte cambiado,
+/// como haría un disco o un cable defectuoso.
+void corruptNextCopiesForTesting(int times);
+
+struct CopyOptions
+{
+    /// Comprobar la copia: el hash del original se calcula al leerlo y el de
+    /// la copia, releyéndola del disco antes de darle su nombre. Si no
+    /// coinciden se repite la copia una vez; si vuelve a fallar, error.
+    bool verify = false;
+    HashAlgorithm algorithm = HashAlgorithm::Sha256;
+};
+
 /// Sufijo del archivo temporal que usa copyFile mientras escribe.
 QString partialSuffix();
 
@@ -44,7 +93,7 @@ QString partialSuffix();
 /// así nunca queda un destino a medias con el nombre bueno (SPEC §8.3).
 /// Si se cancela o falla, borra el temporal.
 core::Status copyFile(const QString &source, const QString &target, const tasks::CancelToken &cancel,
-                      const CopyProgress &progress = {});
+                      const CopyProgress &progress = {}, const CopyOptions &options = {});
 
 /// Copia un enlace simbólico como enlace (no copia aquello a lo que apunta).
 core::Status copySymlink(const QString &source, const QString &target);

@@ -9,6 +9,9 @@
 #include <QFileInfo>
 #include <QTimeZone>
 
+#include <array>
+#include <atomic>
+#include <optional>
 #include <cerrno>
 #include <cstring>
 #include <filesystem>
@@ -88,7 +91,134 @@ bool syncToDisk(QFile &file)
 #endif
 }
 
+/// Pide al sistema que lo leído o escrito de este archivo no se quede en su
+/// caché, para que releerlo vaya de verdad al disco.
+void dropFromCache(QFile &file)
+{
+#if defined(Q_OS_LINUX)
+    ::posix_fadvise(file.handle(), 0, 0, POSIX_FADV_DONTNEED);
+#elif defined(Q_OS_MACOS)
+    ::fcntl(file.handle(), F_NOCACHE, 1);
+#else
+    Q_UNUSED(file)   // Windows: sin forma sencilla con QFile; se relee de la caché
+#endif
+}
+
+std::atomic<int> s_corruptCopies{0};
+
+const std::array<quint32, 256> &crcTable()
+{
+    static const std::array<quint32, 256> table = [] {
+        std::array<quint32, 256> values{};
+        for (quint32 i = 0; i < 256; ++i) {
+            quint32 crc = i;
+            for (int bit = 0; bit < 8; ++bit) {
+                crc = (crc & 1u) ? (crc >> 1) ^ 0xEDB88320u : crc >> 1;
+            }
+            values[i] = crc;
+        }
+        return values;
+    }();
+    return table;
+}
+
 } // namespace
+
+void corruptNextCopiesForTesting(int times)
+{
+    s_corruptCopies = times;
+}
+
+QString hashAlgorithmName(HashAlgorithm algorithm)
+{
+    switch (algorithm) {
+    case HashAlgorithm::Sha256: return QStringLiteral("SHA-256");
+    case HashAlgorithm::Sha1:   return QStringLiteral("SHA-1");
+    case HashAlgorithm::Md5:    return QStringLiteral("MD5");
+    case HashAlgorithm::Crc32:  return QStringLiteral("CRC32");
+    }
+    return {};
+}
+
+QString hashAlgorithmLimitation(HashAlgorithm algorithm)
+{
+    switch (algorithm) {
+    case HashAlgorithm::Sha256:
+        return {};
+    case HashAlgorithm::Sha1:
+    case HashAlgorithm::Md5:
+        return QCoreApplication::translate("eu::ops", "Detecta errores de copia, pero no es seguro frente a "
+                                                      "alguien que modifique el archivo a propósito.");
+    case HashAlgorithm::Crc32:
+        return QCoreApplication::translate("eu::ops", "Solo detecta errores accidentales, y no todos: es el más "
+                                                      "rápido y el menos fiable.");
+    }
+    return {};
+}
+
+Hasher::Hasher(HashAlgorithm algorithm) : m_algorithm(algorithm)
+{
+    switch (algorithm) {
+    case HashAlgorithm::Sha256: m_hash = std::make_unique<QCryptographicHash>(QCryptographicHash::Sha256); break;
+    case HashAlgorithm::Sha1:   m_hash = std::make_unique<QCryptographicHash>(QCryptographicHash::Sha1); break;
+    case HashAlgorithm::Md5:    m_hash = std::make_unique<QCryptographicHash>(QCryptographicHash::Md5); break;
+    case HashAlgorithm::Crc32:  break;
+    }
+}
+
+Hasher::~Hasher() = default;
+
+void Hasher::addData(const char *data, qint64 length)
+{
+    if (m_hash) {
+        m_hash->addData(QByteArrayView(data, length));
+        return;
+    }
+    const std::array<quint32, 256> &table = crcTable();
+    quint32 crc = m_crc;
+    for (qint64 i = 0; i < length; ++i) {
+        crc = table[(crc ^ static_cast<quint8>(data[i])) & 0xFFu] ^ (crc >> 8);
+    }
+    m_crc = crc;
+}
+
+QByteArray Hasher::result()
+{
+    if (m_hash) {
+        return m_hash->result();
+    }
+    const quint32 value = m_crc ^ 0xFFFFFFFFu;
+    QByteArray bytes(4, Qt::Uninitialized);
+    bytes[0] = char((value >> 24) & 0xFF);
+    bytes[1] = char((value >> 16) & 0xFF);
+    bytes[2] = char((value >> 8) & 0xFF);
+    bytes[3] = char(value & 0xFF);
+    return bytes;
+}
+
+core::Result<QByteArray> hashFile(const QString &path, HashAlgorithm algorithm, const tasks::CancelToken &cancel)
+{
+    QFile file(path);
+    if (!file.open(QIODevice::ReadOnly)) {
+        return fromQFile(file, path);
+    }
+    dropFromCache(file);
+    Hasher hasher(algorithm);
+    std::vector<char> buffer(1024 * 1024);
+    while (true) {
+        if (cancel.isCancelled()) {
+            return core::Error{core::ErrorCode::Cancelled, QCoreApplication::translate("eu::ops", "Cancelado."), path, 0};
+        }
+        const qint64 read = file.read(buffer.data(), qint64(buffer.size()));
+        if (read < 0) {
+            return fromQFile(file, path);
+        }
+        if (read == 0) {
+            return hasher.result();
+        }
+        hasher.addData(buffer.data(), read);
+    }
+}
 
 FileStamp stampOf(const QString &path)
 {
@@ -201,8 +331,41 @@ QString partialSuffix()
     return QStringLiteral(".eu-parcial");
 }
 
+namespace {
+
+core::Status copyFileOnce(const QString &source, const QString &target, const tasks::CancelToken &cancel,
+                          const CopyProgress &progress, const CopyOptions &options, bool *verifyFailed);
+
+} // namespace
+
 core::Status copyFile(const QString &source, const QString &target, const tasks::CancelToken &cancel,
-                      const CopyProgress &progress)
+                      const CopyProgress &progress, const CopyOptions &options)
+{
+    bool verifyFailed = false;
+    qint64 reported = 0;
+    const CopyProgress counting = [&](qint64 bytes) {
+        reported += bytes;
+        if (progress) {
+            progress(bytes);
+        }
+    };
+    core::Status status = copyFileOnce(source, target, cancel, counting, options, &verifyFailed);
+    if (verifyFailed) {
+        // Un error de lectura o escritura pasajero: se repite una vez. El
+        // avance de la primera vuelta se descuenta para no pasar del total.
+        if (progress && reported > 0) {
+            progress(-reported);
+        }
+        verifyFailed = false;
+        status = copyFileOnce(source, target, cancel, progress, options, &verifyFailed);
+    }
+    return status;
+}
+
+namespace {
+
+core::Status copyFileOnce(const QString &source, const QString &target, const tasks::CancelToken &cancel,
+                          const CopyProgress &progress, const CopyOptions &options, bool *verifyFailed)
 {
     if (stampOf(target).exists) {
         return core::errorFromErrno(EEXIST, target);
@@ -227,6 +390,10 @@ core::Status copyFile(const QString &source, const QString &target, const tasks:
         return error;
     };
 
+    std::optional<Hasher> sourceHash;
+    if (options.verify) {
+        sourceHash.emplace(options.algorithm);
+    }
     std::vector<char> buffer(1024 * 1024);
     while (true) {
         cancel.yieldToInteractive();   // en un disco mecánico, abrir una carpeta pasa delante
@@ -241,6 +408,13 @@ core::Status copyFile(const QString &source, const QString &target, const tasks:
         if (read < 0) {
             return fail(fromQFile(input, source));
         }
+        if (sourceHash) {
+            sourceHash->addData(buffer.data(), read);
+        }
+        if (s_corruptCopies.load() > 0 && output.pos() == 0) {
+            --s_corruptCopies;
+            buffer[0] = char(buffer[0] ^ 0x01);   // prueba: un bit cambiado al escribir
+        }
         if (output.write(buffer.data(), read) != read) {
             return fail(fromQFile(output, partialPath));
         }
@@ -253,7 +427,25 @@ core::Status copyFile(const QString &source, const QString &target, const tasks:
     if (!syncToDisk(output)) {
         return fail(lastSystemError(partialPath));
     }
+    if (options.verify) {
+        dropFromCache(output);   // ya está en el disco: releerla debe ir a buscarla allí
+    }
     output.close();
+
+    if (sourceHash) {
+        const core::Result<QByteArray> written = hashFile(partialPath, options.algorithm, cancel);
+        if (!written.ok()) {
+            return fail(written.error());
+        }
+        if (written.value() != sourceHash->result()) {
+            *verifyFailed = true;
+            return fail(core::Error{core::ErrorCode::Corrupted,
+                                    QCoreApplication::translate("eu::ops", "La copia no es igual al original "
+                                                                           "(comprobado con %1); no se ha dejado.")
+                                        .arg(hashAlgorithmName(options.algorithm)),
+                                    target, 0});
+        }
+    }
 
     // Se conservan permisos y fecha de modificación del original. La fecha
     // sirve además para reconocer la copia al deshacer.
@@ -274,6 +466,8 @@ core::Status copyFile(const QString &source, const QString &target, const tasks:
     }
     return {};
 }
+
+} // namespace
 
 core::Status copySymlink(const QString &source, const QString &target)
 {
