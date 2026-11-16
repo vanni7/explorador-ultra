@@ -25,7 +25,7 @@ Además, en esta fase: medida la concurrencia en los discos reales y añadido qu
 | Panel de previsualización y metadatos por tipo; archivos dañados o maliciosos no cuelgan ni cierran la aplicación | **Cumplido**: el auxiliar se cierra o se cuelga a propósito en las pruebas y la aplicación sigue. Es aislamiento frente a cierres, **no un entorno restringido**: el auxiliar tiene los permisos del usuario |
 
 ## C. Verificación realizada
-- **CI**: Ubuntu 22.04 y 24.04, Ubuntu con ASan+UBSan, Windows (MSVC), macOS Intel y Apple Silicon. En Linux con Qt Multimedia, Qt PDF, FFmpeg, libarchive, LibRaw y Exiv2; en Windows y macOS sin las bibliotecas opcionales (esas pruebas se saltan y se ve el icono).
+- **CI**: Ubuntu 22.04 y 24.04, Ubuntu con ASan+UBSan, Windows (MSVC), macOS Intel y Apple Silicon. En Ubuntu 24.04 con Qt Multimedia, Qt PDF, FFmpeg, libarchive y LibRaw (no Exiv2: trae la 0.27 y se exige la 0.28, así que el EXIF solo se prueba en este equipo); en Ubuntu 22.04 sin FFmpeg (4.4, demasiado antiguo); en Windows y macOS sin las bibliotecas opcionales (esas pruebas se saltan y se ve el icono).
 - **Local**: 24 programas de prueba en release y ASan; 20 en TSan (sin los que usan la interfaz o el escalado de imágenes de Qt, que no está instrumentado; una supresión acotada documentada en `tests/tsan.supp`).
 - **VM de Windows 11**: las 24 pruebas; ahí aparecieron dos fallos (apartado D).
 - **Pantalla virtual con ratón simulado**, sobre carpetas reales del dueño: miniaturas de fotos, carpetas de PDF, videos y música; panel con EXIF real; reproducción en la miniatura.
