@@ -1,11 +1,26 @@
 # Estado del proyecto
 
-Última actualización: 2026-11-15 · Fase actual: **3 (en curso)**; la Fase 2 se entregó el 14-nov con puntos abiertos (ver `INFORME_FASE_2.md`)
+Última actualización: 2026-11-16 · Fase actual: **4 (por empezar)**; la Fase 3 se entregó el 16-nov con puntos abiertos (ver `INFORME_FASE_3.md`); la Fase 2 se entregó el 14-nov con puntos abiertos (ver `INFORME_FASE_2.md`)
 
 Estados: **Terminada** (cumple §26) · **Parcial** · **Pendiente** · **Bloqueada**.
 
 ## Punto de reanudación (se actualiza tras cada paso; si hubo un corte, empieza aquí)
-Fase 3 — Miniaturas, previsualización y metadatos, rama `fase-3/miniaturas` (sale de `main` con la Fase 2 ya fusionada). Cada paso terminado queda en un commit ya enviado a GitHub; lo que no esté en `git log` no está hecho. Antes de seguir: `git status` y compilar con el preset `release`. Si git dice «objeto vacío» tras un corte, ver las notas de `CLAUDE.md`.
+Fase 4 — Herramientas, rama `fase-4/herramientas` (sale de `main` con la Fase 3 ya fusionada). Cada paso terminado queda en un commit ya enviado a GitHub; lo que no esté en `git log` no está hecho. Antes de seguir: `git status` y compilar con el preset `release`. Si git dice «objeto vacío» tras un corte, ver las notas de `CLAUDE.md`.
+
+| # | Paso | Estado |
+|---|---|---|
+| 1 | Módulo `archive` (libarchive): navegar dentro de ZIP, 7z, TAR, TAR.GZ como ubicación virtual; RAR e ISO de solo lectura; extraer y crear ZIP/7z/TAR/TAR.GZ; pruebas de zip-slip y de bombas de descompresión | Siguiente |
+| 2 | Búsqueda en contenido (§6.5): extracción de texto de TXT, código, Markdown, PDF, DOCX, ODT, XLSX, ODS, PPTX, ODP, RTF (en el auxiliar), índice FTS5 opcional, fragmento con la coincidencia resaltada, límites por archivo | Pendiente |
+| 3 | Cola de transferencias completa: pausar, reanudar, reintentar, priorizar; velocidad y tiempo restante; verificación SHA-256 (SHA-1, MD5, CRC32); todas las políticas de colisión; reanudación con punto de control; copia ≥ 90 % de la velocidad nativa (medido) | Pendiente |
+| 4 | Renombrado masivo (`rename`): reglas en cadena, metadatos (EXIF, etiquetas de audio), vista previa con conflictos y ciclos, deshacer en bloque | Pendiente |
+| 5 | Organizador (`organize`) con simulación obligatoria y deshacer en bloque | Pendiente |
+| 6 | Duplicados (`dupes`): tamaño → hash parcial → hash completo → byte a byte opcional; enlaces físicos; nunca borra solo | Pendiente |
+| 7 | Imágenes similares (`similar`): huella perceptual, umbral ajustable, comparación lado a lado | Pendiente |
+| 8 | Etiquetas (`tags`): base local que sobrevive a mover y renombrar; huérfanas revisables | Pendiente |
+| 9 | Mediciones, verificación manual, CI, fusionar a `main`, informe | Pendiente |
+
+## Pasos de la Fase 3 (entregada el 16-nov; ver `INFORME_FASE_3.md`)
+Rama `fase-3/miniaturas`, fusionada a `main`.
 
 | # | Paso | Estado |
 |---|---|---|
