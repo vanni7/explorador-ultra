@@ -171,7 +171,7 @@ private slots:
                  QStringLiteral("2023-08-01 09.15 Canon EOS 80D 007.cr2"));
         // Sin fecha de toma, la de modificación.
         QCOMPARE(renamed(QStringLiteral("x.jpg"), {rule}, ExtensionMode::Keep, 0, {}),
-                 QStringLiteral("2024-03-12 16.57  001.jpg"));
+                 QStringLiteral("2024-03-12 16.57 001.jpg"));   // sin cámara: sin espacio doble
         rule.with = QStringLiteral("{artista} - {album} - {pista:2} {titulo}");
         Metadata song{{QStringLiteral("artista"), QStringLiteral("Soda Stereo")}, {QStringLiteral("album"), QStringLiteral("Signos")},
                       {QStringLiteral("pista"), QStringLiteral("3/12")}, {QStringLiteral("titulo"), QStringLiteral("Prófugos")}};

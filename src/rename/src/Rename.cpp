@@ -216,7 +216,9 @@ QString applyRule(const Rule &rule, const QString &current, int index, const Ite
                                                     : number + rule.separator + current;
     }
     case Rule::Kind::Template:
-        return expand(rule.with, item, index, metadata);
+        // Un dato que no hay deja espacios de más ("2024-03-12  .jpg"): se
+        // juntan y se quitan los de los extremos.
+        return expand(rule.with, item, index, metadata).simplified();
     }
     return current;
 }

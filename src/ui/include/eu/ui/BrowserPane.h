@@ -202,6 +202,8 @@ signals:
     void openFailed(const QString &path);
     /// El usuario escribió un nombre nuevo para un elemento.
     void renameRequested(const QString &path, const QString &newName);
+    /// F2 con varios seleccionados: renombrado masivo.
+    void bulkRenameRequested();
     /// Clic derecho (o tecla de menú) sobre la lista. `globalPosition` es
     /// dónde mostrar el menú.
     void contextMenuRequested(const QPoint &globalPosition);
@@ -209,6 +211,9 @@ signals:
     void filesDropped(const QStringList &paths, const QString &destination, bool move);
     /// Cambió el elemento con el cursor o lo seleccionado.
     void currentItemChanged();
+
+protected:
+    bool eventFilter(QObject *watched, QEvent *event) override;
 
 private:
     void changePath(const QString &path, const QString &nameToSelect);

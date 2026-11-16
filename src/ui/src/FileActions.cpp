@@ -270,6 +270,18 @@ quint64 FileActions::createFile(const QString &parentDirectory, const QString &n
     });
 }
 
+quint64 FileActions::renameMany(const QList<QPair<QString, QString>> &items, const QString &directory)
+{
+    QStringList paths;
+    for (const auto &item : items) {
+        paths.append(item.first);
+    }
+    return start(ActionKind::BulkRename, directory, tasks::Category::General,
+                 [items](const Context &context, ActionResult &result) {
+        result.outcome = ops::Engine(context.journal).renameMany(items, context.cancel);
+    }, paths);
+}
+
 quint64 FileActions::rename(const QString &path, const QString &newName)
 {
     // La carpeta se calcula sobre el texto de la ruta: sin tocar el disco.

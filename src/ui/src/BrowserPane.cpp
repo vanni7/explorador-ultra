@@ -27,6 +27,7 @@
 #include <QLineEdit>
 #include <QMimeData>
 #include <QPainter>
+#include <QKeyEvent>
 #include <QPointer>
 #include <QPushButton>
 #include <QRubberBand>
@@ -446,6 +447,9 @@ BrowserPane::BrowserPane(tasks::Scheduler &scheduler, fs::DirectoryWatcher &watc
 
     // Vista de miniaturas: mismo modelo y misma selección que la detallada.
     m_thumbView = new ThumbnailView(m_model, this);
+    // F2 con varios seleccionados no edita uno: pide el renombrado masivo.
+    fileView->installEventFilter(this);
+    m_thumbView->installEventFilter(this);
     {
         QItemSelectionModel *own = m_thumbView->selectionModel();
         m_thumbView->setSelectionModel(m_view->selectionModel());
@@ -997,6 +1001,17 @@ QString BrowserPane::searchWhere() const
         names.append(QDir::toNativeSeparators(root));
     }
     return tr("las unidades %1").arg(names.join(QStringLiteral(", ")));
+}
+
+bool BrowserPane::eventFilter(QObject *watched, QEvent *event)
+{
+    // (La lista edita con F2 aunque haya teclas modificadoras: aquí igual.)
+    if (event->type() == QEvent::KeyPress && static_cast<QKeyEvent *>(event)->key() == Qt::Key_F2
+        && selectedCount() > 1 && !isVirtualLocation(m_location)) {
+        emit bulkRenameRequested();
+        return true;
+    }
+    return QWidget::eventFilter(watched, event);
 }
 
 void BrowserPane::cancelSearch()

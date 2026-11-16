@@ -10,6 +10,7 @@
 #include "eu/trash/Trash.h"
 #include "eu/ui/FileClipboard.h"
 #include "eu/thumbs/Isolated.h"
+#include "eu/ui/BulkRenameDialog.h"
 #include "eu/ui/ContentIndexDialog.h"
 #include "eu/ui/IndexDialog.h"
 #include "eu/ui/PathBar.h"
@@ -401,6 +402,11 @@ void MainWindow::createEditActions()
     m_renameAction->setShortcut(QKeySequence(Qt::Key_F2));
 #endif
     connect(m_renameAction, &QAction::triggered, this, &MainWindow::renameSelection);
+    m_bulkRenameAction = new QAction(tr("Renombrar varios…"), this);
+    m_bulkRenameAction->setShortcut(QKeySequence(Qt::SHIFT | Qt::Key_F2));
+    m_bulkRenameAction->setToolTip(tr("Renombrar muchos a la vez con reglas: mayúsculas, sustituir, contador, "
+                                      "fecha de la foto, etiquetas de la música…"));
+    connect(m_bulkRenameAction, &QAction::triggered, this, &MainWindow::showBulkRename);
 
     m_cutAction = new QAction(themedIcon(QStringLiteral("edit-cut"), QStyle::SP_FileIcon), tr("Cortar"), this);
     m_cutAction->setShortcut(QKeySequence::Cut);
@@ -477,6 +483,7 @@ void MainWindow::createEditActions()
     editMenu->addAction(m_selectAllAction);
     editMenu->addSeparator();
     editMenu->addAction(m_renameAction);
+    editMenu->addAction(m_bulkRenameAction);
     editMenu->addAction(m_trashAction);
     editMenu->addAction(m_deleteAction);
 
@@ -604,7 +611,9 @@ void MainWindow::updateEditActions()
     m_copyAction->setEnabled(selected > 0 && !inArchive);
     m_cutAction->setEnabled(canRemove && selected > 0);
     m_pasteAction->setEnabled(canModify && canPaste);
-    m_renameAction->setEnabled(canModify && selected == 1);
+    // F2 con varios seleccionados abre el renombrado masivo.
+    m_renameAction->setEnabled(canModify && selected >= 1);
+    m_bulkRenameAction->setEnabled(canModify);
     m_trashAction->setEnabled(canRemove && selected > 0);
     m_deleteAction->setEnabled(canRemove && selected > 0);
     m_newFolderAction->setEnabled(canModify);
@@ -769,9 +778,31 @@ void MainWindow::newFile()
 
 void MainWindow::renameSelection()
 {
-    if (BrowserPane *pane = currentPane()) {
-        pane->startRename();
+    BrowserPane *pane = currentPane();
+    if (pane == nullptr) {
+        return;
     }
+    if (pane->selectedCount() > 1) {
+        showBulkRename();
+        return;
+    }
+    pane->startRename();
+}
+
+void MainWindow::showBulkRename()
+{
+    BrowserPane *pane = currentPane();
+    if (pane == nullptr || !m_actions->isAvailable() || isVirtualLocation(pane->currentPath())) {
+        return;
+    }
+    const QString folder = pane->currentPath();
+    BulkRenameDialog dialog(m_scheduler, pane->selectedPaths(), folder, this);
+    const bool accepted = m_bulkRenameDriver ? m_bulkRenameDriver(dialog) : dialog.exec() == QDialog::Accepted;
+    const QList<QPair<QString, QString>> renames = dialog.renames();
+    if (!accepted || renames.isEmpty()) {
+        return;
+    }
+    m_requestedCounts.insert(m_actions->renameMany(renames, folder), int(renames.size()));
 }
 
 void MainWindow::copyToClipboard(bool cut)
@@ -1262,6 +1293,11 @@ void MainWindow::onActionFinished(const ActionResult &result)
                               nullptr, int(outcome.skipped.size()));
             }
             break;
+        case ActionKind::BulkRename:
+            message = tr("Se renombraron %n elemento(s).", nullptr, int(outcome.resultPaths.size()));
+            message += QLatin1Char(' ')
+                + tr("Se deshace todo junto con Deshacer (%1).").arg(m_undoAction->shortcut().toString(QKeySequence::NativeText));
+            break;
         case ActionKind::Compress:
             if (outcome.ok() && !outcome.resultPaths.isEmpty()) {
                 message = tr("Creado «%1».").arg(QFileInfo(outcome.resultPaths.first()).fileName());
@@ -1432,6 +1468,7 @@ BrowserPane *MainWindow::openTab(const QString &path)
             updateEditActions();
         }
     });
+    connect(pane, &BrowserPane::bulkRenameRequested, this, &MainWindow::showBulkRename);
     connect(pane, &BrowserPane::renameRequested, this, [this](const QString &renamedPath, const QString &newName) {
         m_requestedCounts.insert(m_actions->rename(renamedPath, newName), 1);
     });

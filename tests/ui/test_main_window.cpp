@@ -3,6 +3,7 @@
 #include "eu/ui/FileClipboard.h"
 #include "eu/ui/Locations.h"
 #include "eu/ui/MainWindow.h"
+#include "eu/ui/BulkRenameDialog.h"
 #include "eu/ui/PathBar.h"
 #include "eu/ui/SearchResultsModel.h"
 #include "eu/ui/IndexDialog.h"
@@ -31,6 +32,7 @@
 #include <QStandardPaths>
 #include <QTemporaryDir>
 #include <QTest>
+#include <QPushButton>
 #include <QTreeWidget>
 #include <QTreeView>
 #include <QUrl>
@@ -498,6 +500,67 @@ private slots:
         QMimeData text;
         text.setText(QStringLiteral("hola"));
         QVERIFY(!dropAt(&text, emptyArea, Qt::ControlModifier));
+    }
+
+    void bulkRenameFromF2WithPreviewAndUndo()
+    {
+        QTemporaryDir data;
+        QTemporaryDir directory;
+        writeFile(directory.filePath(QStringLiteral("IMG_001.JPG")), 10);
+        writeFile(directory.filePath(QStringLiteral("IMG_002.JPG")), 10);
+        writeFile(directory.filePath(QStringLiteral("nota.txt")), 10);
+        MainWindow window(m_scheduler, openJournal(data));
+        window.show();
+        BrowserPane *pane = window.openTab(directory.path());
+        QVERIFY(waitReady(pane));
+        selectNames(pane, {QStringLiteral("IMG_001.JPG"), QStringLiteral("IMG_002.JPG")});
+
+        QStringList shown;
+        window.setBulkRenameDriverForTesting([&](BulkRenameDialog &dialog) {
+            rename::Rule replace;
+            replace.kind = rename::Rule::Kind::Replace;
+            replace.find = QStringLiteral("IMG_");
+            replace.with = QStringLiteral("Viaje ");
+            dialog.setRules({replace});
+            dialog.setExtensionMode(rename::ExtensionMode::Lower);
+            if (!QTest::qWaitFor([&] { return dialog.isPreviewCurrent(); }, 10000)) {
+                return false;
+            }
+            for (int row = 0; row < dialog.preview()->topLevelItemCount(); ++row) {
+                shown.append(dialog.preview()->topLevelItem(row)->text(0) + QStringLiteral(" -> ")
+                             + dialog.preview()->topLevelItem(row)->text(1));
+            }
+            return dialog.renameButton()->isEnabled();
+        });
+        // F2 de verdad, sobre la lista, con dos seleccionados: renombrado masivo.
+        pane->view()->setFocus();
+        QTest::keyClick(pane->view(), Qt::Key_F2);
+        QCOMPARE(shown, (QStringList{QStringLiteral("IMG_001.JPG -> Viaje 001.jpg"),
+                                     QStringLiteral("IMG_002.JPG -> Viaje 002.jpg")}));
+        QTRY_VERIFY_WITH_TIMEOUT(QFileInfo::exists(directory.filePath(QStringLiteral("Viaje 002.jpg"))), 10000);
+        QVERIFY(waitIdle(window));
+        QVERIFY(QFileInfo::exists(directory.filePath(QStringLiteral("Viaje 001.jpg"))));
+        QVERIFY(QFileInfo::exists(directory.filePath(QStringLiteral("nota.txt"))));
+
+        // Deshacer devuelve los dos de una vez.
+        window.undo();
+        QTRY_VERIFY_WITH_TIMEOUT(QFileInfo::exists(directory.filePath(QStringLiteral("IMG_001.JPG"))), 10000);
+        QVERIFY(waitIdle(window));
+        QVERIFY(QFileInfo::exists(directory.filePath(QStringLiteral("IMG_002.JPG"))));
+
+        // Toda la carpeta, con contador: incluye nota.txt.
+        window.setBulkRenameDriverForTesting([&](BulkRenameDialog &dialog) {
+            rename::Rule counter;
+            counter.kind = rename::Rule::Kind::Counter;
+            counter.count = 2;
+            counter.separator = QStringLiteral(" - ");
+            dialog.setRules({counter});
+            dialog.setScope(BulkRenameDialog::Scope::Folder, false);
+            return QTest::qWaitFor([&] { return dialog.isPreviewCurrent(); }, 10000);
+        });
+        window.showBulkRename();
+        QTRY_VERIFY_WITH_TIMEOUT(QFileInfo::exists(directory.filePath(QStringLiteral("03 - nota.txt"))), 10000);
+        QVERIFY(waitIdle(window));
     }
 
     void interruptedCopyIsResumedAndClosingMidCopyCanBeResumed()
