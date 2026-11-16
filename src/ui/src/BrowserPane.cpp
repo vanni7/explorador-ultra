@@ -962,11 +962,19 @@ QString BrowserPane::searchWhere() const
         return {};
     }
     const SearchSpec spec = searchSpecOf(m_location);
+    // Una ruta larga, con sus dos últimas carpetas («…/PDFS/WALTER RISO»): la
+    // línea tiene que dejar ver los contadores. Entera, en la ayuda emergente.
+    QString origin = QDir::cleanPath(spec.origin);
+    const QStringList parts = origin.split(QLatin1Char('/'), Qt::SkipEmptyParts);
+    if (origin.size() > 40 && parts.size() > 2) {
+        origin = QStringLiteral("…/") + parts.mid(parts.size() - 2).join(QLatin1Char('/'));
+    }
+    origin = QDir::toNativeSeparators(origin);
     switch (spec.scope) {
     case SearchScope::Folder:
-        return tr("%1 (sin subcarpetas)").arg(QDir::toNativeSeparators(spec.origin));
+        return tr("%1 (sin subcarpetas)").arg(origin);
     case SearchScope::Subfolders:
-        return QDir::toNativeSeparators(spec.origin);
+        return origin;
     case SearchScope::Volume:
         return tr("la unidad %1").arg(QDir::toNativeSeparators(spec.roots.value(0)));
     case SearchScope::AllVolumes:
@@ -1247,7 +1255,7 @@ void BrowserPane::updateSearchInfo()
         text += QStringLiteral(" · ") + m_searchError;
     }
     m_searchInfo->setText(text);
-    m_searchInfo->setToolTip(text);
+    m_searchInfo->setToolTip(text + QLatin1Char('\n') + QDir::toNativeSeparators(searchSpecOf(m_location).origin));
 }
 
 void BrowserPane::onResultActivated(const QModelIndex &index)
