@@ -182,6 +182,27 @@ struct Scheduler::Devices
         return true;
     }
 
+    /// ¿Hay algo interactivo trabajando en alguno de estos discos físicos?
+    bool interactiveOnPhysicalDevice(const QStringList &devices) const
+    {
+        std::lock_guard lock(mutex);
+        for (const QString &device : devices) {
+            const auto used = usage.find(device);
+            if (used == usage.end() || used->second.running[Interactive] == 0) {
+                continue;
+            }
+            const auto known = classes.find(device);
+            const DeviceClass deviceClass = known != classes.end() ? known->second : DeviceClass::Unknown;
+            // Medido (docs/BENCHMARKS.md): una lectura grande retrasa abrir
+            // carpetas 10-50 veces en un disco mecánico y ~18 veces en un SSD
+            // SATA. Solo en memoria (tmpfs) no hay disco que ceder.
+            if (deviceClass != DeviceClass::Virtual) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     void release(const QStringList &devices, Priority priority)
     {
         const Tier tier = tierOf(priority);
@@ -343,6 +364,14 @@ private:
             }
 
             bool failed = false;
+            // Lo que no es interactivo cede los discos lentos a lo que sí lo es
+            // (CancelToken::yieldToInteractive).
+            const bool mayYield = !task->devices.isEmpty() && Devices::tierOf(task->priority) != Devices::Interactive;
+            if (mayYield) {
+                task->cancelSource.setDeviceBusyCheck([devices = &m_devices, list = task->devices] {
+                    return devices->interactiveOnPhysicalDevice(list);
+                });
+            }
             // Una tarea cancelada antes de empezar no se ejecuta.
             if (!task->cancelSource.token().isCancelled()) {
                 try {
@@ -357,6 +386,9 @@ private:
             }
             // Se libera la función ya: puede retener memoria o referencias.
             task->function = nullptr;
+            if (mayYield) {
+                task->cancelSource.setDeviceBusyCheck({});   // el token puede vivir más que el planificador
+            }
 
             {
                 std::lock_guard lock(m_mutex);

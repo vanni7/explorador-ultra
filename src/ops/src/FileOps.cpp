@@ -227,6 +227,7 @@ core::Status copyFile(const QString &source, const QString &target, const tasks:
 
     std::vector<char> buffer(1024 * 1024);
     while (true) {
+        cancel.yieldToInteractive();   // en un disco mecánico, abrir una carpeta pasa delante
         if (cancel.isCancelled()) {
             return fail(core::Error{core::ErrorCode::Cancelled,
                                     QCoreApplication::translate("eu::ops", "Copia cancelada."), source, 0});

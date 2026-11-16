@@ -96,6 +96,39 @@ Lectura: con una pista de nombre (palabra, comodín o extensión) la base descar
 
 **Meta de SPEC §4 (1 000 000 de entradas, primeros resultados < 200 ms): cumplida en este equipo cuando hay resultados** (5–76 ms hasta el primero). Cuando la consulta no tiene pista de nombre y no hay nada que encontrar, saberlo cuesta entre 0,8 y 1,2 s: es lo que tarda en leer el millón de filas. Límites de la medición: árbol sintético (nombres cortos, pocas carpetas), caché caliente, medido dentro del proceso y no en la ventana. Falta: caché fría, discos mecánicos, Windows y macOS.
 
+### Concurrencia por disco: discos reales de este equipo (Fase 2, 15-nov)
+Discos: YEILY es un Seagate ST8000DM004 mecánico de 8 TB (ext4); RESPALDO es un ADATA SU800 SSD SATA (ext4); el sistema está en un Samsung 860 EVO M.2 SATA. Planificador de E/S del kernel: `mq-deadline` en todos. **Caché del sistema vaciada antes de cada pasada** (`drop_caches`), así que es disco frío. Herramientas: `eu-bench walk` (recorrer árboles, un hilo cada uno), `dd` para leer archivos y `eu-bench yield`. Dos rondas de cada medida; se dan las dos cifras.
+
+**1. Dos recorridos de carpetas en el mismo disco mecánico** (`MP3/20 FINGERS`, 4 473 carpetas; `MP3/0CHILL OUT Y BOSSA`, 741 carpetas):
+
+| Cómo | Total |
+|---|---|
+| Uno detrás de otro | 5,29 s · 5,16 s |
+| Los dos a la vez | 4,84 s · 4,76 s |
+
+Leer listados a la vez no perjudica en un disco mecánico (el disco reordena las peticiones); fue un 8–10 % más rápido.
+
+**2. Leer dos archivos de 2,1 GB del mismo disco mecánico** (`dd`, bloques de 4 MB):
+
+| Cómo | Total | Primer archivo listo |
+|---|---|---|
+| Uno detrás de otro | 25,0 s · 25,0 s (168 MB/s cada uno) | 12,6 s |
+| Los dos a la vez | 24,4 s · 24,4 s (87–94 MB/s cada uno) | 22,2 s |
+
+El total es igual; en serie el primero está listo en la mitad de tiempo. Por eso el límite de una tarea de fondo por disco mecánico se mantiene.
+
+**3. Abrir carpetas mientras otra tarea lee un archivo grande del mismo disco** (el problema que sí importa):
+
+| Disco | Listar solo (frío) | Mientras se lee, sin ceder | Mientras se lee, cediendo (`yieldToInteractive`) |
+|---|---|---|---|
+| Mecánico YEILY (`0CHILL OUT Y BOSSA`) | 0,21–1,19 s | 11,0–11,4 s | **0,24–0,33 s** |
+| SSD SATA del sistema (`~/Qt/6.12.0/gcc_64`, 959 carpetas) | 0,22 s | 3,8–4,0 s | **0,22–0,23 s** |
+| SSD SATA RESPALDO, `dd` de un archivo de 68 GB | 0,93–0,94 s | 34–36 s | (no repetido: el archivo era la imagen de otra máquina virtual) |
+
+Sin ceder, en el disco mecánico el listado no terminaba hasta acabar de leer el archivo entero (2,1 GB). Cediendo, la lectura se detiene mientras se lista y abrir carpetas tarda lo mismo que con el disco libre. Por eso las tareas largas (copiar, indexar, medir carpetas) ceden **todos los discos físicos**, no solo los mecánicos; solo no ceden en las unidades en memoria. Una medición con un archivo de 1,1 GB en RESPALDO no sirvió: el SSD lo leyó entero antes de empezar a listar.
+
+No medido: escrituras (copias dentro del mismo disco), memorias USB, unidades de red, Windows y macOS.
+
 ### No medido todavía (pendiente)
 - Tiempo de apertura real de una carpeta en Archivos de GNOME (no hay forma fiable de automatizarlo; `gio list` es una aproximación de su motor, no de su interfaz).
 - Caché fría, HDD, USB y unidades de red.

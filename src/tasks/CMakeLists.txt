@@ -1,5 +1,6 @@
 # Módulo tasks: planificador de trabajo en segundo plano. Sin interfaz gráfica.
 add_library(eu_tasks STATIC
+    src/Cancel.cpp
     src/Scheduler.cpp)
 add_library(eu::tasks ALIAS eu_tasks)
 
