@@ -1241,12 +1241,15 @@ private slots:
         // Ancha: el nombre se queda con lo que sobra, sin barra horizontal.
         QTRY_VERIFY(header->sectionSize(0) > 300);
         QTRY_COMPARE(header->length(), pane->view()->viewport()->width());
-        // Estrecha: el nombre no baja de un ancho legible.
-        window.resize(560, 500);
-        QTRY_VERIFY(pane->view()->viewport()->width() < 500);
-        QTRY_COMPARE(header->sectionSize(0), 220);
-        window.resize(1400, 800);
-        QTRY_COMPARE(header->length(), pane->view()->viewport()->width());
+        // Sin sitio (ventana estrecha o columnas anchas): el nombre no baja de
+        // un ancho legible y aparece la barra horizontal. (La ventana no se
+        // estrecha en la prueba: su ancho mínimo cambia con el sistema.)
+        const int typeColumn = 2;
+        const int typeWidth = header->sectionSize(typeColumn);
+        header->resizeSection(typeColumn, 3000);
+        QCOMPARE(header->sectionSize(0), 220);
+        header->resizeSection(typeColumn, typeWidth);
+        QCOMPARE(header->length(), pane->view()->viewport()->width());
     }
 
     void treeArrowsPasteAndRefresh()
