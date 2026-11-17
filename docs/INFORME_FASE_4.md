@@ -51,7 +51,7 @@ Fecha: 2026-11-16 · Estado: **entregada con puntos abiertos**. El explorador na
 | Una prueba daba por válido «:» con las reglas nativas (no lo es en macOS ni Windows) | CI | Prueba corregida |
 | «Omitir si son idénticos» dejaba otra copia numerada si ya existía «(2)» idéntico | Pantalla virtual | Corregido |
 | La columna de etiquetas quitaba sitio al nombre | Pantalla virtual | Solo aparece si algo de la carpeta tiene etiquetas |
-| `copyCutPasteAndUndo` falló una vez en Windows (tras pegar, 1 seleccionado de 2) | CI | Sin explicar; esa prueba ya falló a ratos en la Fase 2 |
+| Tras pegar varios, a veces quedaba seleccionado solo uno: si al terminar la copia la lista aún no mostraba todos (el aviso del sistema de alguno no había llegado), se seleccionaba lo que había y se dejaba de esperar | CI de Windows, dos veces seguidas en `copyCutPasteAndUndo` | Corregido: se sigue esperando a los que faltan y se vuelve a leer la carpeta |
 | Las pruebas de duplicados y de imágenes parecidas se colgaban en macOS: allí la carpeta temporal no tiene papelera y la ventana ofrecía borrar del todo con un diálogo | CI | Pruebas corregidas (se saltan sin papelera, como las de la Fase 2) |
 
 ## E. Lo que queda abierto

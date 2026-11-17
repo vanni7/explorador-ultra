@@ -1482,6 +1482,12 @@ bool BrowserPane::applyPendingSelection()
     const QModelIndex first = m_model->index(rows.first(), int(Column::Name));
     selection->setCurrentIndex(first, QItemSelectionModel::NoUpdate);
     fileView()->scrollTo(first);
+    if (rows.size() < m_pendingNames.size()) {
+        // Aún no están todos (el aviso de alguno no ha llegado): se selecciona
+        // lo que hay y se sigue esperando al resto en la próxima lectura.
+        emit statusChanged();
+        return false;
+    }
     const bool edit = m_pendingEdit;
     m_pendingNames.clear();
     m_pendingEdit = false;
