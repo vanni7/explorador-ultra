@@ -103,7 +103,10 @@ void DirectoryModel::clear()
 void DirectoryModel::refresh()
 {
     if (!m_path.isEmpty()) {
-        startLoading(m_state == State::Ready);
+        // Se conserva lo que se ve mientras se vuelve a leer, también si ya se
+        // estaba releyendo (dos avisos seguidos del disco): si no, la lista
+        // quedaría en blanco un instante y soltar sobre una carpeta fallaría.
+        startLoading(m_state == State::Ready || (m_state == State::Loading && m_keepCurrentContent));
     }
 }
 

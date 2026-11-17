@@ -522,6 +522,11 @@ private slots:
         QVERIFY(waitIdle(window));
 
         // Una carpeta no se puede soltar dentro de sí misma, ni texto que no son archivos.
+        // Dos relecturas seguidas conservan las filas.
+        pane->refresh();
+        pane->refresh();
+        QVERIFY(pane->model()->rowOfName(QStringLiteral("carpeta")) >= 0);
+        QVERIFY(waitReady(pane));
         std::unique_ptr<QMimeData> itself(makeFileMimeData({folder}, false));
         QVERIFY(!dropAt(itself.get(), centerOf(QStringLiteral("carpeta")), Qt::ControlModifier));
         QMimeData text;
