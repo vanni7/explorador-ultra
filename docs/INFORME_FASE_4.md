@@ -52,6 +52,8 @@ Fecha: 2026-11-16 · Estado: **entregada con puntos abiertos**. El explorador na
 | «Omitir si son idénticos» dejaba otra copia numerada si ya existía «(2)» idéntico | Pantalla virtual | Corregido |
 | La columna de etiquetas quitaba sitio al nombre | Pantalla virtual | Solo aparece si algo de la carpeta tiene etiquetas |
 | Tras pegar varios, a veces quedaba seleccionado solo uno: si al terminar la copia la lista aún no mostraba todos (el aviso del sistema de alguno no había llegado), se seleccionaba lo que había y se dejaba de esperar | CI de Windows, dos veces seguidas en `copyCutPasteAndUndo` | Corregido: se sigue esperando a los que faltan y se vuelve a leer la carpeta |
+| Mientras una carpeta se volvía a leer (tras un cambio en el disco), soltar archivos en ella se rechazaba | CI de macOS (`dragAndDrop`): allí el aviso del disco llega tarde y coincide | Corregido: se puede soltar en la carpeta; sobre una fila, solo con la lista al día. Prueba nueva |
+| Con varios escritores a la vez y un disco lento, una escritura del historial podía fallar por «base ocupada» (y la operación no se habría hecho) | CI de Windows (`manyThreadsWriteAtOnce`; ya falló una vez en la Fase 3) | Corregido: las escrituras se reintentan si SQLite dice ocupada, y la espera sube a 30 s. Importa más ahora que la cola puede llevar varias transferencias a la vez |
 | Las pruebas de duplicados y de imágenes parecidas se colgaban en macOS: allí la carpeta temporal no tiene papelera y la ventana ofrecía borrar del todo con un diálogo | CI | Pruebas corregidas (se saltan sin papelera, como las de la Fase 2) |
 
 ## E. Lo que queda abierto

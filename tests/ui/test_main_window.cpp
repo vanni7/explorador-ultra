@@ -493,10 +493,21 @@ private slots:
         QTemporaryDir outside;
         writeFile(outside.filePath(QStringLiteral("externo.txt")), 7);
         std::unique_ptr<QMimeData> external(makeFileMimeData({outside.filePath(QStringLiteral("externo.txt"))}, false));
+        QVERIFY(waitReady(pane));
         QVERIFY(dropAt(external.get(), emptyArea, Qt::ShiftModifier));
         QTRY_VERIFY_WITH_TIMEOUT(QFileInfo::exists(directory.filePath(QStringLiteral("externo.txt"))), 10000);
         QVERIFY(waitIdle(window));
         QVERIFY(!QFileInfo::exists(outside.filePath(QStringLiteral("externo.txt"))));
+
+        // Mientras la carpeta se vuelve a leer, soltar en ella también vale
+        // (en macOS el aviso del disco llega tarde y la relectura coincide).
+        writeFile(outside.filePath(QStringLiteral("durante.txt")), 7);
+        std::unique_ptr<QMimeData> during(makeFileMimeData({outside.filePath(QStringLiteral("durante.txt"))}, false));
+        pane->refresh();
+        QCOMPARE(pane->model()->state(), DirectoryModel::State::Loading);
+        QVERIFY(dropAt(during.get(), emptyArea, Qt::ShiftModifier));
+        QTRY_VERIFY_WITH_TIMEOUT(QFileInfo::exists(directory.filePath(QStringLiteral("durante.txt"))), 10000);
+        QVERIFY(waitIdle(window));
 
         // Una carpeta no se puede soltar dentro de sí misma, ni texto que no son archivos.
         std::unique_ptr<QMimeData> itself(makeFileMimeData({folder}, false));

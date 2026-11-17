@@ -337,12 +337,14 @@ private:
     DropPlan planFor(const QDropEvent *event, int *targetRow) const
     {
         // Dentro de un comprimido no se suelta nada (aún no se añade a él).
-        if (m_model->path().isEmpty() || m_model->state() != DirectoryModel::State::Ready
-            || isArchiveLocation(m_model->path())) {
+        if (m_model->path().isEmpty() || isArchiveLocation(m_model->path())) {
             return {};
         }
+        // Mientras la carpeta se vuelve a leer (tras un cambio en el disco) se
+        // puede soltar en ella; sobre una fila, no: puede estar desfasada.
+        const bool ready = m_model->state() == DirectoryModel::State::Ready;
         QString target = m_model->path();
-        const QModelIndex index = indexAt(event->position().toPoint());
+        const QModelIndex index = ready ? indexAt(event->position().toPoint()) : QModelIndex();
         if (index.isValid() && m_model->entryAt(index.row()).isDirectory) {
             *targetRow = index.row();
             target = m_model->filePath(index.row());
