@@ -52,6 +52,7 @@ Fecha: 2026-11-16 · Estado: **entregada con puntos abiertos**. El explorador na
 | «Omitir si son idénticos» dejaba otra copia numerada si ya existía «(2)» idéntico | Pantalla virtual | Corregido |
 | La columna de etiquetas quitaba sitio al nombre | Pantalla virtual | Solo aparece si algo de la carpeta tiene etiquetas |
 | `copyCutPasteAndUndo` falló una vez en Windows (tras pegar, 1 seleccionado de 2) | CI | Sin explicar; esa prueba ya falló a ratos en la Fase 2 |
+| Las pruebas de duplicados y de imágenes parecidas se colgaban en macOS: allí la carpeta temporal no tiene papelera y la ventana ofrecía borrar del todo con un diálogo | CI | Pruebas corregidas (se saltan sin papelera, como las de la Fase 2) |
 
 ## E. Lo que queda abierto
 1. **Que el dueño lo pruebe** todo: comprimidos, búsqueda en documentos, índice de contenido, cola de transferencias, renombrado, organizador, duplicados, parecidas y etiquetas.

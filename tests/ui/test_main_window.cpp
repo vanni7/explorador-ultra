@@ -653,14 +653,26 @@ private slots:
             }
             return dialog.result() == QDialog::Accepted;
         });
+        // Donde la carpeta temporal no tiene papelera (macOS), se ofrecería
+        // borrar del todo: se contesta que no y la prueba se salta ahí.
+        bool trashUnsupported = false;
+        window.setDeleteConfirmation([&trashUnsupported](const QStringList &) {
+            trashUnsupported = true;
+            return false;
+        });
         window.showDuplicates();
         QCOMPARE(groups, 1);
         QVERIFY(keptOne);
-        QTRY_COMPARE_WITH_TIMEOUT(int(QFileInfo::exists(directory.filePath(QStringLiteral("a/foto.jpg"))))
-                                      + int(QFileInfo::exists(directory.filePath(QStringLiteral("b/foto.jpg"))))
-                                      + int(QFileInfo::exists(directory.filePath(QStringLiteral("c/copia.jpg")))),
-                                  1, 10000);
+        const auto remaining = [&] {
+            return int(QFileInfo::exists(directory.filePath(QStringLiteral("a/foto.jpg"))))
+                + int(QFileInfo::exists(directory.filePath(QStringLiteral("b/foto.jpg"))))
+                + int(QFileInfo::exists(directory.filePath(QStringLiteral("c/copia.jpg"))));
+        };
+        QTRY_VERIFY_WITH_TIMEOUT(trashUnsupported || remaining() == 1, 10000);
         QVERIFY(waitIdle(window));
+        if (trashUnsupported) {
+            QSKIP("El volumen temporal de este equipo no admite papelera.");
+        }
         // Deshacer las devuelve.
         window.undo();
         QTRY_VERIFY_WITH_TIMEOUT(QFileInfo::exists(directory.filePath(QStringLiteral("c/copia.jpg"))), 10000);
@@ -708,11 +720,19 @@ private slots:
             dialog.sendToTrash();
             return dialog.result() == QDialog::Accepted;
         });
+        bool trashUnsupported = false;
+        window.setDeleteConfirmation([&trashUnsupported](const QStringList &) {
+            trashUnsupported = true;
+            return false;
+        });
         window.showSimilarImages();
         QCOMPARE(groups, 1);
         QVERIFY(lastRefused);
-        QTRY_COMPARE_WITH_TIMEOUT(QDir(directory.path()).entryList(QDir::Files).size(), 1, 10000);
+        QTRY_VERIFY_WITH_TIMEOUT(trashUnsupported || QDir(directory.path()).entryList(QDir::Files).size() == 1, 10000);
         QVERIFY(waitIdle(window));
+        if (trashUnsupported) {
+            QSKIP("El volumen temporal de este equipo no admite papelera.");
+        }
     }
 
     void tagsShowFollowRenamesAndAreSearchable()
