@@ -7,6 +7,7 @@
 
 #include <QCoreApplication>
 #include <QDir>
+#include <QFileInfo>
 
 #include <windows.h>
 
@@ -46,6 +47,42 @@ qint64 fileTimeToMs(const FILETIME &time)
 }
 
 } // namespace
+
+core::Result<Entry> entryFor(const QString &path)
+{
+    Entry entry;
+    entry.name = QFileInfo(path).fileName();
+    const std::wstring native = QDir::toNativeSeparators(QDir::cleanPath(path)).toStdWString();
+    // Sin seguir enlaces ni puntos de reanálisis; BACKUP_SEMANTICS permite abrir carpetas.
+    HANDLE handle = CreateFileW(native.c_str(), FILE_READ_ATTRIBUTES,
+                                FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING,
+                                FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
+    if (handle == INVALID_HANDLE_VALUE) {
+        return core::Error{core::ErrorCode::NotFound,
+                           QCoreApplication::translate("eu::fs", "No se pudieron leer los datos del archivo."), path,
+                           int(GetLastError())};
+    }
+    BY_HANDLE_FILE_INFORMATION info{};
+    const BOOL ok = GetFileInformationByHandle(handle, &info);
+    CloseHandle(handle);
+    if (!ok) {
+        return core::Error{core::ErrorCode::IoError,
+                           QCoreApplication::translate("eu::fs", "No se pudieron leer los datos del archivo."), path,
+                           int(GetLastError())};
+    }
+    entry.size = (qint64(info.nFileSizeHigh) << 32) | qint64(info.nFileSizeLow);
+    entry.modifiedMs = fileTimeToMs(info.ftLastWriteTime);
+    entry.createdMs = fileTimeToMs(info.ftCreationTime);
+    entry.fileId = (std::uint64_t(info.nFileIndexHigh) << 32) | std::uint64_t(info.nFileIndexLow);
+    entry.deviceId = std::uint64_t(info.dwVolumeSerialNumber);
+    entry.isDirectory = (info.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0;
+    entry.isSymlink = (info.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0;
+    entry.isHidden = (info.dwFileAttributes & FILE_ATTRIBUTE_HIDDEN) != 0;
+    if (entry.isDirectory) {
+        entry.size = 0;
+    }
+    return entry;
+}
 
 core::Status listDirectory(const QString &path, const ListOptions &options,
                            const tasks::CancelToken &cancel, const BatchCallback &onBatch)

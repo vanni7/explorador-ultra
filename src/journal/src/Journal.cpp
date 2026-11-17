@@ -9,6 +9,8 @@
 #include <QSqlError>
 #include <QSqlQuery>
 #include <QThread>
+
+#include <algorithm>
 #include <QUuid>
 #include <QVariant>
 
@@ -18,7 +20,7 @@ namespace {
 
 /// Versión actual del esquema. Cada cambio de tablas añade una migración a
 /// `migrations` y sube este número; nunca se edita una migración ya publicada.
-constexpr int currentSchemaVersion = 1;
+constexpr int currentSchemaVersion = 2;
 
 const char *const migrationToV1[] = {
     "CREATE TABLE operations ("
@@ -41,6 +43,37 @@ const char *const migrationToV1[] = {
     "CREATE INDEX steps_by_operation ON steps(operation_id, sequence)",
     "CREATE INDEX operations_by_state ON operations(state)",
 };
+
+/// v2: el plan de copiar y mover (qué va a dónde), para reanudarlas tras un
+/// cierre inesperado (SPEC §9).
+const char *const migrationToV2[] = {
+    "CREATE TABLE plan_items ("
+    "  operation_id INTEGER NOT NULL REFERENCES operations(id) ON DELETE CASCADE,"
+    "  sequence INTEGER NOT NULL,"
+    "  source TEXT NOT NULL,"
+    "  target TEXT NOT NULL,"
+    "  PRIMARY KEY(operation_id, sequence))",
+};
+
+/// Ejecuta una escritura y, si SQLite contesta que la base está ocupada por
+/// otro escritor (BUSY o LOCKED, también en los casos en que no espera el
+/// busy_timeout), la reintenta un rato en vez de dar la operación por perdida.
+/// Con varias transferencias a la vez en un disco lento, el turno puede tardar.
+bool execWriting(QSqlQuery &query)
+{
+    for (int attempt = 0;; ++attempt) {
+        if (query.exec()) {
+            return true;
+        }
+        const QString code = query.lastError().nativeErrorCode();
+        const bool busy = code == QLatin1String("5") || code == QLatin1String("6") || code == QLatin1String("261")
+            || code == QLatin1String("262") || code == QLatin1String("517") || code == QLatin1String("773");
+        if (!busy || attempt >= 300) {
+            return false;
+        }
+        QThread::msleep(std::min(100, 5 + attempt * 5));
+    }
+}
 
 core::Error databaseError(const QSqlError &error, const QString &path)
 {
@@ -91,7 +124,7 @@ public:
             // lento, pero el historial es justo lo que debe sobrevivir a un corte.
             setup.exec(QStringLiteral("PRAGMA synchronous=FULL"));
             setup.exec(QStringLiteral("PRAGMA foreign_keys=ON"));
-            setup.exec(QStringLiteral("PRAGMA busy_timeout=10000"));
+            setup.exec(QStringLiteral("PRAGMA busy_timeout=30000"));
         }
     }
 
@@ -176,7 +209,78 @@ core::Status Journal::prepareDatabase()
             return databaseError(error, m_filePath);
         }
     }
+    if (version < 2) {
+        if (!database.transaction()) {
+            return databaseError(database.lastError(), m_filePath);
+        }
+        for (const char *statement : migrationToV2) {
+            if (!query.exec(QString::fromLatin1(statement))) {
+                const QSqlError error = query.lastError();
+                database.rollback();
+                return databaseError(error, m_filePath);
+            }
+        }
+        if (!query.exec(QStringLiteral("PRAGMA user_version=2")) || !database.commit()) {
+            const QSqlError error = database.lastError();
+            database.rollback();
+            return databaseError(error, m_filePath);
+        }
+    }
     return {};
+}
+
+core::Status Journal::setPlan(OperationId operation, const QList<QPair<QString, QString>> &items)
+{
+    Connection connection(*this);
+    QSqlDatabase &database = connection.database();
+    database.transaction();
+    QSqlQuery query(database);
+    query.prepare(QStringLiteral("INSERT INTO plan_items(operation_id, sequence, source, target) VALUES(?, ?, ?, ?)"));
+    for (qsizetype i = 0; i < items.size(); ++i) {
+        query.addBindValue(operation);
+        query.addBindValue(int(i));
+        query.addBindValue(items[i].first);
+        query.addBindValue(items[i].second);
+        if (!execWriting(query)) {
+            const QSqlError error = query.lastError();
+            database.rollback();
+            return databaseError(error, m_filePath);
+        }
+    }
+    if (!database.commit()) {
+        return databaseError(database.lastError(), m_filePath);
+    }
+    return {};
+}
+
+core::Status Journal::setPlanTarget(OperationId operation, int index, const QString &target)
+{
+    Connection connection(*this);
+    QSqlQuery query(connection.database());
+    query.prepare(QStringLiteral("UPDATE plan_items SET target=? WHERE operation_id=? AND sequence=?"));
+    query.addBindValue(target);
+    query.addBindValue(operation);
+    query.addBindValue(index);
+    if (!execWriting(query)) {
+        return databaseError(query.lastError(), m_filePath);
+    }
+    return {};
+}
+
+core::Result<QList<QPair<QString, QString>>> Journal::plan(OperationId operation) const
+{
+    Connection connection(*this);
+    QSqlQuery query(connection.database());
+    query.prepare(QStringLiteral("SELECT source, target FROM plan_items WHERE operation_id=? ORDER BY sequence"));
+    query.addBindValue(operation);
+    if (!query.exec()) {
+        return databaseError(query.lastError(), m_filePath);
+    }
+    QList<QPair<QString, QString>> items;
+    while (query.next()) {
+        items.append({query.value(0).toString(), query.value(1).toString()});
+    }
+    return items;
 }
 
 int Journal::schemaVersion() const
@@ -198,7 +302,7 @@ core::Result<OperationId> Journal::beginOperation(OperationKind kind, const QStr
     query.addBindValue(int(OperationState::Running));
     query.addBindValue(description);
     query.addBindValue(QDateTime::currentMSecsSinceEpoch());
-    if (!query.exec()) {
+    if (!execWriting(query)) {
         return databaseError(query.lastError(), m_filePath);
     }
     return query.lastInsertId().toLongLong();
@@ -212,7 +316,7 @@ core::Status Journal::finishOperation(OperationId id, OperationState state)
     query.addBindValue(int(state));
     query.addBindValue(QDateTime::currentMSecsSinceEpoch());
     query.addBindValue(id);
-    if (!query.exec()) {
+    if (!execWriting(query)) {
         return databaseError(query.lastError(), m_filePath);
     }
     return {};
@@ -233,7 +337,7 @@ core::Result<StepId> Journal::addStep(OperationId operation, StepKind kind, cons
     // Un QString nulo se guardaría como NULL; se quiere texto vacío.
     query.addBindValue(source.isNull() ? QStringLiteral("") : source);
     query.addBindValue(target.isNull() ? QStringLiteral("") : target);
-    if (!query.exec()) {
+    if (!execWriting(query)) {
         return databaseError(query.lastError(), m_filePath);
     }
     return query.lastInsertId().toLongLong();
@@ -248,7 +352,7 @@ core::Status Journal::completeStep(StepId id, qint64 resultSize, qint64 resultMo
     query.addBindValue(resultSize);
     query.addBindValue(resultModifiedMs);
     query.addBindValue(id);
-    if (!query.exec()) {
+    if (!execWriting(query)) {
         return databaseError(query.lastError(), m_filePath);
     }
     return {};
@@ -261,7 +365,7 @@ core::Status Journal::setStepState(StepId id, StepState state)
     query.prepare(QStringLiteral("UPDATE steps SET state=? WHERE id=?"));
     query.addBindValue(int(state));
     query.addBindValue(id);
-    if (!query.exec()) {
+    if (!execWriting(query)) {
         return databaseError(query.lastError(), m_filePath);
     }
     return {};
@@ -358,7 +462,7 @@ core::Result<int> Journal::prune(int maxOperations, int maxAgeDays)
     query.addBindValue(int(OperationState::Running));
     query.addBindValue(oldestAllowedMs);
     query.addBindValue(maxOperations);
-    if (!query.exec()) {
+    if (!execWriting(query)) {
         return databaseError(query.lastError(), m_filePath);
     }
     return query.numRowsAffected();

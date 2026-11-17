@@ -15,7 +15,8 @@ enum class Column {
     Size = 1,
     Type = 2,
     Modified = 3,
-    Count = 4,
+    Tags = 4,     ///< Etiquetas (no ordena).
+    Count = 5,
 };
 
 /// Extensión en minúsculas, sin el punto ("JPG" -> "jpg"). Vacía si no tiene.

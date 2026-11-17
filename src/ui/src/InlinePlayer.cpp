@@ -22,8 +22,18 @@ struct InlinePlayer::Backend
     QElapsedTimer sinceFrame;
 };
 
-InlinePlayer::InlinePlayer(QObject *parent) : QObject(parent), m_backend(std::make_unique<Backend>())
+InlinePlayer::InlinePlayer(QObject *parent) : QObject(parent)
 {
+    // El reproductor se crea al primer ▶: cargar Qt Multimedia (y su FFmpeg,
+    // y preguntar por los dispositivos de sonido) retrasaría abrir la ventana.
+}
+
+void InlinePlayer::ensureBackend()
+{
+    if (m_backend) {
+        return;
+    }
+    m_backend = std::make_unique<Backend>();
     Backend &backend = *m_backend;
     backend.player.setVideoSink(&backend.sink);
     connect(&backend.sink, &QVideoSink::videoFrameChanged, this, [this](const QVideoFrame &frame) {
@@ -65,6 +75,7 @@ bool InlinePlayer::isAvailable()
 bool InlinePlayer::play(const QString &path, bool isAudio)
 {
     stop();
+    ensureBackend();
     m_path = path;
     m_isAudio = isAudio;
     m_error.clear();
@@ -84,8 +95,10 @@ void InlinePlayer::stop()
     if (m_path.isEmpty()) {
         return;
     }
-    m_backend->player.stop();
-    m_backend->player.setSource(QUrl());   // suelta el archivo (en Windows, lo bloquearía)
+    if (m_backend) {
+        m_backend->player.stop();
+        m_backend->player.setSource(QUrl());   // suelta el archivo (en Windows, lo bloquearía)
+    }
     m_path.clear();
     m_frame = QImage();
     emit stopped();
@@ -99,12 +112,12 @@ bool InlinePlayer::isPlaying() const
 
 qint64 InlinePlayer::positionMs() const
 {
-    return m_backend->player.position();
+    return m_backend ? m_backend->player.position() : 0;
 }
 
 qint64 InlinePlayer::durationMs() const
 {
-    return m_backend->player.duration();
+    return m_backend ? m_backend->player.duration() : 0;
 }
 
 #else

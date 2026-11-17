@@ -4,6 +4,7 @@
 #include "eu/core/Error.h"
 
 #include <QList>
+#include <QPair>
 #include <QString>
 
 #include <memory>
@@ -100,6 +101,13 @@ public:
     core::Result<StepId> addStep(OperationId operation, StepKind kind, const QString &source, const QString &target);
     core::Status completeStep(StepId id, qint64 resultSize, qint64 resultModifiedMs);
     core::Status setStepState(StepId id, StepState state);
+
+    /// Plan de una copia o un movimiento: cada origen y su destino (ruta
+    /// completa). Se guarda al empezar y se corrige cuando un choque de
+    /// nombres cambia el destino; sirve para reanudarla (SPEC §9).
+    core::Status setPlan(OperationId operation, const QList<QPair<QString, QString>> &items);
+    core::Status setPlanTarget(OperationId operation, int index, const QString &target);
+    core::Result<QList<QPair<QString, QString>>> plan(OperationId operation) const;
 
     core::Result<Operation> operation(OperationId id) const;
     core::Result<QList<Step>> steps(OperationId id) const;

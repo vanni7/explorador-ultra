@@ -1,11 +1,14 @@
 // Explorador Ultra — SPDX-License-Identifier: GPL-3.0-or-later
 #include "eu/search/Searcher.h"
 
+#include "eu/content/TextExtractor.h"
 #include "eu/fs/DirectoryLister.h"
 
 #include <QDir>
 #include <QFile>
+#include <QCoreApplication>
 #include <QFileInfo>
+#include <QSet>
 #include <QStringDecoder>
 
 #include <chrono>
@@ -45,11 +48,35 @@ QString childPath(const QString &directory, const QString &name)
     return directory.endsWith(QLatin1Char('/')) ? directory + name : directory + QLatin1Char('/') + name;
 }
 
-/// Lee un archivo como texto la primera vez que la consulta lo pide.
+/// "pág. 12", "diap. 3" o "línea 40", según el tipo de documento.
+QString placeOf(const QString &fileName, const content::Snippet &snippet)
+{
+    switch (content::textSourceFor(fileName)) {
+    case content::TextSource::Pdf:
+        return snippet.page > 0 ? QCoreApplication::translate("eu::search", "pág. %1").arg(snippet.page) : QString();
+    case content::TextSource::PowerPoint:
+        return snippet.page > 0 ? QCoreApplication::translate("eu::search", "diap. %1").arg(snippet.page) : QString();
+    case content::TextSource::Plain:
+        return QCoreApplication::translate("eu::search", "línea %1").arg(snippet.line);
+    default:
+        return {};
+    }
+}
+
+/// Saca el texto de un archivo la primera vez que la consulta lo pide.
 class FileContent : public ContentSource
 {
 public:
-    FileContent(QString path, qint64 maxBytes) : m_path(std::move(path)), m_maxBytes(maxBytes) {}
+    FileContent(QString path, const SearchOptions &options, ContentCache *cache, const tasks::CancelToken &cancel,
+                const QHash<QString, QSet<QString>> *tagged = nullptr)
+        : m_path(std::move(path)), m_options(options), m_cache(cache), m_cancel(cancel), m_tagged(tagged)
+    {
+    }
+
+    bool hasTag(const QString &tag) override
+    {
+        return m_tagged != nullptr && m_tagged->value(tag.toCaseFolded()).contains(m_path);
+    }
 
     const QString *text() override
     {
@@ -61,48 +88,54 @@ public:
     }
 
     bool wasOpened() const { return m_opened; }
+    bool cameFromIndex() const { return m_fromIndex; }
 
 private:
     bool load()
     {
-        // Solo archivos corrientes: abrir una tubería o un dispositivo
-        // podría dejar la búsqueda esperando para siempre.
+        // Solo archivos corrientes de un tipo con texto: abrir una tubería o
+        // un dispositivo podría dejar la búsqueda esperando para siempre, y un
+        // binario no tiene nada que buscar.
         const QFileInfo info(m_path);
-        if (!info.isFile() || info.size() > m_maxBytes) {
+        const content::TextSource source = content::textSourceFor(m_path);
+        if (!info.isFile() || source == content::TextSource::None) {
             return false;
         }
-        QFile file(m_path);
-        if (!file.open(QIODevice::ReadOnly)) {
+        if (source == content::TextSource::Plain && info.size() > m_options.maxContentBytes) {
             return false;
+        }
+        if (m_cache != nullptr) {
+            switch (m_cache->lookup(m_path, info.size(), info.lastModified().toMSecsSinceEpoch(), &m_text)) {
+            case ContentCache::Lookup::Text:
+                m_fromIndex = true;
+                return true;
+            case ContentCache::Lookup::Absent:
+                m_fromIndex = true;
+                return false;
+            case ContentCache::Lookup::Unknown:
+                break;
+            }
         }
         m_opened = true;
-        const QByteArray data = file.read(m_maxBytes + 1);
-        if (data.size() > m_maxBytes) {
-            return false;   // creció mientras se leía
-        }
-        const bool utf16 = data.startsWith("\xff\xfe") || data.startsWith("\xfe\xff");
-        if (utf16) {
-            m_text = QStringDecoder(QStringDecoder::Utf16).decode(data);
-            return true;
-        }
-        // Un byte nulo al principio delata un binario (PDF, imagen, ZIP…).
-        if (data.left(8192).contains('\0')) {
+        const core::Result<QString> text = m_options.textProvider ? m_options.textProvider(m_path, m_cancel)
+                                                                  : content::extractText(m_path, m_cancel);
+        if (!text.ok()) {
             return false;
         }
-        QStringDecoder utf8(QStringDecoder::Utf8);
-        m_text = utf8.decode(data);
-        if (utf8.hasError()) {
-            m_text = QString::fromLatin1(data);   // texto antiguo de Windows
-        }
+        m_text = text.value();
         return true;
     }
 
     QString m_path;
-    qint64 m_maxBytes;
+    const SearchOptions &m_options;
+    ContentCache *m_cache = nullptr;
+    const tasks::CancelToken &m_cancel;
+    const QHash<QString, QSet<QString>> *m_tagged = nullptr;
     QString m_text;
     bool m_loaded = false;
     bool m_ok = false;
     bool m_opened = false;
+    bool m_fromIndex = false;
 };
 
 struct PendingFolder
@@ -174,7 +207,22 @@ SearchSummary searchTree(const QStringList &roots, const Query &query, const Sea
     listOptions.firstBatchSize = 2000;
     listOptions.batchSize = 2000;
 
-    const bool readsContent = query.usesContent();
+    // Las rutas de cada etiqueta que pide la consulta, una vez.
+    QHash<QString, QSet<QString>> tagged;
+    const bool usesTags = !query.tagNames().isEmpty();
+    for (const QString &tag : query.tagNames()) {
+        const QStringList paths = options.pathsWithTag ? options.pathsWithTag(tag) : QStringList();
+        tagged.insert(tag.toCaseFolded(), QSet<QString>(paths.constBegin(), paths.constEnd()));
+    }
+    const bool readsContent = query.usesContent() || usesTags;
+    // Los textos guardados del índice de contenido, si los hay.
+    std::unique_ptr<ContentCache> contentCache;
+    if (query.usesContent() && options.contentCache) {
+        contentCache = options.contentCache();
+        if (contentCache) {
+            contentCache->prepare(query.requiredContentTerms(), query.caseSensitivity());
+        }
+    }
 
     while (!pending.empty() && !summary.truncated) {
         if (pause != nullptr) {
@@ -207,6 +255,10 @@ SearchSummary searchTree(const QStringList &roots, const Query &query, const Sea
                     }
                 }
                 bool matched = false;
+                QString snippetText;
+                QString snippetPlace;
+                int snippetStart = 0;
+                int snippetLength = 0;
                 if (readsContent) {
                     // Leer archivos es lento: se atiende la pausa y la
                     // cancelación en cada uno, y el avance sigue saliendo.
@@ -216,18 +268,36 @@ SearchSummary searchTree(const QStringList &roots, const Query &query, const Sea
                     if (cancel.isCancelled()) {
                         return;
                     }
-                    FileContent content(childPath(folder.path, entry.name), options.maxContentBytes);
+                    FileContent content(childPath(folder.path, entry.name), options, contentCache.get(), cancel,
+                                        &tagged);
                     matched = query.matches(itemFrom(entry), &content);
                     if (content.wasOpened()) {
                         ++progress.filesRead;
                         deliver(false);
+                    } else if (content.cameFromIndex()) {
+                        ++progress.textsFromIndex;
+                    }
+                    if (matched && (content.wasOpened() || content.cameFromIndex()) && content.text() != nullptr) {
+                        // El trozo con la primera coincidencia, para enseñarlo.
+                        for (const QString &term : query.contentTerms()) {
+                            const content::Snippet snippet =
+                                content::snippetAround(*content.text(), term, query.caseSensitivity());
+                            if (!snippet.text.isEmpty()) {
+                                snippetText = snippet.text;
+                                snippetStart = snippet.start;
+                                snippetLength = snippet.length;
+                                snippetPlace = placeOf(entry.name, snippet);
+                                break;
+                            }
+                        }
                     }
                 } else {
                     matched = query.matches(entry);
                 }
                 if (matched) {
                     ++progress.hits;
-                    batch.push_back({folder.path, std::move(entry)});
+                    batch.push_back({folder.path, std::move(entry), snippetText, snippetStart, snippetLength,
+                                     snippetPlace});
                     if (progress.hits >= options.maxHits) {
                         summary.truncated = true;
                     }

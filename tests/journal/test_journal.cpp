@@ -23,7 +23,7 @@ private slots:
         auto opened = Journal::open(directory.filePath(QStringLiteral("sub/historial.db")));
         QVERIFY2(opened.ok(), opened.ok() ? "" : qPrintable(opened.error().message));
         Journal &journal = *opened.value();
-        QCOMPARE(journal.schemaVersion(), 1);
+        QCOMPARE(journal.schemaVersion(), 2);
 
         const auto operationId = journal.beginOperation(OperationKind::Move, QStringLiteral("Mover 2 elementos"));
         QVERIFY(operationId.ok());

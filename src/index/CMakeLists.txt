@@ -4,6 +4,10 @@ add_library(eu_index STATIC
     src/Index.cpp
     src/IndexService.cpp
     src/TreeWatcher.cpp
+    src/ContentIndex.cpp
+    src/ContentIndexService.cpp
+    include/eu/index/ContentIndex.h
+    include/eu/index/ContentIndexService.h
     include/eu/index/Index.h
     include/eu/index/IndexService.h
     include/eu/index/TreeWatcher.h)

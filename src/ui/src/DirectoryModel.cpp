@@ -1,12 +1,20 @@
 // Explorador Ultra — SPDX-License-Identifier: GPL-3.0-or-later
 #include "eu/ui/DirectoryModel.h"
 
+#include "eu/archive/Archive.h"
+#include "eu/ui/Locations.h"
+
 #include "eu/fs/DirectoryLister.h"
 #include "eu/ui/FileClipboard.h"
 
 #include <QApplication>
 #include <QDateTime>
+#include <QPointer>
+#include <QPixmap>
+#include <QPainter>
 #include <QDir>
+#include <QFileInfo>
+#include <mutex>
 #include <QLocale>
 #include <QMimeDatabase>
 #include <QStyle>
@@ -63,7 +71,8 @@ void DirectoryModel::retireCurrentTask()
 
 void DirectoryModel::setPath(const QString &path)
 {
-    m_path = QDir::cleanPath(path);
+    // El interior de un comprimido no es una ruta del disco: no se limpia.
+    m_path = isArchiveLocation(path) ? path : QDir::cleanPath(path);
     m_filter = search::Query();   // el filtro era para la carpeta anterior
     // Los tamaños calculados eran de la carpeta anterior.
     stopMeasuringFolders();
@@ -94,8 +103,88 @@ void DirectoryModel::clear()
 void DirectoryModel::refresh()
 {
     if (!m_path.isEmpty()) {
-        startLoading(m_state == State::Ready);
+        // Se conserva lo que se ve mientras se vuelve a leer, también si ya se
+        // estaba releyendo (dos avisos seguidos del disco): si no, la lista
+        // quedaría en blanco un instante y soltar sobre una carpeta fallaría.
+        startLoading(m_state == State::Ready || (m_state == State::Loading && m_keepCurrentContent));
     }
+}
+
+namespace {
+
+/// La lista del último comprimido abierto: moverse por sus carpetas no vuelve
+/// a leerlo entero (en un TAR.GZ grande, eso es descomprimirlo todo).
+struct ArchiveListingCache
+{
+    std::mutex mutex;
+    QString path;
+    qint64 size = -1;
+    qint64 modifiedMs = 0;
+    QList<archive::ArchiveEntry> entries;
+};
+
+ArchiveListingCache &archiveCache()
+{
+    static ArchiveListingCache cache;
+    return cache;
+}
+
+} // namespace
+
+core::Status DirectoryModel::listInsideArchive(const QString &location, const tasks::CancelToken &cancel,
+                                               std::vector<fs::Entry> *out)
+{
+    const QString archivePath = archivePathOf(location);
+    const QString inner = archiveInnerOf(location);
+    const QFileInfo info(archivePath);
+    if (!info.isFile()) {
+        return core::Error{core::ErrorCode::NotFound, tr("El archivo comprimido ya no existe"), archivePath, 0};
+    }
+    QList<archive::ArchiveEntry> entries;
+    {
+        ArchiveListingCache &cache = archiveCache();
+        const std::lock_guard<std::mutex> lock(cache.mutex);
+        if (cache.path == archivePath && cache.size == info.size()
+            && cache.modifiedMs == info.lastModified().toMSecsSinceEpoch()) {
+            entries = cache.entries;
+        }
+    }
+    if (entries.isEmpty()) {
+        const core::Result<QList<archive::ArchiveEntry>> listed = archive::listArchive(archivePath, cancel);
+        if (!listed.ok()) {
+            return listed.error();
+        }
+        entries = listed.value();
+        ArchiveListingCache &cache = archiveCache();
+        const std::lock_guard<std::mutex> lock(cache.mutex);
+        cache.path = archivePath;
+        cache.size = info.size();
+        cache.modifiedMs = info.lastModified().toMSecsSinceEpoch();
+        cache.entries = entries;
+    }
+    bool innerExists = inner.isEmpty();
+    for (const archive::ArchiveEntry &item : std::as_const(entries)) {
+        if (item.path == inner && item.isDirectory) {
+            innerExists = true;
+        }
+        const qsizetype slash = item.path.lastIndexOf(QLatin1Char('/'));
+        const QString parent = slash < 0 ? QString() : item.path.left(slash);
+        if (parent != inner) {
+            continue;
+        }
+        fs::Entry entry;
+        entry.name = item.path.mid(slash + 1);
+        entry.size = item.size;
+        entry.modifiedMs = item.modifiedMs;
+        entry.isDirectory = item.isDirectory;
+        entry.isSymlink = item.isSymlink;
+        entry.isHidden = entry.name.startsWith(QLatin1Char('.'));
+        out->push_back(entry);
+    }
+    if (!innerExists) {
+        return core::Error{core::ErrorCode::NotFound, tr("Esa carpeta no está en el comprimido"), location, 0};
+    }
+    return {};
 }
 
 void DirectoryModel::startLoading(bool keepCurrentContent)
@@ -127,13 +216,18 @@ void DirectoryModel::startLoading(bool keepCurrentContent)
     m_task = m_scheduler.submitForPaths(tasks::Category::Listing, tasks::Priority::VisibleNavigation, {path},
                                         [this, generation, path, sortColumn, sortOrder](const tasks::CancelToken &cancel) {
         std::vector<fs::Entry> all;
-        const core::Status status = fs::listDirectory(path, fs::ListOptions(), cancel,
-                                                      [&](std::vector<fs::Entry> &&batch) {
-            all.insert(all.end(), batch.begin(), batch.end());
-            QMetaObject::invokeMethod(this, [this, generation, batch = std::move(batch)]() mutable {
-                onBatch(generation, std::move(batch));
-            }, Qt::QueuedConnection);
-        });
+        core::Status status;
+        if (isArchiveLocation(path)) {
+            // Dentro de un comprimido: lo que cuelga de esa carpeta de dentro.
+            status = listInsideArchive(path, cancel, &all);
+        } else {
+            status = fs::listDirectory(path, fs::ListOptions(), cancel, [&](std::vector<fs::Entry> &&batch) {
+                all.insert(all.end(), batch.begin(), batch.end());
+                QMetaObject::invokeMethod(this, [this, generation, batch = std::move(batch)]() mutable {
+                    onBatch(generation, std::move(batch));
+                }, Qt::QueuedConnection);
+            });
+        }
         if (cancel.isCancelled()) {
             return;   // nadie espera ya este resultado
         }
@@ -210,6 +304,47 @@ void DirectoryModel::onFinished(quint64 generation, std::vector<fs::Entry> sorte
     replaceEntries(std::move(visible));
     setState(State::Ready);
     startMeasuringFolders();
+    refreshTags();
+}
+
+void DirectoryModel::refreshTags()
+{
+    const bool had = !m_tags.isEmpty();
+    m_tags.clear();
+    if (had) {
+        emit tagsPresenceChanged(false);
+    }
+    if (!m_tagStore || m_entries.empty() || m_path.isEmpty()) {
+        return;
+    }
+    QStringList paths;
+    paths.reserve(qsizetype(m_entries.size()));
+    const QString prefix = m_path.endsWith(QLatin1Char('/')) ? m_path : m_path + QLatin1Char('/');
+    for (const fs::Entry &entry : m_entries) {
+        paths.append(prefix + entry.name);
+    }
+    const QPointer<DirectoryModel> self(this);
+    const quint64 generation = ++m_tagsGeneration;
+    m_scheduler.submit(tasks::Category::Metadata, tasks::Priority::Background,
+                       [self, generation, paths, store = m_tagStore](const tasks::CancelToken &) {
+        const QHash<QString, QList<tags::Tag>> found = store->tagsFor(paths);
+        if (found.isEmpty()) {
+            return;
+        }
+        QMetaObject::invokeMethod(qApp, [self, generation, found] {
+            if (!self || generation != self->m_tagsGeneration) {
+                return;
+            }
+            for (auto it = found.constBegin(); it != found.constEnd(); ++it) {
+                self->m_tags.insert(QFileInfo(it.key()).fileName(), it.value());
+            }
+            if (self->rowCount() > 0) {
+                emit self->dataChanged(self->index(0, int(Column::Tags)),
+                                       self->index(self->rowCount() - 1, int(Column::Tags)));
+            }
+            emit self->tagsPresenceChanged(!self->m_tags.isEmpty());
+        }, Qt::QueuedConnection);
+    });
 }
 
 void DirectoryModel::setFolderSizesEnabled(bool enabled)
@@ -487,11 +622,36 @@ QVariant DirectoryModel::data(const QModelIndex &index, int role) const
                 return QString();
             }
             return QLocale().toString(QDateTime::fromMSecsSinceEpoch(entry.modifiedMs), QLocale::ShortFormat);
+        case Column::Tags: {
+            QStringList names;
+            for (const tags::Tag &tag : m_tags.value(entry.name)) {
+                names.append(tag.name);
+            }
+            return names.join(QStringLiteral(", "));
+        }
         case Column::Count:
             break;
         }
         break;
     case Qt::DecorationRole:
+        if (column == Column::Tags) {
+            const QList<tags::Tag> tagList = m_tags.value(entry.name);
+            if (tagList.isEmpty()) {
+                return {};
+            }
+            // Un punto de color por etiqueta (hasta cuatro).
+            const int count = int(std::min<qsizetype>(tagList.size(), 4));
+            QPixmap dots(count * 12, 12);
+            dots.fill(Qt::transparent);
+            QPainter painter(&dots);
+            painter.setRenderHint(QPainter::Antialiasing);
+            for (int i = 0; i < count; ++i) {
+                painter.setBrush(QColor(tagList[i].color));
+                painter.setPen(Qt::NoPen);
+                painter.drawEllipse(QRectF(i * 12 + 1, 1, 10, 10));
+            }
+            return dots;
+        }
         if (column == Column::Name) {
             return m_types.infoFor(entry).icon;
         }
@@ -543,6 +703,7 @@ QVariant DirectoryModel::headerData(int section, Qt::Orientation orientation, in
     case Column::Size:     return tr("Tamaño");
     case Column::Type:     return tr("Tipo");
     case Column::Modified: return tr("Modificado");
+    case Column::Tags:     return tr("Etiquetas");
     case Column::Count:    break;
     }
     return {};
@@ -552,6 +713,10 @@ Qt::ItemFlags DirectoryModel::flags(const QModelIndex &index) const
 {
     if (!index.isValid()) {
         return Qt::NoItemFlags;
+    }
+    // Dentro de un comprimido no se arrastra ni se renombra: se extrae.
+    if (isArchiveLocation(m_path)) {
+        return Qt::ItemIsEnabled | Qt::ItemIsSelectable;
     }
     Qt::ItemFlags result = Qt::ItemIsEnabled | Qt::ItemIsSelectable | Qt::ItemIsDragEnabled;
     if (index.column() == int(Column::Name)) {

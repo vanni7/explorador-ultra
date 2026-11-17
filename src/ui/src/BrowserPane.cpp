@@ -1,6 +1,8 @@
 // Explorador Ultra — SPDX-License-Identifier: GPL-3.0-or-later
 #include "eu/ui/BrowserPane.h"
+#include "eu/archive/Archive.h"
 #include "eu/ui/ThumbnailView.h"
+#include "eu/thumbs/Isolated.h"
 
 #include <utility>
 
@@ -12,6 +14,9 @@
 
 #include <QApplication>
 #include <QDesktopServices>
+#include <QFileInfo>
+#include <QStandardPaths>
+#include <QCryptographicHash>
 #include <QDir>
 #include <QAction>
 #include <QDragEnterEvent>
@@ -22,6 +27,7 @@
 #include <QLineEdit>
 #include <QMimeData>
 #include <QPainter>
+#include <QKeyEvent>
 #include <QPointer>
 #include <QPushButton>
 #include <QRubberBand>
@@ -86,6 +92,71 @@ public:
 
 private:
     DirectoryModel *m_model;
+};
+
+/// Pinta el fragmento de una búsqueda en contenido con la coincidencia en
+/// negrita sobre el color de resaltado.
+class SnippetDelegate : public QStyledItemDelegate
+{
+public:
+    using QStyledItemDelegate::QStyledItemDelegate;
+
+    void paint(QPainter *painter, const QStyleOptionViewItem &option, const QModelIndex &index) const override
+    {
+        QStyleOptionViewItem opt = option;
+        initStyleOption(&opt, index);
+        const QString text = opt.text;
+        opt.text.clear();
+        const QWidget *widget = opt.widget;
+        QStyle *style = widget ? widget->style() : QApplication::style();
+        style->drawControl(QStyle::CE_ItemViewItem, &opt, painter, widget);
+        if (text.isEmpty()) {
+            return;
+        }
+        const int start = qBound(0, index.data(SearchResultsModel::SnippetStartRole).toInt(), int(text.size()));
+        const int length = qBound(0, index.data(SearchResultsModel::SnippetLengthRole).toInt(), int(text.size()) - start);
+        const QRect area = opt.rect.adjusted(4, 0, -4, 0);
+        painter->save();
+        painter->setClipRect(area);
+        const bool selected = opt.state & QStyle::State_Selected;
+        const QColor normal = opt.palette.color(selected ? QPalette::HighlightedText : QPalette::Text);
+        QFont bold = opt.font;
+        bold.setBold(true);
+        const QFontMetrics regularMetrics(opt.font);
+        const QFontMetrics boldMetrics(bold);
+        int x = area.left();
+        const int baseline = area.top() + (area.height() + regularMetrics.ascent() - regularMetrics.descent()) / 2;
+        const auto piece = [&](const QString &part, bool match) {
+            if (part.isEmpty()) {
+                return;
+            }
+            const QFontMetrics &metrics = match ? boldMetrics : regularMetrics;
+            const int width = metrics.horizontalAdvance(part);
+            if (match) {
+                QColor mark = opt.palette.color(QPalette::Highlight);
+                mark.setAlpha(selected ? 120 : 70);
+                painter->fillRect(QRect(x - 1, area.top() + 2, width + 2, area.height() - 4), mark);
+            }
+            painter->setFont(match ? bold : opt.font);
+            painter->setPen(normal);
+            painter->drawText(x, baseline, part);
+            x += width;
+        };
+        // Primero dónde está ("pág. 12"), más tenue.
+        const QString place = index.data(SearchResultsModel::SnippetPlaceRole).toString();
+        if (!place.isEmpty()) {
+            painter->setFont(opt.font);
+            QColor dim = normal;
+            dim.setAlphaF(0.6f);
+            painter->setPen(dim);
+            painter->drawText(x, baseline, place);
+            x += regularMetrics.horizontalAdvance(place) + regularMetrics.horizontalAdvance(QLatin1Char(' ')) * 2;
+        }
+        piece(text.left(start), false);
+        piece(text.mid(start, length), true);
+        piece(text.mid(start + length), false);
+        painter->restore();
+    }
 };
 
 /// La lista de archivos, con arrastrar y soltar y selección con recuadro.
@@ -265,7 +336,11 @@ private:
 
     DropPlan planFor(const QDropEvent *event, int *targetRow) const
     {
-        if (m_model->path().isEmpty() || m_model->state() != DirectoryModel::State::Ready) {
+        // Dentro de un comprimido no se suelta nada (aún no se añade a él), ni
+        // en una carpeta que no se pudo leer. Mientras se vuelve a leer (tras
+        // un cambio en el disco) sí: la lista sigue mostrando sus filas.
+        if (m_model->path().isEmpty() || isArchiveLocation(m_model->path())
+            || m_model->state() == DirectoryModel::State::Failed || m_model->state() == DirectoryModel::State::Empty) {
             return {};
         }
         QString target = m_model->path();
@@ -358,6 +433,11 @@ BrowserPane::BrowserPane(tasks::Scheduler &scheduler, fs::DirectoryWatcher &watc
     m_view->header()->resizeSection(int(Column::Size), 100);
     m_view->header()->resizeSection(int(Column::Type), 190);
     m_view->header()->resizeSection(int(Column::Modified), 150);
+    m_view->header()->resizeSection(int(Column::Tags), 110);
+    // La columna de etiquetas, solo si algo de lo que se ve tiene alguna.
+    m_view->setColumnHidden(int(Column::Tags), true);
+    connect(m_model, &DirectoryModel::tagsPresenceChanged, this,
+            [this](bool any) { m_view->setColumnHidden(int(Column::Tags), !any); });
 
     // Página de mensajes: carpeta vacía, error de lectura…
     m_messagePage = new QWidget(this);
@@ -374,6 +454,9 @@ BrowserPane::BrowserPane(tasks::Scheduler &scheduler, fs::DirectoryWatcher &watc
 
     // Vista de miniaturas: mismo modelo y misma selección que la detallada.
     m_thumbView = new ThumbnailView(m_model, this);
+    // F2 con varios seleccionados no edita uno: pide el renombrado masivo.
+    fileView->installEventFilter(this);
+    m_thumbView->installEventFilter(this);
     {
         QItemSelectionModel *own = m_thumbView->selectionModel();
         m_thumbView->setSelectionModel(m_view->selectionModel());
@@ -457,6 +540,11 @@ BrowserPane::BrowserPane(tasks::Scheduler &scheduler, fs::DirectoryWatcher &watc
     m_resultsView->header()->resizeSection(SearchResultsModel::TypeColumn, 170);
     m_resultsView->header()->resizeSection(SearchResultsModel::ModifiedColumn, 150);
     m_resultsView->header()->resizeSection(SearchResultsModel::OriginColumn, 70);
+    m_resultsView->header()->resizeSection(SearchResultsModel::SnippetColumn, 360);
+    m_resultsView->setItemDelegateForColumn(SearchResultsModel::SnippetColumn, new SnippetDelegate(m_resultsView));
+    m_resultsView->setColumnHidden(SearchResultsModel::SnippetColumn, true);
+    // El fragmento, justo después del nombre: es lo que se quiere leer.
+    m_resultsView->header()->moveSection(m_resultsView->header()->visualIndex(SearchResultsModel::SnippetColumn), 1);
 
     auto *searchLayout = new QVBoxLayout(m_searchPage);
     searchLayout->setContentsMargins(0, 0, 0, 0);
@@ -641,7 +729,7 @@ void BrowserPane::navigateTo(const QString &path)
 {
     // Las ubicaciones virtuales no son rutas: no se normalizan.
     const QString clean = isVolumesLocation(path) ? volumesLocation()
-        : isSearchLocation(path) ? path : QDir::cleanPath(path);
+        : (isSearchLocation(path) || isArchiveLocation(path)) ? path : QDir::cleanPath(path);
     if (clean.isEmpty()) {
         return;
     }
@@ -696,6 +784,19 @@ void BrowserPane::goUp()
     if (showsSearch()) {
         // Por encima de unos resultados está la carpeta donde se buscó.
         changePath(searchRootOf(leaving), {});
+        return;
+    }
+    if (showsArchive()) {
+        // De una carpeta de dentro a la de arriba; de la raíz del comprimido, a
+        // la carpeta donde está, con el comprimido seleccionado.
+        const QString archivePath = archivePathOf(leaving);
+        const QString inner = archiveInnerOf(leaving);
+        if (inner.isEmpty()) {
+            changePath(QFileInfo(archivePath).path(), QFileInfo(archivePath).fileName());
+        } else {
+            const qsizetype slash = inner.lastIndexOf(QLatin1Char('/'));
+            changePath(archiveLocation(archivePath, slash < 0 ? QString() : inner.left(slash)), inner.mid(slash + 1));
+        }
         return;
     }
     const QString parent = parentPathOf(leaving);
@@ -841,6 +942,11 @@ void BrowserPane::contentMayHaveChanged()
 
 // ---------------------------------------------------------------- búsqueda
 
+bool BrowserPane::showsArchive() const
+{
+    return isArchiveLocation(m_location);
+}
+
 bool BrowserPane::showsSearch() const
 {
     return isSearchLocation(m_location);
@@ -877,11 +983,19 @@ QString BrowserPane::searchWhere() const
         return {};
     }
     const SearchSpec spec = searchSpecOf(m_location);
+    // Una ruta larga, con sus dos últimas carpetas («…/PDFS/WALTER RISO»): la
+    // línea tiene que dejar ver los contadores. Entera, en la ayuda emergente.
+    QString origin = QDir::cleanPath(spec.origin);
+    const QStringList parts = origin.split(QLatin1Char('/'), Qt::SkipEmptyParts);
+    if (origin.size() > 40 && parts.size() > 2) {
+        origin = QStringLiteral("…/") + parts.mid(parts.size() - 2).join(QLatin1Char('/'));
+    }
+    origin = QDir::toNativeSeparators(origin);
     switch (spec.scope) {
     case SearchScope::Folder:
-        return tr("%1 (sin subcarpetas)").arg(QDir::toNativeSeparators(spec.origin));
+        return tr("%1 (sin subcarpetas)").arg(origin);
     case SearchScope::Subfolders:
-        return QDir::toNativeSeparators(spec.origin);
+        return origin;
     case SearchScope::Volume:
         return tr("la unidad %1").arg(QDir::toNativeSeparators(spec.roots.value(0)));
     case SearchScope::AllVolumes:
@@ -894,6 +1008,23 @@ QString BrowserPane::searchWhere() const
         names.append(QDir::toNativeSeparators(root));
     }
     return tr("las unidades %1").arg(names.join(QStringLiteral(", ")));
+}
+
+void BrowserPane::setTagStore(std::shared_ptr<tags::TagStore> store)
+{
+    m_tagStore = store;
+    m_model->setTagStore(std::move(store));
+}
+
+bool BrowserPane::eventFilter(QObject *watched, QEvent *event)
+{
+    // (La lista edita con F2 aunque haya teclas modificadoras: aquí igual.)
+    if (event->type() == QEvent::KeyPress && static_cast<QKeyEvent *>(event)->key() == Qt::Key_F2
+        && selectedCount() > 1 && !isVirtualLocation(m_location)) {
+        emit bulkRenameRequested();
+        return true;
+    }
+    return QWidget::eventFilter(watched, event);
 }
 
 void BrowserPane::cancelSearch()
@@ -940,7 +1071,30 @@ void BrowserPane::startSearch()
     search::SearchOptions options;
     options.includeHidden = m_model->showHidden();
     options.recursive = spec.scope != SearchScope::Folder;
+    // El texto de PDF y documentos se saca en el proceso auxiliar.
+    options.textProvider = [](const QString &path, const tasks::CancelToken &cancel) {
+        return thumbs::extractTextIsolated(path, cancel);
+    };
     m_searchReadsContent = parsedQuery.value().usesContent();
+    if (m_tagStore) {
+        options.pathsWithTag = [store = m_tagStore](const QString &tag) { return store->pathsWithTag(tag); };
+    }
+    // Lo que ya tiene guardado el índice de contenido no se vuelve a leer.
+    if (m_searchReadsContent && m_contentCacheResolver) {
+        options.contentCache = m_contentCacheResolver(spec.roots);
+    }
+    // La columna del fragmento, solo cuando se busca en el contenido.
+    m_resultsView->setColumnHidden(SearchResultsModel::SnippetColumn, !m_searchReadsContent);
+    // Con fragmento, es él quien se estira; sin él, la carpeta.
+    QHeaderView *resultsHeader = m_resultsView->header();
+    if (m_searchReadsContent) {
+        resultsHeader->setSectionResizeMode(SearchResultsModel::FolderColumn, QHeaderView::Interactive);
+        resultsHeader->resizeSection(SearchResultsModel::FolderColumn, 160);
+        resultsHeader->setSectionResizeMode(SearchResultsModel::SnippetColumn, QHeaderView::Stretch);
+    } else {
+        resultsHeader->setSectionResizeMode(SearchResultsModel::SnippetColumn, QHeaderView::Interactive);
+        resultsHeader->setSectionResizeMode(SearchResultsModel::FolderColumn, QHeaderView::Stretch);
+    }
 
     // El índice de cada carpeta de partida, si lo tiene. Si alguna no lo
     // tiene, o el índice no puede contestar esta consulta, se recorre el disco.
@@ -1124,8 +1278,10 @@ void BrowserPane::updateSearchInfo()
             : tr("Resultados del índice, sin comprobar en el disco: %1").arg(where);
     }
     if (m_searchReadsContent) {
-        text += tr(" · archivos leídos: %1 (solo texto, hasta 20 MB)")
-                    .arg(QLocale().toString(m_searchProgress.filesRead));
+        text += tr(" · documentos leídos: %1").arg(QLocale().toString(m_searchProgress.filesRead));
+        if (m_searchProgress.textsFromIndex > 0) {
+            text += tr(" · del índice de contenido: %1").arg(QLocale().toString(m_searchProgress.textsFromIndex));
+        }
     }
     if (spec.caseSensitive) {
         text += tr(" · distingue mayúsculas");
@@ -1140,7 +1296,7 @@ void BrowserPane::updateSearchInfo()
         text += QStringLiteral(" · ") + m_searchError;
     }
     m_searchInfo->setText(text);
-    m_searchInfo->setToolTip(text);
+    m_searchInfo->setToolTip(text + QLatin1Char('\n') + QDir::toNativeSeparators(searchSpecOf(m_location).origin));
 }
 
 void BrowserPane::onResultActivated(const QModelIndex &index)
@@ -1250,6 +1406,8 @@ void BrowserPane::applyFilterText(const QString &text)
     } else if (parsedQuery.value().usesContent()) {
         // El filtro no abre archivos: se dice, en vez de dejar la lista vacía sin más.
         m_filterProblem = tr("content: solo funciona en el buscador (Ctrl+F)");
+    } else if (!parsedQuery.value().tagNames().isEmpty()) {
+        m_filterProblem = tr("tag: solo funciona en el buscador (Ctrl+F)");
     }
     m_model->setFilter(parsedQuery.value());
     updateFilterInfo();
@@ -1326,6 +1484,12 @@ bool BrowserPane::applyPendingSelection()
     const QModelIndex first = m_model->index(rows.first(), int(Column::Name));
     selection->setCurrentIndex(first, QItemSelectionModel::NoUpdate);
     fileView()->scrollTo(first);
+    if (rows.size() < m_pendingNames.size()) {
+        // Aún no están todos (el aviso de alguno no ha llegado): se selecciona
+        // lo que hay y se sigue esperando al resto en la próxima lectura.
+        emit statusChanged();
+        return false;
+    }
     const bool edit = m_pendingEdit;
     m_pendingNames.clear();
     m_pendingEdit = false;
@@ -1464,9 +1628,34 @@ void BrowserPane::onActivated(const QModelIndex &index)
     const QString path = m_model->filePath(index.row());
     if (entry.isDirectory) {
         navigateTo(path);
+    } else if (showsArchive()) {
+        openInsideArchive(path);
+    } else if (archive::isAvailable() && archive::isArchiveName(entry.name)) {
+        // Un comprimido se abre como una carpeta más (SPEC §15).
+        navigateTo(archiveLocation(path, QString()));
     } else if (!QDesktopServices::openUrl(QUrl::fromLocalFile(path))) {
         emit openFailed(path);
     }
+}
+
+void BrowserPane::openInsideArchive(const QString &location)
+{
+    const QString archivePath = archivePathOf(location);
+    const QString inner = archiveInnerOf(location);
+    const QPointer<BrowserPane> self(this);
+    m_scheduler.submitForPaths(tasks::Category::General, tasks::Priority::UserInteraction, {archivePath},
+                               [self, archivePath, inner, location](const tasks::CancelToken &cancel) {
+        // Se saca a una carpeta temporal propia y se abre con su programa.
+        const core::Result<QString> extracted = archive::extractEntryToTemp(archivePath, inner, cancel);
+        QMetaObject::invokeMethod(qApp, [self, extracted, location] {
+            if (!self) {
+                return;
+            }
+            if (!extracted.ok() || !QDesktopServices::openUrl(QUrl::fromLocalFile(extracted.value()))) {
+                emit self->openFailed(location);
+            }
+        }, Qt::QueuedConnection);
+    });
 }
 
 void BrowserPane::openSelection()

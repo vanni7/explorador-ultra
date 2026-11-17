@@ -8,10 +8,13 @@
 #include "eu/trash/Trash.h"
 
 #include <QCoreApplication>
+#include <QDateTime>
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
 #include <QSet>
+
+#include <optional>
 
 namespace eu::ops {
 
@@ -22,20 +25,6 @@ QString tr(const char *text)
     return QCoreApplication::translate("eu::ops::Engine", text);
 }
 
-/// Reglas de nombres del volumen donde está `directory`. Un disco NTFS o exFAT
-/// montado en Linux exige las reglas de Windows aunque Linux no las imponga:
-/// si no, el archivo sería ilegible al conectar el disco a un equipo Windows.
-core::NameRules nameRulesFor(const QString &directory)
-{
-    const QString fileSystem = fs::volumeForPath(directory).fileSystem.toLower();
-    static const QStringList windowsLike{QStringLiteral("ntfs"), QStringLiteral("ntfs3"), QStringLiteral("fuseblk"),
-                                         QStringLiteral("exfat"), QStringLiteral("vfat"), QStringLiteral("fat"),
-                                         QStringLiteral("fat32"), QStringLiteral("msdos")};
-    if (windowsLike.contains(fileSystem)) {
-        return core::NameRules::Windows;
-    }
-    return core::nativeNameRules();
-}
 
 /// true si `inner` es `outer` o está dentro de `outer`.
 bool isSameOrInside(const QString &inner, const QString &outer)
@@ -85,13 +74,20 @@ void measureTree(const QString &path, const tasks::CancelToken &cancel, Progress
 class Engine::Run
 {
 public:
-    Run(journal::Journal &journal, const tasks::CancelToken &cancel, const ProgressCallback &progressCallback)
-        : m_journal(journal), m_cancel(cancel), m_progressCallback(progressCallback)
+    Run(journal::Journal &journal, const tasks::CancelToken &cancel, const ProgressCallback &progressCallback,
+        TransferOptions collisions = {})
+        : m_journal(journal), m_cancel(cancel), m_progressCallback(progressCallback),
+          m_collisions(std::move(collisions))
     {
     }
 
     Outcome outcome;
     Progress progress;
+    /// Se llama cuando un elemento de primer nivel ya sabe su destino.
+    std::function<void(const QString &)> onTopLevelTarget;
+    /// Reintento o reanudación: los destinos son los que dejó la vez anterior,
+    /// así que las carpetas se completan y lo que ya llegó idéntico no se repite.
+    bool retrying = false;
 
     bool begin(journal::OperationKind kind, const QString &description)
     {
@@ -109,6 +105,9 @@ public:
     {
         if (outcome.operationId == 0) {
             return;
+        }
+        if (outcome.cancelled && m_collisions.leaveOpenIfCancelled && m_collisions.leaveOpenIfCancelled()) {
+            return;   // queda como interrumpida, para reanudarla
         }
         journal::OperationState state = journal::OperationState::Completed;
         if (outcome.cancelled) {
@@ -192,9 +191,12 @@ public:
                 return copyFile(source, target, m_cancel, [&](qint64 bytes) {
                     progress.bytesDone += bytes;
                     report(source);
-                });
+                }, m_collisions.copy);
             });
             ++progress.itemsDone;
+            if (ok && m_collisions.copy.verify) {
+                ++outcome.verified;
+            }
             return ok;
         }
 
@@ -252,10 +254,277 @@ public:
         return step(journal::StepKind::RemoveFile, source, target, {}, [&] { return removeFile(source); });
     }
 
+    /// Copia o mueve `source` a `directory` con el nombre `name`, resolviendo
+    /// los choques de nombre. Devuelve false si algo falló o se canceló;
+    /// omitir no es un fallo.
+    bool transfer(const QString &source, const QString &directory, const QString &name, bool moving, bool topLevel,
+                  QString *chosenTarget = nullptr)
+    {
+        if (m_collisions.copy.pausePoint) {
+            m_collisions.copy.pausePoint(m_cancel);
+        }
+        if (cancelled()) {
+            if (chosenTarget != nullptr) {
+                *chosenTarget = joinPath(directory, name);
+            }
+            return false;
+        }
+        const bool sameFolder = QDir::cleanPath(QFileInfo(source).absolutePath()) == QDir::cleanPath(directory);
+        if (moving && sameFolder) {
+            return true;   // ya está ahí
+        }
+        // Copiar en la misma carpeta siempre crea un duplicado con otro nombre.
+        const Resolved resolved = resolve(source, directory, name, !moving && sameFolder);
+        if (chosenTarget != nullptr) {
+            *chosenTarget = resolved.target.isEmpty() ? joinPath(directory, name) : resolved.target;
+        }
+        if (topLevel && onTopLevelTarget && !resolved.target.isEmpty()) {
+            onTopLevelTarget(resolved.target);   // al plan: por si hay que reanudar
+        }
+        switch (resolved.what) {
+        case Resolution::Skip:
+            return true;
+        case Resolution::Failed:
+            return false;
+        case Resolution::Merge: {
+            const bool merged = mergeInto(source, resolved.target, moving);
+            if (merged && topLevel) {
+                outcome.resultPaths.append(resolved.target);
+            }
+            return merged;
+        }
+        case Resolution::Replace:
+            if (isSameOrInside(source, resolved.target)) {
+                fail({core::ErrorCode::NotSupported,
+                      tr("No se puede reemplazar una carpeta por algo que está dentro de ella."), source, 0});
+                return false;
+            }
+            if (!clearForReplace(resolved.target)) {
+                return false;
+            }
+            break;
+        case Resolution::Write:
+            break;
+        }
+        const bool done = moving ? moveOne(source, resolved.target) : copyTree(source, resolved.target);
+        if (done && topLevel) {
+            outcome.resultPaths.append(resolved.target);
+        }
+        return done;
+    }
+
+    /// Mueve a un destino libre (usado por applyMoves).
+    bool moveTo(const QString &source, const QString &target) { return moveOne(source, target); }
+
 private:
+    enum class Resolution { Write, Skip, Merge, Replace, Failed };
+    struct Resolved
+    {
+        Resolution what = Resolution::Write;
+        QString target;
+    };
+
+    /// Decide qué hacer con `source` si en `directory` ya hay algo llamado `name`.
+    Resolved resolve(const QString &source, const QString &directory, const QString &name, bool duplicateInPlace)
+    {
+        const QString target = joinPath(directory, name);
+        const FileStamp targetStamp = stampOf(target);
+        if (!targetStamp.exists) {
+            return {Resolution::Write, target};
+        }
+        if (duplicateInPlace) {
+            return {Resolution::Write, joinPath(directory, uniqueName(directory, name))};
+        }
+        const FileStamp sourceStamp = stampOf(source);
+        const bool bothFolders = sourceStamp.isDirectory && targetStamp.isDirectory;
+        const auto renamed = [&] { return Resolved{Resolution::Write, joinPath(directory, uniqueName(directory, name))}; };
+        const auto skip = [&] {
+            outcome.skipped.append(source);
+            if (!sourceStamp.isDirectory && sourceStamp.size > 0) {
+                progress.bytesDone += sourceStamp.size;   // para que el avance llegue al final
+            }
+            ++progress.itemsDone;
+            return Resolved{Resolution::Skip, {}};
+        };
+
+        CollisionPolicy policy = m_forAll.value_or(m_collisions.policy);
+        if (retrying && bothFolders) {
+            return {Resolution::Merge, target};
+        }
+        if (retrying && (policy == CollisionPolicy::Overwrite || policy == CollisionPolicy::OverwriteIfNewer)) {
+            const core::Result<bool> same = sameContent(source, target, m_collisions.comparison, m_cancel);
+            if (same.ok() && same.value()) {
+                outcome.identical.append(source);
+                return skip();
+            }
+        }
+        if (policy == CollisionPolicy::Ask) {
+            if (bothFolders) {
+                return {Resolution::Merge, target};   // se pregunta por cada archivo de dentro
+            }
+            if (!m_collisions.ask) {
+                return renamed();
+            }
+            const CollisionDecision decision = m_collisions.ask(Conflict{source, target, sourceStamp, targetStamp}, m_cancel);
+            if (decision.cancel) {
+                outcome.cancelled = true;
+                return {Resolution::Failed, {}};
+            }
+            policy = decision.policy == CollisionPolicy::Ask ? CollisionPolicy::Skip : decision.policy;
+            if (decision.applyToAll) {
+                m_forAll = policy;
+            }
+        }
+
+        switch (policy) {
+        case CollisionPolicy::Skip:
+            return skip();
+        case CollisionPolicy::AutoRename:
+            return renamed();
+        case CollisionPolicy::AppendDateTime: {
+            // La fecha del original; las carpetas no la guardan: la de ahora.
+            const qint64 when = sourceStamp.modifiedMs > 0 ? sourceStamp.modifiedMs
+                                                           : QDateTime::currentMSecsSinceEpoch();
+            const QString dated = nameWithDateTime(name, when);
+            return {Resolution::Write, joinPath(directory, uniqueName(directory, dated))};
+        }
+        case CollisionPolicy::Overwrite:
+            return {bothFolders ? Resolution::Merge : Resolution::Replace, target};
+        case CollisionPolicy::OverwriteIfNewer:
+            if (bothFolders) {
+                return {Resolution::Merge, target};
+            }
+            return sourceStamp.modifiedMs > targetStamp.modifiedMs ? Resolved{Resolution::Replace, target} : skip();
+        case CollisionPolicy::SkipIfIdentical: {
+            if (bothFolders) {
+                return {Resolution::Merge, target};
+            }
+            const core::Result<bool> same = sameContent(source, target, m_collisions.comparison, m_cancel);
+            if (!same.ok()) {
+                fail(same.error());
+                return {Resolution::Failed, {}};
+            }
+            if (same.value()) {
+                outcome.identical.append(source);
+                return skip();
+            }
+            // También cuenta una copia anterior con número ("foto (2).jpg"):
+            // copiar dos veces lo mismo no debe ir dejando duplicados.
+            if (!sourceStamp.isDirectory) {
+                const qsizetype dot = name.lastIndexOf(QLatin1Char('.'));
+                const QString stem = dot > 0 ? name.left(dot) : name;
+                const QString suffix = dot > 0 ? name.mid(dot) : QString();
+                for (int number = 2; number < 1000; ++number) {
+                    const QString candidate = joinPath(directory, QStringLiteral("%1 (%2)%3").arg(stem).arg(number).arg(suffix));
+                    const FileStamp existing = stampOf(candidate);
+                    if (!existing.exists) {
+                        break;
+                    }
+                    if (existing.size != sourceStamp.size) {
+                        continue;
+                    }
+                    const core::Result<bool> numbered = sameContent(source, candidate, m_collisions.comparison, m_cancel);
+                    if (numbered.ok() && numbered.value()) {
+                        outcome.identical.append(source);
+                        return skip();
+                    }
+                }
+            }
+            return renamed();
+        }
+        case CollisionPolicy::Ask:
+            break;
+        }
+        return skip();
+    }
+
+    /// Manda a la papelera propia lo que hay en `target` para dejar sitio.
+    /// Queda anotado: deshacer la operación lo devuelve a su sitio.
+    bool clearForReplace(const QString &target)
+    {
+        const core::Result<trash::TrashItem> item = trash::prepareItem(target);
+        if (!item.ok()) {
+            fail({item.error().code,
+                  tr("No se reemplaza: se perdería lo que hay, porque no se puede enviar a la papelera (%1).")
+                      .arg(item.error().message),
+                  target, 0});
+            return false;
+        }
+        const QString stored = item.value().storedPath();
+        if (!step(journal::StepKind::Rename, target, stored, stored,
+                  [&] { return trash::moveIntoTrash(item.value()); })) {
+            trash::discardItemRecord(item.value());
+            return false;
+        }
+        outcome.replaced.append(target);
+        return true;
+    }
+
+    /// Junta la carpeta `source` con la carpeta `target`, que ya existe:
+    /// cada elemento de dentro resuelve su propio choque.
+    bool mergeInto(const QString &source, const QString &target, bool moving)
+    {
+        const auto entries = fs::listDirectoryAll(source);
+        if (!entries.ok()) {
+            fail(entries.error());
+            return false;
+        }
+        ++progress.itemsDone;
+        bool all = true;
+        for (const fs::Entry &entry : entries.value()) {
+            if (!transfer(joinPath(source, entry.name), target, entry.name, moving, false)) {
+                all = false;
+                if (outcome.cancelled) {
+                    return false;
+                }
+            }
+        }
+        // Al mover, la carpeta de origen se quita si quedó vacía (lo omitido sigue en ella).
+        if (moving && all) {
+            const auto left = fs::listDirectoryAll(source);
+            if (left.ok() && left.value().empty()) {
+                return step(journal::StepKind::RemoveDirectory, source, target, {},
+                            [&] { return removeEmptyDirectory(source); });
+            }
+        }
+        return all;
+    }
+
+    /// Mueve `source` a `target` (libre). En el mismo volumen, renombrando;
+    /// entre volúmenes, copiando, sincronizando y solo entonces borrando (SPEC §8.3).
+    bool moveOne(const QString &source, const QString &target)
+    {
+        report(source);
+        if (fs::isSameVolume(QFileInfo(source).absolutePath(), QFileInfo(target).absolutePath())) {
+            const auto stepId = m_journal.addStep(outcome.operationId, journal::StepKind::Rename, source, target);
+            if (!stepId.ok()) {
+                fail(stepId.error());
+                return false;
+            }
+            const core::Status renamed = renameNoReplace(source, target);
+            if (renamed.ok()) {
+                const FileStamp stamp = stampOf(target);
+                m_journal.completeStep(stepId.value(), stamp.size, stamp.modifiedMs);
+                return true;
+            }
+            m_journal.setStepState(stepId.value(), journal::StepState::Failed);
+            if (renamed.error().code != core::ErrorCode::CrossDevice) {
+                fail(renamed.error());
+                return false;
+            }
+            // El sistema dice que son volúmenes distintos: se sigue por la vía larga.
+        }
+        if (!copyTree(source, target) || cancelled()) {
+            return false;
+        }
+        return removeMovedTree(source, target);
+    }
+
     journal::Journal &m_journal;
     const tasks::CancelToken &m_cancel;
     const ProgressCallback &m_progressCallback;
+    TransferOptions m_collisions;
+    std::optional<CollisionPolicy> m_forAll;   ///< "Aplicar a todos" de una pregunta anterior.
 };
 
 Engine::Engine(std::shared_ptr<journal::Journal> journal)
@@ -301,6 +570,105 @@ Outcome Engine::createFile(const QString &parentDirectory, const QString &name)
     return run.outcome;
 }
 
+/// Reglas de nombres del volumen donde está `directory`. Un disco NTFS o exFAT
+/// montado en Linux exige las reglas de Windows aunque Linux no las imponga:
+/// si no, el archivo sería ilegible al conectar el disco a un equipo Windows.
+core::NameRules nameRulesFor(const QString &directory)
+{
+    const QString fileSystem = fs::volumeForPath(directory).fileSystem.toLower();
+    static const QStringList windowsLike{QStringLiteral("ntfs"), QStringLiteral("ntfs3"), QStringLiteral("fuseblk"),
+                                         QStringLiteral("exfat"), QStringLiteral("vfat"), QStringLiteral("fat"),
+                                         QStringLiteral("fat32"), QStringLiteral("msdos")};
+    if (windowsLike.contains(fileSystem)) {
+        return core::NameRules::Windows;
+    }
+    return core::nativeNameRules();
+}
+
+Outcome Engine::renameMany(const QList<QPair<QString, QString>> &items, const tasks::CancelToken &cancel)
+{
+    Run run(*m_journal, cancel, {});
+    if (items.isEmpty()) {
+        return run.outcome;
+    }
+    if (!run.begin(journal::OperationKind::Rename, tr("Renombrar %1 elemento(s)").arg(items.size()))) {
+        return run.outcome;
+    }
+    // Lo más profundo primero: renombrar una carpeta cambia la ruta de lo de dentro.
+    QList<QPair<QString, QString>> ordered = items;
+    std::stable_sort(ordered.begin(), ordered.end(), [](const auto &a, const auto &b) {
+        return QDir::cleanPath(a.first).count(QLatin1Char('/')) > QDir::cleanPath(b.first).count(QLatin1Char('/'));
+    });
+    // Por carpetas. Si algún nombre nuevo es el viejo de otro (cadena o ciclo)
+    // o solo cambian mayúsculas, todo el grupo pasa antes por nombres temporales.
+    QList<QPair<QString, QList<QPair<QString, QString>>>> groups;
+    for (const auto &item : ordered) {
+        const QString parent = QFileInfo(QDir::cleanPath(item.first)).absolutePath();
+        auto found = std::find_if(groups.begin(), groups.end(), [&](const auto &group) { return group.first == parent; });
+        if (found == groups.end()) {
+            groups.append({parent, {}});
+            found = groups.end() - 1;
+        }
+        found->second.append({QDir::cleanPath(item.first), item.second});
+    }
+    int temporary = 0;
+    for (const auto &[parent, group] : groups) {
+        const core::NameRules rules = nameRulesFor(parent);
+        QSet<QString> oldNames;
+        for (const auto &item : group) {
+            oldNames.insert(QFileInfo(item.first).fileName().toCaseFolded());
+        }
+        bool needsTemporary = false;
+        for (const auto &item : group) {
+            needsTemporary = needsTemporary || oldNames.contains(item.second.toCaseFolded());
+        }
+        QList<QPair<QString, QString>> pending;   // (ruta actual, nombre final)
+        for (const auto &item : group) {
+            if (run.cancelled()) {
+                break;
+            }
+            const core::NameCheck check = core::checkFileName(item.second, rules);
+            if (!check.ok()) {
+                run.fail({core::ErrorCode::InvalidName, core::describeNameProblem(check), item.second, 0});
+                continue;
+            }
+            if (QFileInfo(item.first).fileName() == item.second) {
+                continue;   // mismo nombre: nada que hacer
+            }
+            if (!needsTemporary) {
+                pending.append(item);
+                continue;
+            }
+            const QString parked = joinPath(parent, QStringLiteral(".eu-renombrando-%1-%2")
+                                                        .arg(QCoreApplication::applicationPid())
+                                                        .arg(++temporary));
+            if (run.step(journal::StepKind::Rename, item.first, parked, parked,
+                         [&] { return renameNoReplace(item.first, parked); })) {
+                pending.append({parked, item.second});
+            }
+        }
+        for (const auto &item : pending) {
+            const QString target = joinPath(parent, item.second);
+            if (run.step(journal::StepKind::Rename, item.first, target, target,
+                         [&] { return renameNoReplace(item.first, target); })) {
+                run.outcome.resultPaths.append(target);
+            } else if (needsTemporary) {
+                // No se pudo dar el nombre final (apareció algo con ese nombre):
+                // vuelve a como estaba, para no dejarlo con el nombre temporal.
+                const auto original = std::find_if(group.begin(), group.end(), [&](const auto &candidate) {
+                    return candidate.second == item.second;
+                });
+                if (original != group.end()) {
+                    run.step(journal::StepKind::Rename, item.first, original->first, original->first,
+                             [&] { return renameNoReplace(item.first, original->first); });
+                }
+            }
+        }
+    }
+    run.finish();
+    return run.outcome;
+}
+
 Outcome Engine::rename(const QString &path, const QString &newName)
 {
     const tasks::CancelToken neverCancelled;
@@ -325,10 +693,25 @@ Outcome Engine::rename(const QString &path, const QString &newName)
     return run.outcome;
 }
 
-Outcome Engine::copy(const QStringList &sources, const QString &destinationDirectory, CollisionPolicy policy,
-                     const tasks::CancelToken &cancel, const ProgressCallback &progress)
+Outcome Engine::copy(const QStringList &sources, const QString &destinationDirectory,
+                     const TransferOptions &collisions, const tasks::CancelToken &cancel,
+                     const ProgressCallback &progress)
 {
-    Run run(*m_journal, cancel, progress);
+    return transferAll(sources, destinationDirectory, collisions, cancel, progress, false);
+}
+
+Outcome Engine::move(const QStringList &sources, const QString &destinationDirectory,
+                     const TransferOptions &collisions, const tasks::CancelToken &cancel,
+                     const ProgressCallback &progress)
+{
+    return transferAll(sources, destinationDirectory, collisions, cancel, progress, true);
+}
+
+Outcome Engine::transferAll(const QStringList &sources, const QString &destinationDirectory,
+                            const TransferOptions &collisions, const tasks::CancelToken &cancel,
+                            const ProgressCallback &progress, bool moving)
+{
+    Run run(*m_journal, cancel, progress, collisions);
     if (!stampOf(destinationDirectory).isDirectory) {
         run.outcome.errors.append(core::errorFromErrno(ENOENT, destinationDirectory));
         return run.outcome;
@@ -336,114 +719,149 @@ Outcome Engine::copy(const QStringList &sources, const QString &destinationDirec
     for (const QString &source : sources) {
         measureTree(source, cancel, run.progress);
     }
-    if (!run.begin(journal::OperationKind::Copy,
-                   tr("Copiar %1 elemento(s) a «%2»").arg(sources.size()).arg(QDir(destinationDirectory).dirName()))) {
+    const QString folderName = QDir(destinationDirectory).dirName();
+    const QString description = moving ? tr("Mover %1 elemento(s) a «%2»").arg(sources.size()).arg(folderName)
+                                       : tr("Copiar %1 elemento(s) a «%2»").arg(sources.size()).arg(folderName);
+    if (!run.begin(moving ? journal::OperationKind::Move : journal::OperationKind::Copy, description)) {
         return run.outcome;
     }
-
+    // El plan, para poder reanudar tras un cierre inesperado (SPEC §9).
+    QList<QPair<QString, QString>> plan;
     for (const QString &source : sources) {
+        plan.append({source, joinPath(destinationDirectory, QFileInfo(source).fileName())});
+    }
+    m_journal->setPlan(run.outcome.operationId, plan);
+    int index = 0;
+    for (const QString &source : sources) {
+        const int position = index++;
+        run.onTopLevelTarget = [&, position](const QString &target) {
+            if (target != plan[position].second) {
+                m_journal->setPlanTarget(run.outcome.operationId, position, target);
+            }
+        };
         if (run.cancelled()) {
-            break;
-        }
-        const QString name = QFileInfo(source).fileName();
-        if (stampOf(source).isDirectory && isSameOrInside(destinationDirectory, source)) {
-            run.fail({core::ErrorCode::NotSupported,
-                      tr("No se puede copiar una carpeta dentro de sí misma."), source, 0});
+            // Lo que ni se empezó por cancelar también queda pendiente.
+            run.outcome.unfinished.append({source, joinPath(destinationDirectory, QFileInfo(source).fileName())});
             continue;
         }
-        QString targetName = name;
-        if (stampOf(joinPath(destinationDirectory, name)).exists) {
-            // Copiar en la misma carpeta siempre crea un duplicado con otro nombre.
-            const bool sameFolder = QDir::cleanPath(QFileInfo(source).absolutePath())
-                == QDir::cleanPath(destinationDirectory);
-            if (policy == CollisionPolicy::Skip && !sameFolder) {
-                run.outcome.skipped.append(source);
-                continue;
-            }
-            targetName = uniqueName(destinationDirectory, name);
+        if (stampOf(source).isDirectory && isSameOrInside(destinationDirectory, source)) {
+            run.fail({core::ErrorCode::NotSupported,
+                      moving ? tr("No se puede mover una carpeta dentro de sí misma.")
+                             : tr("No se puede copiar una carpeta dentro de sí misma."),
+                      source, 0});
+            continue;
         }
-        const QString target = joinPath(destinationDirectory, targetName);
-        if (run.copyTree(source, target)) {
-            run.outcome.resultPaths.append(target);
+        QString target;
+        if (!run.transfer(source, destinationDirectory, QFileInfo(source).fileName(), moving, true, &target)) {
+            run.outcome.unfinished.append({source, target});
         }
     }
     run.finish();
     return run.outcome;
 }
 
-Outcome Engine::move(const QStringList &sources, const QString &destinationDirectory, CollisionPolicy policy,
-                     const tasks::CancelToken &cancel, const ProgressCallback &progress)
+Outcome Engine::retry(const QList<QPair<QString, QString>> &items, bool moving, const TransferOptions &options,
+                      const tasks::CancelToken &cancel, const ProgressCallback &progress)
 {
-    Run run(*m_journal, cancel, progress);
-    if (!stampOf(destinationDirectory).isDirectory) {
-        run.outcome.errors.append(core::errorFromErrno(ENOENT, destinationDirectory));
+    // Lo que ya está en el destino se compara: idéntico, se deja; a medias
+    // (una carpeta), se completa. Lo demás, como se pidió la primera vez.
+    TransferOptions again = options;
+    if (again.policy == CollisionPolicy::AutoRename || again.policy == CollisionPolicy::AppendDateTime
+        || again.policy == CollisionPolicy::Ask) {
+        again.policy = CollisionPolicy::SkipIfIdentical;
+    }
+    Run run(*m_journal, cancel, progress, again);
+    run.retrying = true;
+    for (const auto &item : items) {
+        measureTree(item.first, cancel, run.progress);
+    }
+    const QString description = moving ? tr("Reintentar: mover %1 elemento(s)").arg(items.size())
+                                       : tr("Reintentar: copiar %1 elemento(s)").arg(items.size());
+    if (!run.begin(moving ? journal::OperationKind::Move : journal::OperationKind::Copy, description)) {
         return run.outcome;
     }
-    for (const QString &source : sources) {
-        measureTree(source, cancel, run.progress);
-    }
-    if (!run.begin(journal::OperationKind::Move,
-                   tr("Mover %1 elemento(s) a «%2»").arg(sources.size()).arg(QDir(destinationDirectory).dirName()))) {
-        return run.outcome;
-    }
-
-    for (const QString &source : sources) {
+    m_journal->setPlan(run.outcome.operationId, items);
+    for (const auto &item : items) {
         if (run.cancelled()) {
-            break;
-        }
-        const QString name = QFileInfo(source).fileName();
-        const QString sourceParent = QDir::cleanPath(QFileInfo(source).absolutePath());
-        if (sourceParent == QDir::cleanPath(destinationDirectory)) {
-            continue;   // ya está ahí
-        }
-        if (stampOf(source).isDirectory && isSameOrInside(destinationDirectory, source)) {
-            run.fail({core::ErrorCode::NotSupported,
-                      tr("No se puede mover una carpeta dentro de sí misma."), source, 0});
+            run.outcome.unfinished.append(item);
             continue;
         }
-        QString targetName = name;
-        if (stampOf(joinPath(destinationDirectory, name)).exists) {
-            if (policy == CollisionPolicy::Skip) {
-                run.outcome.skipped.append(source);
-                continue;
-            }
-            targetName = uniqueName(destinationDirectory, name);
+        // Al mover, lo que ya llegó entero dejó de estar en el origen.
+        if (moving && !stampOf(item.first).exists && stampOf(item.second).exists) {
+            continue;
         }
-        const QString target = joinPath(destinationDirectory, targetName);
-        run.report(source);
-
-        // Dentro del mismo volumen mover es renombrar: instantáneo y atómico.
-        if (fs::isSameVolume(sourceParent, destinationDirectory)) {
-            const auto stepId = m_journal->addStep(run.outcome.operationId, journal::StepKind::Rename, source, target);
-            if (!stepId.ok()) {
-                run.fail(stepId.error());
-                break;
-            }
-            const core::Status renamed = renameNoReplace(source, target);
-            if (renamed.ok()) {
-                const FileStamp stamp = stampOf(target);
-                m_journal->completeStep(stepId.value(), stamp.size, stamp.modifiedMs);
-                run.outcome.resultPaths.append(target);
-                continue;
-            }
-            m_journal->setStepState(stepId.value(), journal::StepState::Failed);
-            if (renamed.error().code != core::ErrorCode::CrossDevice) {
-                run.fail(renamed.error());
-                continue;
-            }
-            // El sistema dice que son volúmenes distintos: se sigue por la vía larga.
-        }
-
-        // Entre volúmenes: copiar, sincronizar a disco y solo entonces borrar
-        // el origen (SPEC §8.3). Si la copia falla, el origen queda intacto.
-        if (run.copyTree(source, target) && !run.cancelled()) {
-            if (run.removeMovedTree(source, target)) {
-                run.outcome.resultPaths.append(target);
-            }
+        const QFileInfo target(item.second);
+        if (!run.transfer(item.first, target.absolutePath(), target.fileName(), moving, true)) {
+            run.outcome.unfinished.append(item);
         }
     }
     run.finish();
     return run.outcome;
+}
+
+Outcome Engine::applyMoves(const QList<QPair<QString, QString>> &moves, const QStringList &foldersToCreate,
+                           const QString &description, const tasks::CancelToken &cancel,
+                           const ProgressCallback &progress)
+{
+    Run run(*m_journal, cancel, progress);
+    for (const auto &move : moves) {
+        measureTree(move.first, cancel, run.progress);
+    }
+    if (!run.begin(journal::OperationKind::Move, description)) {
+        return run.outcome;
+    }
+    QList<QPair<QString, QString>> plan;
+    for (const auto &move : moves) {
+        plan.append(move);
+    }
+    m_journal->setPlan(run.outcome.operationId, plan);
+    // Primero las carpetas (de fuera hacia dentro): deshacer las quita si quedan vacías.
+    for (const QString &folder : foldersToCreate) {
+        if (run.cancelled()) {
+            break;
+        }
+        if (!stampOf(folder).exists) {
+            run.step(journal::StepKind::MakeDirectory, {}, folder, {}, [&] { return makeDirectory(folder); });
+        }
+    }
+    for (const auto &[source, wanted] : moves) {
+        if (run.cancelled()) {
+            run.outcome.unfinished.append({source, wanted});
+            continue;
+        }
+        // Si entre la simulación y ahora apareció algo con ese nombre, otro nombre.
+        const QFileInfo target(wanted);
+        const QString free = joinPath(target.absolutePath(), uniqueName(target.absolutePath(), target.fileName()));
+        if (run.moveTo(source, free)) {
+            run.outcome.resultPaths.append(free);
+            ++run.progress.itemsDone;
+        } else {
+            run.outcome.unfinished.append({source, free});
+        }
+    }
+    run.finish();
+    return run.outcome;
+}
+
+Outcome Engine::resumeInterrupted(journal::OperationId operationId, const TransferOptions &options,
+                                  const tasks::CancelToken &cancel, const ProgressCallback &progress)
+{
+    Outcome outcome;
+    const core::Result<journal::Operation> operation = m_journal->operation(operationId);
+    const core::Result<QList<QPair<QString, QString>>> plan = m_journal->plan(operationId);
+    if (!operation.ok() || !plan.ok()) {
+        outcome.errors.append(operation.ok() ? plan.error() : operation.error());
+        return outcome;
+    }
+    const bool moving = operation.value().kind == journal::OperationKind::Move;
+    if ((!moving && operation.value().kind != journal::OperationKind::Copy) || plan.value().isEmpty()) {
+        outcome.errors.append({core::ErrorCode::NotSupported,
+                               tr("Esta operación no se puede reanudar; se puede revertir o dar por perdida."), {}, 0});
+        return outcome;
+    }
+    // La interrumpida queda cerrada; lo que falta se hace como una operación nueva.
+    m_journal->finishOperation(operationId, journal::OperationState::Cancelled);
+    return retry(plan.value(), moving, options, cancel, progress);
 }
 
 Outcome Engine::trash(const QStringList &paths, const tasks::CancelToken &cancel)
@@ -724,7 +1142,7 @@ static void settlePendingSteps(journal::Journal &journal, journal::OperationId o
         switch (step.kind) {
         case journal::StepKind::CopyFile: {
             // Si se quedó a medias, lo escrito está en el archivo temporal.
-            QFile::remove(step.target + partialSuffix());
+            removePartialsUnder(step.target);
             const FileStamp source = stampOf(step.source);
             result = stampOf(step.target);
             // El destino con el nombre final solo aparece al terminar; se

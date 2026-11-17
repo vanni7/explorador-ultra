@@ -130,6 +130,166 @@ private slots:
         QCOMPARE(readFile(source), content);   // el origen queda intacto
     }
 
+    void hashesHaveTheKnownValues()
+    {
+        QTemporaryDir directory;
+        const QString path = directory.filePath(QStringLiteral("abc.txt"));
+        {
+            QFile file(path);
+            QVERIFY(file.open(QIODevice::WriteOnly));
+            file.write("abc");
+        }
+        const tasks::CancelToken none;
+        QCOMPARE(hashFile(path, HashAlgorithm::Sha256, none).value().toHex(),
+                 QByteArray("ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"));
+        QCOMPARE(hashFile(path, HashAlgorithm::Sha1, none).value().toHex(),
+                 QByteArray("a9993e364706816aba3e25717850c26c9cd0d89d"));
+        QCOMPARE(hashFile(path, HashAlgorithm::Md5, none).value().toHex(),
+                 QByteArray("900150983cd24fb0d6963f7d28e17f72"));
+        QCOMPARE(hashFile(path, HashAlgorithm::Crc32, none).value().toHex(), QByteArray("352441c2"));
+        QVERIFY(hashAlgorithmLimitation(HashAlgorithm::Sha256).isEmpty());
+        QVERIFY(!hashAlgorithmLimitation(HashAlgorithm::Crc32).isEmpty());
+        // Por partes da lo mismo que de una vez.
+        Hasher parts(HashAlgorithm::Crc32);
+        parts.addData("a", 1);
+        parts.addData("bc", 2);
+        QCOMPARE(parts.result().toHex(), QByteArray("352441c2"));
+    }
+
+    void verifiedCopyRetriesOnceThenRefuses()
+    {
+        QTemporaryDir directory;
+        const QString source = directory.filePath(QStringLiteral("datos.bin"));
+        QByteArray data(3 * 1024 * 1024 + 17, Qt::Uninitialized);
+        for (qsizetype i = 0; i < data.size(); ++i) {
+            data[i] = char((i * 131) % 251);
+        }
+        {
+            QFile file(source);
+            QVERIFY(file.open(QIODevice::WriteOnly));
+            file.write(data);
+        }
+        const tasks::CancelToken none;
+        for (const HashAlgorithm algorithm :
+             {HashAlgorithm::Sha256, HashAlgorithm::Sha1, HashAlgorithm::Md5, HashAlgorithm::Crc32}) {
+            CopyOptions options;
+            options.verify = true;
+            options.algorithm = algorithm;
+            const QString target = directory.filePath(QStringLiteral("copia-%1.bin").arg(int(algorithm)));
+            // Un fallo pasajero: se nota, se repite y queda bien.
+            corruptNextCopiesForTesting(1);
+            qint64 progressed = 0;
+            const core::Status status = copyFile(source, target, none, [&](qint64 bytes) { progressed += bytes; },
+                                                 options);
+            QVERIFY2(status.ok(), qPrintable(status.ok() ? QString() : status.error().message));
+            QCOMPARE(progressed, data.size());   // la vuelta repetida no cuenta doble
+            QFile copy(target);
+            QVERIFY(copy.open(QIODevice::ReadOnly));
+            QCOMPARE(copy.readAll(), data);
+        }
+        // Un fallo que se repite: error, y ni copia ni temporal.
+        CopyOptions options;
+        options.verify = true;
+        corruptNextCopiesForTesting(2);
+        const QString target = directory.filePath(QStringLiteral("mala.bin"));
+        const core::Status status = copyFile(source, target, none, {}, options);
+        QVERIFY(!status.ok());
+        QCOMPARE(status.error().code, core::ErrorCode::Corrupted);
+        QVERIFY(!QFileInfo::exists(target));
+        QVERIFY(!QFileInfo::exists(target + partialSuffix()));
+        // Sin comprobar, el fallo pasaría inadvertido (por eso existe la opción).
+        corruptNextCopiesForTesting(1);
+        QVERIFY(copyFile(source, directory.filePath(QStringLiteral("sin-comprobar.bin")), none).ok());
+        corruptNextCopiesForTesting(0);
+    }
+
+    void cancelledResumableCopyContinuesWhereItStopped()
+    {
+        QTemporaryDir directory;
+        const QString source = directory.filePath(QStringLiteral("video.mkv"));
+        QByteArray data(150 * 1024 * 1024, Qt::Uninitialized);
+        for (qsizetype i = 0; i < data.size(); ++i) {
+            data[i] = char((i * 31 + i / 65536) % 251);
+        }
+        {
+            QFile file(source);
+            QVERIFY(file.open(QIODevice::WriteOnly));
+            file.write(data);
+        }
+        const QString target = directory.filePath(QStringLiteral("copia.mkv"));
+        CopyOptions options;
+        options.resumable = true;
+        options.checkpointEveryMs = 0;   // en la prueba, un punto cada 64 MB
+
+        // Se cancela a los 100 MB: queda lo confirmado (64 MB) para seguir.
+        tasks::CancelSource cancel;
+        qint64 done = 0;
+        core::Status status = copyFile(source, target, cancel.token(), [&](qint64 bytes) {
+            done += bytes;
+            if (done >= 100LL * 1024 * 1024) {
+                cancel.cancel();
+            }
+        }, options);
+        QCOMPARE(status.error().code, core::ErrorCode::Cancelled);
+        QVERIFY(!QFileInfo::exists(target));
+        QVERIFY(QFileInfo(target + partialSuffix()).size() >= kCheckpointEveryBytes);
+        QVERIFY(QFileInfo::exists(target + checkpointSuffix()));
+
+        // Sigue desde el punto de control, también comprobando con hash.
+        options.verify = true;
+        qint64 first = -1;
+        qint64 total = 0;
+        status = copyFile(source, target, {}, [&](qint64 bytes) {
+            if (first < 0) {
+                first = bytes;
+            }
+            total += bytes;
+        }, options);
+        QVERIFY2(status.ok(), qPrintable(status.ok() ? QString() : status.error().message));
+        QCOMPARE(first, kCheckpointEveryBytes);   // lo ya copiado, de una vez
+        QCOMPARE(total, data.size());
+        QVERIFY(!QFileInfo::exists(target + partialSuffix()));
+        QVERIFY(!QFileInfo::exists(target + checkpointSuffix()));
+        QFile copy(target);
+        QVERIFY(copy.open(QIODevice::ReadOnly));
+        QVERIFY(copy.readAll() == data);
+        copy.close();
+
+        // Si el original cambió entre medias, se empieza de cero.
+        const QString other = directory.filePath(QStringLiteral("otra.mkv"));
+        tasks::CancelSource cancelAgain;
+        done = 0;
+        copyFile(source, other, cancelAgain.token(), [&](qint64 bytes) {
+            done += bytes;
+            if (done >= 100LL * 1024 * 1024) {
+                cancelAgain.cancel();
+            }
+        }, options);
+        QVERIFY(QFileInfo::exists(other + checkpointSuffix()));
+        {
+            QFile file(source);
+            QVERIFY(file.open(QIODevice::ReadWrite));
+            QVERIFY(file.setFileTime(QDateTime::currentDateTimeUtc().addSecs(-3600), QFileDevice::FileModificationTime));
+        }
+        first = -1;
+        QVERIFY(copyFile(source, other, {}, [&](qint64 bytes) { if (first < 0) first = bytes; }, options).ok());
+        QVERIFY(first < kCheckpointEveryBytes);
+
+        // Sin «reanudable», cancelar no deja nada.
+        const QString plain = directory.filePath(QStringLiteral("sin.mkv"));
+        tasks::CancelSource cancelPlain;
+        done = 0;
+        copyFile(source, plain, cancelPlain.token(), [&](qint64 bytes) {
+            done += bytes;
+            if (done >= 100LL * 1024 * 1024) {
+                cancelPlain.cancel();
+            }
+        });
+        QVERIFY(!QFileInfo::exists(plain + partialSuffix()));
+        QVERIFY(!QFileInfo::exists(plain + checkpointSuffix()));
+        removePartialsUnder(directory.path());
+    }
+
     void copyRefusesExistingTarget()
     {
         QTemporaryDir directory;

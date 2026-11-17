@@ -178,6 +178,8 @@ QVariant SearchResultsModel::data(const QModelIndex &index, int role) const
                 : QLocale().toString(QDateTime::fromMSecsSinceEpoch(entry.modifiedMs), QLocale::ShortFormat);
         case OriginColumn:
             return m_fromIndex ? tr("Índice") : tr("Disco");
+        case SnippetColumn:
+            return hit.snippet;
         default:
             break;
         }
@@ -192,9 +194,18 @@ QVariant SearchResultsModel::data(const QModelIndex &index, int role) const
             return int(Qt::AlignRight | Qt::AlignVCenter);
         }
         break;
+    case SnippetStartRole:
+        return hit.snippetStart;
+    case SnippetLengthRole:
+        return hit.snippetLength;
+    case SnippetPlaceRole:
+        return hit.snippetPlace;
     case Qt::ToolTipRole:
         if (index.column() == SizeColumn && !entry.isDirectory) {
             return tr("%1 bytes").arg(QLocale().toString(entry.size));
+        }
+        if (index.column() == SnippetColumn) {
+            return hit.snippetPlace.isEmpty() ? hit.snippet : hit.snippetPlace + QStringLiteral(": ") + hit.snippet;
         }
         if (index.column() == OriginColumn) {
             return m_fromIndex ? tr("Del índice: no se ha comprobado que siga en el disco")
@@ -219,6 +230,7 @@ QVariant SearchResultsModel::headerData(int section, Qt::Orientation orientation
     case TypeColumn:     return tr("Tipo");
     case ModifiedColumn: return tr("Modificado");
     case OriginColumn:   return tr("Origen");
+    case SnippetColumn:  return tr("Fragmento");
     default:             return {};
     }
 }

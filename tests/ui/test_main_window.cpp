@@ -3,9 +3,14 @@
 #include "eu/ui/FileClipboard.h"
 #include "eu/ui/Locations.h"
 #include "eu/ui/MainWindow.h"
+#include "eu/ui/BulkRenameDialog.h"
+#include "eu/ui/DuplicatesDialog.h"
+#include "eu/ui/SimilarImagesDialog.h"
+#include "eu/ui/OrganizeDialog.h"
 #include "eu/ui/PathBar.h"
 #include "eu/ui/SearchResultsModel.h"
 #include "eu/ui/IndexDialog.h"
+#include "eu/archive/Archive.h"
 #include "eu/ui/InlinePlayer.h"
 #include "../support/TestMedia.h"
 #include "eu/ui/PreviewPanel.h"
@@ -30,6 +35,8 @@
 #include <QStandardPaths>
 #include <QTemporaryDir>
 #include <QTest>
+#include <QPainter>
+#include <QPushButton>
 #include <QTreeWidget>
 #include <QTreeView>
 #include <QUrl>
@@ -220,6 +227,18 @@ private slots:
         QCOMPARE(window.currentPane(), other);
         QCOMPARE(window.currentPane()->currentPath(), QDir::cleanPath(second.path()));
         QVERIFY(waitReady(other));
+
+        // La ✕ de una pestaña con una búsqueda sale de la búsqueda, no cierra
+        // nada (con una sola pestaña, cerraba la ventana entera).
+        window.closeTab(0);
+        QCOMPARE(window.tabCount(), 1);
+        window.searchEdit()->setText(QStringLiteral("*"));
+        QTest::keyClick(window.searchEdit(), Qt::Key_Return);
+        QVERIFY(other->showsSearch());
+        window.closeTab(0);
+        QCOMPARE(window.tabCount(), 1);
+        QVERIFY(!other->showsSearch());
+        QCOMPARE(other->currentPath(), QDir::cleanPath(second.path()));
     }
 
     void fileClipboardRoundTrip()
@@ -329,10 +348,18 @@ private slots:
         // Lo pegado queda seleccionado.
         QTRY_COMPARE_WITH_TIMEOUT(pane->selectedPaths().size(), 2, 10000);
 
-        // Pegar otra vez en la misma carpeta no sobrescribe: crea copias con otro nombre.
+        // Pegar otra vez donde ya están: se pregunta. Con «mantener los dos»
+        // y «lo mismo con los demás», una sola pregunta y copias con otro nombre.
+        int asked = 0;
+        window.setCollisionAnswerForTesting([&](const ops::Conflict &conflict, const tasks::CancelToken &) {
+            ++asked;
+            [&] { QVERIFY(conflict.target.startsWith(destination)); }();
+            return ops::CollisionDecision{ops::CollisionPolicy::AutoRename, true, false};
+        });
         window.paste();
         QTRY_COMPARE_WITH_TIMEOUT(QDir(destination).entryList(QDir::Files).size(), 4, 10000);
         QVERIFY(waitIdle(window));
+        QCOMPARE(asked, 1);
 
         // Deshacer quita solo esas últimas copias.
         window.undo();
@@ -461,8 +488,11 @@ private slots:
         QVERIFY(QFileInfo::exists(directory.filePath(QStringLiteral("a.txt"))));
         QVERIFY(QFileInfo::exists(folder + QStringLiteral("/b.txt")));
 
-        // Mayús + soltar sobre la carpeta: mueve. Ya hay "a.txt" dentro, así
-        // que se omite sin sobrescribir y el original sigue en su sitio.
+        // Mayús + soltar sobre la carpeta: mueve. Ya hay "a.txt" dentro: se
+        // pregunta; con «Omitir», no se sobrescribe y el original sigue en su sitio.
+        window.setCollisionAnswerForTesting([](const ops::Conflict &, const tasks::CancelToken &) {
+            return ops::CollisionDecision{ops::CollisionPolicy::Skip, false, false};
+        });
         QVERIFY(waitReady(pane));
         std::unique_ptr<QMimeData> onlyA(makeFileMimeData({directory.filePath(QStringLiteral("a.txt"))}, false));
         QSignalSpy reports(&window, &MainWindow::actionReported);
@@ -475,17 +505,344 @@ private slots:
         QTemporaryDir outside;
         writeFile(outside.filePath(QStringLiteral("externo.txt")), 7);
         std::unique_ptr<QMimeData> external(makeFileMimeData({outside.filePath(QStringLiteral("externo.txt"))}, false));
+        QVERIFY(waitReady(pane));
         QVERIFY(dropAt(external.get(), emptyArea, Qt::ShiftModifier));
         QTRY_VERIFY_WITH_TIMEOUT(QFileInfo::exists(directory.filePath(QStringLiteral("externo.txt"))), 10000);
         QVERIFY(waitIdle(window));
         QVERIFY(!QFileInfo::exists(outside.filePath(QStringLiteral("externo.txt"))));
 
+        // Mientras la carpeta se vuelve a leer, soltar en ella también vale
+        // (en macOS el aviso del disco llega tarde y la relectura coincide).
+        writeFile(outside.filePath(QStringLiteral("durante.txt")), 7);
+        std::unique_ptr<QMimeData> during(makeFileMimeData({outside.filePath(QStringLiteral("durante.txt"))}, false));
+        pane->refresh();
+        QCOMPARE(pane->model()->state(), DirectoryModel::State::Loading);
+        QVERIFY(dropAt(during.get(), emptyArea, Qt::ShiftModifier));
+        QTRY_VERIFY_WITH_TIMEOUT(QFileInfo::exists(directory.filePath(QStringLiteral("durante.txt"))), 10000);
+        QVERIFY(waitIdle(window));
+
         // Una carpeta no se puede soltar dentro de sí misma, ni texto que no son archivos.
+        // Dos relecturas seguidas conservan las filas.
+        pane->refresh();
+        pane->refresh();
+        QVERIFY(pane->model()->rowOfName(QStringLiteral("carpeta")) >= 0);
+        QVERIFY(waitReady(pane));
         std::unique_ptr<QMimeData> itself(makeFileMimeData({folder}, false));
         QVERIFY(!dropAt(itself.get(), centerOf(QStringLiteral("carpeta")), Qt::ControlModifier));
         QMimeData text;
         text.setText(QStringLiteral("hola"));
         QVERIFY(!dropAt(&text, emptyArea, Qt::ControlModifier));
+    }
+
+    void bulkRenameFromF2WithPreviewAndUndo()
+    {
+        QTemporaryDir data;
+        QTemporaryDir directory;
+        writeFile(directory.filePath(QStringLiteral("IMG_001.JPG")), 10);
+        writeFile(directory.filePath(QStringLiteral("IMG_002.JPG")), 10);
+        writeFile(directory.filePath(QStringLiteral("nota.txt")), 10);
+        MainWindow window(m_scheduler, openJournal(data));
+        window.show();
+        BrowserPane *pane = window.openTab(directory.path());
+        QVERIFY(waitReady(pane));
+        selectNames(pane, {QStringLiteral("IMG_001.JPG"), QStringLiteral("IMG_002.JPG")});
+
+        QStringList shown;
+        window.setBulkRenameDriverForTesting([&](BulkRenameDialog &dialog) {
+            rename::Rule replace;
+            replace.kind = rename::Rule::Kind::Replace;
+            replace.find = QStringLiteral("IMG_");
+            replace.with = QStringLiteral("Viaje ");
+            dialog.setRules({replace});
+            dialog.setExtensionMode(rename::ExtensionMode::Lower);
+            if (!QTest::qWaitFor([&] { return dialog.isPreviewCurrent(); }, 10000)) {
+                return false;
+            }
+            for (int row = 0; row < dialog.preview()->topLevelItemCount(); ++row) {
+                shown.append(dialog.preview()->topLevelItem(row)->text(0) + QStringLiteral(" -> ")
+                             + dialog.preview()->topLevelItem(row)->text(1));
+            }
+            return dialog.renameButton()->isEnabled();
+        });
+        // F2 de verdad, sobre la lista, con dos seleccionados: renombrado masivo.
+        pane->view()->setFocus();
+        QTest::keyClick(pane->view(), Qt::Key_F2);
+        QCOMPARE(shown, (QStringList{QStringLiteral("IMG_001.JPG -> Viaje 001.jpg"),
+                                     QStringLiteral("IMG_002.JPG -> Viaje 002.jpg")}));
+        QTRY_VERIFY_WITH_TIMEOUT(QFileInfo::exists(directory.filePath(QStringLiteral("Viaje 002.jpg"))), 10000);
+        QVERIFY(waitIdle(window));
+        QVERIFY(QFileInfo::exists(directory.filePath(QStringLiteral("Viaje 001.jpg"))));
+        QVERIFY(QFileInfo::exists(directory.filePath(QStringLiteral("nota.txt"))));
+
+        // Deshacer devuelve los dos de una vez.
+        window.undo();
+        QTRY_VERIFY_WITH_TIMEOUT(QFileInfo::exists(directory.filePath(QStringLiteral("IMG_001.JPG"))), 10000);
+        QVERIFY(waitIdle(window));
+        QVERIFY(QFileInfo::exists(directory.filePath(QStringLiteral("IMG_002.JPG"))));
+
+        // Toda la carpeta, con contador: incluye nota.txt.
+        window.setBulkRenameDriverForTesting([&](BulkRenameDialog &dialog) {
+            rename::Rule counter;
+            counter.kind = rename::Rule::Kind::Counter;
+            counter.count = 2;
+            counter.separator = QStringLiteral(" - ");
+            dialog.setRules({counter});
+            dialog.setScope(BulkRenameDialog::Scope::Folder, false);
+            return QTest::qWaitFor([&] { return dialog.isPreviewCurrent(); }, 10000);
+        });
+        window.showBulkRename();
+        QTRY_VERIFY_WITH_TIMEOUT(QFileInfo::exists(directory.filePath(QStringLiteral("03 - nota.txt"))), 10000);
+        QVERIFY(waitIdle(window));
+    }
+
+    void organizeShowsTheSimulationAndUndoesTogether()
+    {
+        QTemporaryDir data;
+        QTemporaryDir directory;
+        writeFile(directory.filePath(QStringLiteral("informe.pdf")), 10);
+        writeFile(directory.filePath(QStringLiteral("foto.jpg")), 10);
+        writeFile(directory.filePath(QStringLiteral("raro.xyz")), 10);
+        MainWindow window(m_scheduler, openJournal(data));
+        window.show();
+        BrowserPane *pane = window.openTab(directory.path());
+        QVERIFY(waitReady(pane));
+        QStringList topLevel;
+        window.setOrganizeDriverForTesting([&](OrganizeDialog &dialog) {
+            // Con las reglas de fábrica. Organizar solo se puede con la simulación a la vista.
+            if (!QTest::qWaitFor([&] { return dialog.isSimulationCurrent(); }, 10000)) {
+                return false;
+            }
+            for (int row = 0; row < dialog.simulation()->topLevelItemCount(); ++row) {
+                topLevel.append(dialog.simulation()->topLevelItem(row)->text(0));
+            }
+            // Cambiar algo invalida la simulación hasta que se rehace.
+            dialog.setRecursive(true);
+            if (dialog.applyButton()->isEnabled()) {
+                return false;
+            }
+            return QTest::qWaitFor([&] { return dialog.isSimulationCurrent() && dialog.applyButton()->isEnabled(); },
+                                   10000);
+        });
+        window.showOrganize();
+        topLevel.sort();
+        QCOMPARE(topLevel, (QStringList{QStringLiteral("Documentos"), QStringLiteral("Imágenes")}));
+        QTRY_VERIFY_WITH_TIMEOUT(QFileInfo::exists(directory.filePath(QStringLiteral("Documentos/PDF/informe.pdf"))),
+                                 10000);
+        QVERIFY(waitIdle(window));
+        QVERIFY(QFileInfo::exists(directory.filePath(QStringLiteral("Imágenes/JPG/foto.jpg"))));
+        QVERIFY(QFileInfo::exists(directory.filePath(QStringLiteral("raro.xyz"))));
+        window.undo();
+        QTRY_VERIFY_WITH_TIMEOUT(QFileInfo::exists(directory.filePath(QStringLiteral("informe.pdf"))), 10000);
+        QVERIFY(waitIdle(window));
+        QVERIFY(QFileInfo::exists(directory.filePath(QStringLiteral("foto.jpg"))));
+        QVERIFY(!QFileInfo::exists(directory.filePath(QStringLiteral("Documentos"))));
+    }
+
+    void duplicatesAreMarkedConfirmedAndTrashed()
+    {
+        QTemporaryDir data;
+        QTemporaryDir directory;
+        QByteArray content(50000, 'd');
+        for (const QString &name : {QStringLiteral("a/foto.jpg"), QStringLiteral("b/foto.jpg"), QStringLiteral("c/copia.jpg")}) {
+            QDir().mkpath(QFileInfo(directory.filePath(name)).absolutePath());
+            QFile file(directory.filePath(name));
+            QVERIFY(file.open(QIODevice::WriteOnly));
+            file.write(content);
+        }
+        writeFile(directory.filePath(QStringLiteral("unico.txt")), 10);
+        MainWindow window(m_scheduler, openJournal(data));
+        window.show();
+        BrowserPane *pane = window.openTab(directory.path());
+        QVERIFY(waitReady(pane));
+        int groups = -1;
+        bool keptOne = false;
+        window.setDuplicatesDriverForTesting([&](DuplicatesDialog &dialog) {
+            dialog.startSearch();
+            if (!QTest::qWaitFor([&] { return !dialog.isSearching(); }, 20000)) {
+                return false;
+            }
+            groups = dialog.results()->topLevelItemCount();
+            // Marcar a mano las tres: la tercera se desmarca sola.
+            QTreeWidgetItem *group = dialog.results()->topLevelItem(0);
+            for (int i = 0; i < group->childCount(); ++i) {
+                group->child(i)->setCheckState(0, Qt::Checked);
+            }
+            keptOne = dialog.marked().size() == 2;
+            // Con la regla: todas menos la de ruta más corta (a/foto.jpg o b/foto.jpg).
+            dialog.markWithRule(dupes::Keep::ShortestPath);
+            if (dialog.marked().size() != 2) {
+                return false;
+            }
+            dialog.setConfirmForTesting([](int files, qint64 bytes) { return files == 2 && bytes == 100000; });
+            for (QPushButton *button : dialog.findChildren<QPushButton *>()) {
+                if (button->text().startsWith(QStringLiteral("Enviar"))) {
+                    button->click();
+                }
+            }
+            return dialog.result() == QDialog::Accepted;
+        });
+        // Donde la carpeta temporal no tiene papelera (macOS), se ofrecería
+        // borrar del todo: se contesta que no y la prueba se salta ahí.
+        bool trashUnsupported = false;
+        window.setDeleteConfirmation([&trashUnsupported](const QStringList &) {
+            trashUnsupported = true;
+            return false;
+        });
+        window.showDuplicates();
+        QCOMPARE(groups, 1);
+        QVERIFY(keptOne);
+        const auto remaining = [&] {
+            return int(QFileInfo::exists(directory.filePath(QStringLiteral("a/foto.jpg"))))
+                + int(QFileInfo::exists(directory.filePath(QStringLiteral("b/foto.jpg"))))
+                + int(QFileInfo::exists(directory.filePath(QStringLiteral("c/copia.jpg"))));
+        };
+        QTRY_VERIFY_WITH_TIMEOUT(trashUnsupported || remaining() == 1, 10000);
+        QVERIFY(waitIdle(window));
+        if (trashUnsupported) {
+            QSKIP("El volumen temporal de este equipo no admite papelera.");
+        }
+        // Deshacer las devuelve.
+        window.undo();
+        QTRY_VERIFY_WITH_TIMEOUT(QFileInfo::exists(directory.filePath(QStringLiteral("c/copia.jpg"))), 10000);
+        QVERIFY(waitIdle(window));
+    }
+
+    void similarImagesAreComparedAndOnlyMarkedOnesTrashed()
+    {
+        QTemporaryDir data;
+        QTemporaryDir directory;
+        QImage photo(640, 480, QImage::Format_RGB32);
+        {
+            QPainter painter(&photo);
+            QLinearGradient gradient(0, 0, 640, 480);
+            gradient.setColorAt(0, Qt::yellow);
+            gradient.setColorAt(1, Qt::darkBlue);
+            painter.fillRect(photo.rect(), gradient);
+            painter.setBrush(Qt::red);
+            painter.drawEllipse(QPoint(200, 150), 80, 60);
+        }
+        QVERIFY(photo.save(directory.filePath(QStringLiteral("original.png"))));
+        QVERIFY(photo.save(directory.filePath(QStringLiteral("comprimida.jpg")), "JPG", 40));
+        QVERIFY(photo.scaled(200, 150).save(directory.filePath(QStringLiteral("pequena.jpg")), "JPG", 80));
+        MainWindow window(m_scheduler, openJournal(data));
+        window.show();
+        BrowserPane *pane = window.openTab(directory.path());
+        QVERIFY(waitReady(pane));
+        int groups = -1;
+        bool lastRefused = false;
+        window.setSimilarDriverForTesting([&](SimilarImagesDialog &dialog) {
+            dialog.startSearch();
+            if (!QTest::qWaitFor([&] { return !dialog.isSearching(); }, 30000)) {
+                return false;
+            }
+            groups = dialog.groupCount();
+            if (groups != 1) {
+                return false;
+            }
+            const QList<similar::Image> images = dialog.groups().first().images;
+            // La primera es la de más bytes; se marcan las otras dos y la última no se deja.
+            dialog.setMarked(images[1].path, true);
+            dialog.setMarked(images[2].path, true);
+            lastRefused = !dialog.setMarked(images[0].path, true);
+            dialog.setConfirmForTesting([](int files, qint64) { return files == 2; });
+            dialog.sendToTrash();
+            return dialog.result() == QDialog::Accepted;
+        });
+        bool trashUnsupported = false;
+        window.setDeleteConfirmation([&trashUnsupported](const QStringList &) {
+            trashUnsupported = true;
+            return false;
+        });
+        window.showSimilarImages();
+        QCOMPARE(groups, 1);
+        QVERIFY(lastRefused);
+        QTRY_VERIFY_WITH_TIMEOUT(trashUnsupported || QDir(directory.path()).entryList(QDir::Files).size() == 1, 10000);
+        QVERIFY(waitIdle(window));
+        if (trashUnsupported) {
+            QSKIP("El volumen temporal de este equipo no admite papelera.");
+        }
+    }
+
+    void tagsShowFollowRenamesAndAreSearchable()
+    {
+        QTemporaryDir data;
+        QTemporaryDir directory;
+        writeFile(directory.filePath(QStringLiteral("factura.pdf")), 10);
+        writeFile(directory.filePath(QStringLiteral("otra.pdf")), 10);
+        MainWindow window(m_scheduler, openJournal(data));
+        window.show();
+        QVERIFY(window.tagStore() != nullptr);
+        const auto created = window.tagStore()->createTag(QStringLiteral("Prueba %1").arg(QCoreApplication::applicationPid()),
+                                                          QStringLiteral("#e74c3c"));
+        QVERIFY(created.ok());
+        const tags::Tag tag = created.value();
+        BrowserPane *pane = window.openTab(directory.path());
+        QVERIFY(waitReady(pane));
+        window.setTag({directory.filePath(QStringLiteral("factura.pdf"))}, tag.id, true);
+        const auto tagCell = [&](const QString &name) {
+            const int row = pane->model()->rowOfName(name);
+            return row < 0 ? QString()
+                           : pane->model()->data(pane->model()->index(row, int(Column::Tags))).toString();
+        };
+        QTRY_COMPARE_WITH_TIMEOUT(tagCell(QStringLiteral("factura.pdf")), tag.name, 10000);
+        QCOMPARE(tagCell(QStringLiteral("otra.pdf")), QString());
+
+        // Renombrar desde la aplicación: la etiqueta va con el archivo; deshacer, también.
+        selectNames(pane, {QStringLiteral("factura.pdf")});
+        emit pane->renameRequested(directory.filePath(QStringLiteral("factura.pdf")), QStringLiteral("factura 2026.pdf"));
+        QTRY_VERIFY_WITH_TIMEOUT(QFileInfo::exists(directory.filePath(QStringLiteral("factura 2026.pdf"))), 10000);
+        QVERIFY(waitIdle(window));
+        QTRY_COMPARE_WITH_TIMEOUT(window.tagStore()->pathsWithTag(tag.name),
+                                  QStringList{QDir::cleanPath(directory.filePath(QStringLiteral("factura 2026.pdf")))}, 10000);
+        window.undo();
+        QTRY_VERIFY_WITH_TIMEOUT(QFileInfo::exists(directory.filePath(QStringLiteral("factura.pdf"))), 10000);
+        QVERIFY(waitIdle(window));
+        QTRY_COMPARE_WITH_TIMEOUT(window.tagStore()->pathsWithTag(tag.name),
+                                  QStringList{QDir::cleanPath(directory.filePath(QStringLiteral("factura.pdf")))}, 10000);
+
+        // Buscar por etiqueta.
+        window.searchEdit()->setText(QStringLiteral("tag:\"%1\"").arg(tag.name));
+        QTest::keyClick(window.searchEdit(), Qt::Key_Return);
+        QVERIFY(pane->showsSearch());
+        QVERIFY(QTest::qWaitFor([pane] { return pane->searchState() == BrowserPane::SearchState::Finished; }, 20000));
+        QCOMPARE(pane->resultsModel()->count(), 1);
+        QCOMPARE(pane->resultsModel()->hitAt(0).entry.name, QStringLiteral("factura.pdf"));
+        window.tagStore()->deleteTag(tag.id);
+    }
+
+    void interruptedCopyIsResumedAndClosingMidCopyCanBeResumed()
+    {
+        QTemporaryDir data;
+        QTemporaryDir directory;
+        QVERIFY(QDir(directory.path()).mkdir(QStringLiteral("fotos")));
+        QVERIFY(QDir(directory.path()).mkdir(QStringLiteral("destino")));
+        for (int i = 0; i < 6; ++i) {
+            writeFile(directory.filePath(QStringLiteral("fotos/foto%1.raw").arg(i)), 1'000'000);
+        }
+        const QString source = directory.filePath(QStringLiteral("fotos"));
+        const QString destination = directory.filePath(QStringLiteral("destino"));
+        QProcess process;
+        process.start(QCoreApplication::applicationDirPath() + QStringLiteral("/eu-crash-helper"),
+                      {data.filePath(QStringLiteral("historial.db")), source, destination,
+                       QStringLiteral("2500000"), QStringLiteral("copiar")});
+        QVERIFY(process.waitForFinished(60000));
+        QCOMPARE(process.exitCode(), 42);
+
+        // Al abrir se elige reanudar: termina lo que faltaba, sin duplicar.
+        {
+            MainWindow window(m_scheduler, openJournal(data));
+            window.setRecoveryChoice([](const QList<journal::Operation> &) {
+                return MainWindow::RecoveryChoice::Resume;
+            });
+            window.checkInterruptedOperations();
+            QTRY_COMPARE_WITH_TIMEOUT(QDir(destination + QStringLiteral("/fotos")).entryList(QDir::Files).size(), 6,
+                                      20000);
+            QVERIFY(waitIdle(window));
+            QCOMPARE(QDir(destination).entryList(QDir::Dirs | QDir::NoDotAndDotDot), QStringList{QStringLiteral("fotos")});
+            QCOMPARE(window.transfersPanel()->list()->topLevelItemCount(), 1);
+        }
+        auto journal = openJournal(data);
+        QVERIFY(journal->incompleteOperations().value().isEmpty());
     }
 
     void interruptedOperationIsOfferedAndReverted()
@@ -1128,7 +1485,22 @@ private slots:
         QVERIFY(searchFor(QStringLiteral("riso libros")));
         QCOMPARE(results->count(), 1);
         QCOMPARE(results->hitAt(0).entry.name, QStringLiteral("apuntes.txt"));
-        QVERIFY(pane->searchInfo().contains(QStringLiteral("archivos leídos")));
+        QVERIFY2(pane->searchInfo().contains(QStringLiteral("documentos leídos: ")), qPrintable(pane->searchInfo()));
+        QVERIFY(!pane->searchInfo().contains(QStringLiteral("documentos leídos: 0")));
+        // Con índice de contenido de la carpeta, lo mismo sin abrir el archivo.
+        window.contentIndexService()->addRoot(books);
+        QVERIFY(QTest::qWaitFor([&] {
+            const auto all = window.contentIndexService()->status();
+            return !all.isEmpty() && all.first().state == index::ContentRootStatus::State::Ready
+                && !window.contentIndexService()->isBusy();
+        }, 30000));
+        QVERIFY(searchFor(QStringLiteral("riso libros")));
+        QCOMPARE(results->count(), 1);
+        QCOMPARE(results->hitAt(0).entry.name, QStringLiteral("apuntes.txt"));
+        QVERIFY2(pane->searchInfo().contains(QStringLiteral("documentos leídos: 0")), qPrintable(pane->searchInfo()));
+        QVERIFY(pane->searchInfo().contains(QStringLiteral("del índice de contenido")));
+        QVERIFY(!results->hitAt(0).snippet.isEmpty());
+        window.contentIndexService()->removeRoot(books);
         window.setSearchInContent(false);
         // El filtro content: hace lo mismo sin cambiar de modo.
         QVERIFY(searchFor(QStringLiteral("content:\"nota sobre riso\"")));
@@ -1455,6 +1827,86 @@ private slots:
         pane->navigateTo(data.path());
         QTRY_VERIFY(!player->isPlaying());
 #endif
+    }
+
+    void archivesAreBrowsedLikeFoldersAndExtracted()
+    {
+        if (!archive::isAvailable()) {
+            QSKIP("Compilado sin libarchive.");
+        }
+        QTemporaryDir data;
+        QTemporaryDir directory;
+        const QString root = QDir::cleanPath(directory.path());
+        QVERIFY(QDir(root).mkpath(QStringLiteral("álbum/sub")));
+        writeFile(root + QStringLiteral("/álbum/foto1.txt"), 10);
+        writeFile(root + QStringLiteral("/álbum/sub/foto2.txt"), 20);
+        writeFile(root + QStringLiteral("/notas.txt"), 5);
+
+        MainWindow window(m_scheduler, openJournal(data));
+        BrowserPane *pane = window.openTab(root);
+        QVERIFY(waitReady(pane));
+        window.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&window));
+
+        // Comprimir lo seleccionado (lo mismo que hace el menú contextual).
+        const QString zip = root + QStringLiteral("/paquete.zip");
+        window.fileActions()->compress({root + QStringLiteral("/álbum"), root + QStringLiteral("/notas.txt")}, zip,
+                                       archive::Format::Zip);
+        QVERIFY(waitIdle(window));
+        QVERIFY(QFileInfo(zip).isFile());
+        QTRY_VERIFY(pane->model()->rowOfName(QStringLiteral("paquete.zip")) >= 0);
+
+        // Doble clic: se entra en él como en una carpeta.
+        emit pane->view()->activated(pane->model()->index(pane->model()->rowOfName(QStringLiteral("paquete.zip")), 0));
+        QVERIFY(pane->showsArchive());
+        QVERIFY(waitReady(pane));
+        QCOMPARE(pane->model()->state(), DirectoryModel::State::Ready);
+        QCOMPARE(pane->model()->rowCount(), 2);
+        QVERIFY(pane->model()->rowOfName(QStringLiteral("álbum")) >= 0);
+        QVERIFY(pane->model()->rowOfName(QStringLiteral("notas.txt")) >= 0);
+        // Dentro no se renombra ni se arrastra, ni se busca.
+        const Qt::ItemFlags flags = pane->model()->flags(pane->model()->index(0, 0));
+        QVERIFY(!(flags & Qt::ItemIsEditable));
+        QVERIFY(!(flags & Qt::ItemIsDragEnabled));
+        QVERIFY(!window.searchEdit()->isEnabled());
+
+        // Una carpeta de dentro, y vuelta arriba hasta salir del comprimido.
+        emit pane->view()->activated(pane->model()->index(pane->model()->rowOfName(QStringLiteral("álbum")), 0));
+        QVERIFY(waitReady(pane));
+        QCOMPARE(pane->model()->rowCount(), 2);   // foto1.txt y sub
+        QVERIFY(pane->model()->rowOfName(QStringLiteral("sub")) >= 0);
+        pane->goUp();
+        QVERIFY(waitReady(pane));
+        QVERIFY(pane->showsArchive());
+        QCOMPARE(pane->model()->rowCount(), 2);
+        pane->goUp();
+        QVERIFY(waitReady(pane));
+        QVERIFY(!pane->showsArchive());
+        QCOMPARE(pane->currentPath(), root);
+        QTRY_COMPARE(pane->model()->entryAt(pane->view()->currentIndex().row()).name, QStringLiteral("paquete.zip"));
+        QVERIFY(window.searchEdit()->isEnabled());
+
+        // Extraer todo: en una carpeta nueva con el nombre del comprimido.
+        window.fileActions()->extract(zip, {}, QString(), root, QStringLiteral("paquete"));
+        QVERIFY(waitIdle(window));
+        QVERIFY(QFileInfo(root + QStringLiteral("/paquete/álbum/sub/foto2.txt")).isFile());
+        QCOMPARE(QFileInfo(root + QStringLiteral("/paquete/notas.txt")).size(), 5);
+        // Lo seleccionado dentro de "álbum": queda arriba, sin "álbum/".
+        window.fileActions()->extract(zip, {QStringLiteral("álbum/sub")}, QStringLiteral("álbum"), root,
+                                      QStringLiteral("parcial"));
+        QVERIFY(waitIdle(window));
+        QVERIFY(QFileInfo(root + QStringLiteral("/parcial/sub/foto2.txt")).isFile());
+        QVERIFY(!QFileInfo::exists(root + QStringLiteral("/parcial/álbum")));
+        QVERIFY(!QFileInfo::exists(root + QStringLiteral("/parcial/foto1.txt")));
+
+        // Comprimir encima de uno que ya existe: error, y el existente sigue igual.
+        const qint64 before = QFileInfo(zip).size();
+        QSignalSpy reports(&window, &MainWindow::actionReported);
+        window.fileActions()->compress({root + QStringLiteral("/notas.txt")}, zip, archive::Format::Zip);
+        QVERIFY(waitIdle(window));
+        QTRY_COMPARE(reports.count(), 1);
+        QCOMPARE(reports.first().at(1).toBool(), true);   // es un error
+        QCOMPARE(QFileInfo(zip).size(), before);
     }
 
     void searchCanBePausedAndStopped()

@@ -4,7 +4,10 @@
 #include "eu/fs/DirectoryWatcher.h"
 #include "eu/fs/DeviceMap.h"
 #include "eu/fs/Volumes.h"
+#include "eu/index/ContentIndexService.h"
+#include "eu/ui/TransfersPanel.h"
 #include "eu/index/IndexService.h"
+#include "eu/tags/TagStore.h"
 #include "eu/thumbs/ThumbnailService.h"
 #include "eu/journal/Journal.h"
 #include "eu/tasks/Scheduler.h"
@@ -20,6 +23,7 @@
 #include <memory>
 
 class QAction;
+class QDockWidget;
 class QLabel;
 class QLineEdit;
 class QProgressBar;
@@ -42,6 +46,9 @@ class MainWindow : public QMainWindow
     Q_OBJECT
 
 public:
+    /// La ✕ de una pestaña: si muestra una búsqueda, sale de ella; si no,
+    /// cierra la pestaña (y la ventana, si era la última).
+    void closeTab(int index);
     /// `journal` es el historial de operaciones. Si es nulo (no se pudo abrir),
     /// la ventana sirve para navegar pero no modifica archivos.
     explicit MainWindow(tasks::Scheduler &scheduler, std::shared_ptr<journal::Journal> journal = nullptr,
@@ -58,12 +65,48 @@ public:
 
     /// Los índices de búsqueda de esta ventana.
     index::IndexService *indexService() const { return m_indexService; }
+    index::ContentIndexService *contentIndexService() const { return m_contentIndexService; }
+    TransfersPanel *transfersPanel() const { return m_transfersPanel; }
+    /// Para pruebas: responde a los choques de nombre en vez de la ventana.
+    void setCollisionAnswerForTesting(ops::CollisionAsker asker) { m_testCollisionAnswer = std::move(asker); }
     /// Empieza a mantener los índices guardados en la configuración. Si
     /// `mayAsk` y aún no se ha preguntado, muestra el asistente que propone
     /// qué unidades indexar (SPEC §1).
     void startIndexing(bool mayAsk);
     /// Abre la ventana "Índice de búsqueda".
     void showIndexDialog();
+    void showContentIndexDialog();
+    /// Abre "Renombrar varios" con lo seleccionado (o la carpeta entera).
+    void showBulkRename();
+    /// Abre "Organizar" sobre la carpeta a la vista.
+    void showOrganize();
+    /// Abre "Buscar duplicados" sobre la carpeta a la vista.
+    void showDuplicates();
+    /// Abre "Imágenes parecidas" sobre la carpeta a la vista.
+    void showSimilarImages();
+    /// Ventana de etiquetas: administrar y revisar huérfanas.
+    void showTags();
+    std::shared_ptr<tags::TagStore> tagStore() const { return m_tagStore; }
+    /// Pone o quita una etiqueta a unos archivos y repinta las listas.
+    void setTag(const QStringList &paths, qint64 tagId, bool on);
+    void setSimilarDriverForTesting(std::function<bool(class SimilarImagesDialog &)> driver)
+    {
+        m_similarDriver = std::move(driver);
+    }
+    void setDuplicatesDriverForTesting(std::function<bool(class DuplicatesDialog &)> driver)
+    {
+        m_duplicatesDriver = std::move(driver);
+    }
+    void setOrganizeDriverForTesting(std::function<bool(class OrganizeDialog &)> driver)
+    {
+        m_organizeDriver = std::move(driver);
+    }
+    /// Para pruebas: en vez de esperar al usuario, se llama con la ventana ya
+    /// abierta y decide si se acepta.
+    void setBulkRenameDriverForTesting(std::function<bool(class BulkRenameDialog &)> driver)
+    {
+        m_bulkRenameDriver = std::move(driver);
+    }
 
     /// Miniaturas: la caché y quien las genera, comunes a todas las pestañas.
     thumbs::ThumbnailService *thumbnailService() const { return m_thumbnailService; }
@@ -109,6 +152,7 @@ public:
     enum class RecoveryChoice {
         Revert,   ///< Deshacer lo que alcanzaron a hacer.
         Discard,  ///< Dejar lo hecho y limpiar los archivos a medio escribir.
+        Resume,   ///< Copiar y mover: terminar lo que faltaba.
         Later,    ///< No tocar nada; se volverá a preguntar en el próximo arranque.
     };
     /// Sustituye el diálogo de recuperación (para las pruebas).
@@ -146,7 +190,6 @@ protected:
 private:
     void createActions();
     void createToolBar();
-    void closeTab(int index);
     void duplicateCurrentTab();
     void onCurrentTabChanged();
     void updateNavigationActions();
@@ -165,6 +208,8 @@ private:
     void copyToClipboard(bool cut);
     /// Copia o mueve `paths` a `destination` (pegar y soltar acaban aquí).
     void transfer(const QStringList &paths, const QString &destination, bool move);
+    /// Opciones de pegar o soltar: preguntar en los choques y comprobar o no las copias.
+    ops::TransferOptions transferOptions(bool move);
     bool movesByDefault(const QString &source, const QString &destination) const;
     bool askPermanentDelete(const QStringList &paths, const QString &reason);
     void onInterruptedOperationsFound(const QList<journal::Operation> &operations);
@@ -199,6 +244,26 @@ private:
     QLabel *m_progressLabel = nullptr;
     QProgressBar *m_progressBar = nullptr;
     QToolButton *m_cancelButton = nullptr;
+    QToolButton *m_detailsButton = nullptr;
+    QDockWidget *m_transfersDock = nullptr;
+    TransfersPanel *m_transfersPanel = nullptr;
+    ops::CollisionAsker m_testCollisionAnswer;
+    std::function<bool(class BulkRenameDialog &)> m_bulkRenameDriver;
+    QAction *m_bulkRenameAction = nullptr;
+    QAction *m_organizeAction = nullptr;
+    QAction *m_duplicatesAction = nullptr;
+    QAction *m_similarAction = nullptr;
+    QAction *m_tagsAction = nullptr;
+    std::shared_ptr<tags::TagStore> m_tagStore;
+    std::shared_ptr<journal::Journal> m_journal;
+    /// Las etiquetas siguen a lo que movió, renombró o deshizo una operación.
+    void followTags(const ActionResult &result);
+    void refreshTagsInPanes();
+    std::function<bool(class SimilarImagesDialog &)> m_similarDriver;
+    /// La unidad de `folder` y las raíces de todas.
+    QPair<QString, QStringList> volumesFor(const QString &folder);
+    std::function<bool(class DuplicatesDialog &)> m_duplicatesDriver;
+    std::function<bool(class OrganizeDialog &)> m_organizeDriver;
     QTimer m_progressDelay;   ///< El indicador solo aparece si la acción no es instantánea.
 
     TrashDialog *m_trashDialog = nullptr;
@@ -217,6 +282,8 @@ private:
     QAction *m_searchAction = nullptr;
     QLineEdit *m_searchEdit = nullptr;
     index::IndexService *m_indexService = nullptr;
+    index::ContentIndexService *m_contentIndexService = nullptr;
+    QAction *m_contentIndexAction = nullptr;
     std::shared_ptr<thumbs::ThumbnailCache> m_thumbnailCache;
     thumbs::ThumbnailService *m_thumbnailService = nullptr;
     QAction *m_detailsAction = nullptr;
@@ -224,6 +291,13 @@ private:
     QHash<int, QAction *> m_thumbnailSizeActions;   ///< Por tamaño en píxeles.
     int m_thumbnailSize = 160;
     void syncViewActions();
+    /// Extrae del comprimido (lo seleccionado dentro de él, o todo) en una
+    /// carpeta nueva junto al comprimido.
+    void extractArchive(const QString &archivePath, const QStringList &innerPaths, const QString &innerFolder);
+    /// Comprime lo seleccionado en la carpeta actual.
+    void compressSelection(BrowserPane *pane, archive::Format format);
+    /// Nombre libre en `folder` para `stem` + `extension` ("x", "x (2)"…).
+    static QString freeName(const QString &folder, const QString &stem, const QString &extension);
     bool m_splitterRestored = false;   ///< Había una disposición guardada de los paneles.
     bool m_firstShowDone = false;
     PreviewPanel *m_previewPanel = nullptr;
@@ -236,6 +310,7 @@ private:
     void runIndexWizard();
     void saveIndexRoots();
     void updateIndexLabel();
+    void saveContentIndexRoots();
     QToolButton *m_searchOptionsButton = nullptr;
     QHash<int, QAction *> m_scopeActions;   ///< Por SearchScope.
     QAction *m_searchInNameAction = nullptr;

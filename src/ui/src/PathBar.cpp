@@ -8,6 +8,7 @@
 #include <QClipboard>
 #include <QCompleter>
 #include <QDir>
+#include <QFileInfo>
 #include <QFileSystemModel>
 #include <QGuiApplication>
 #include <QHBoxLayout>
@@ -67,6 +68,19 @@ QList<QPair<QString, QString>> PathBar::crumbsFor(const QString &path)
         // La carpeta donde se busca, con sus migas, y al final la búsqueda.
         crumbs = crumbsFor(searchRootOf(path));
         crumbs.append({tr("Buscar: %1").arg(searchQueryOf(path)), path});
+        return crumbs;
+    }
+    if (isArchiveLocation(path)) {
+        // La carpeta del comprimido, el comprimido y sus carpetas de dentro.
+        const QString archivePath = archivePathOf(path);
+        crumbs = crumbsFor(QFileInfo(archivePath).path());
+        crumbs.append({QFileInfo(archivePath).fileName(), archiveLocation(archivePath, QString())});
+        QString inner;
+        const QStringList parts = archiveInnerOf(path).split(QLatin1Char('/'), Qt::SkipEmptyParts);
+        for (const QString &part : parts) {
+            inner = inner.isEmpty() ? part : inner + QLatin1Char('/') + part;
+            crumbs.append({part, archiveLocation(archivePath, inner)});
+        }
         return crumbs;
     }
     const QString clean = QDir::cleanPath(path);
@@ -184,7 +198,9 @@ void PathBar::resizeEvent(QResizeEvent *event)
 void PathBar::startEditing()
 {
     // En unos resultados, la ruta que se edita es la de la carpeta donde se buscó.
-    m_edit->setText(QDir::toNativeSeparators(isSearchLocation(m_path) ? searchRootOf(m_path) : m_path));
+    m_edit->setText(QDir::toNativeSeparators(isSearchLocation(m_path)    ? searchRootOf(m_path)
+                                             : isArchiveLocation(m_path) ? archivePathOf(m_path)
+                                                                         : m_path));
     m_stack->setCurrentWidget(m_edit);
     m_edit->setFocus(Qt::ShortcutFocusReason);
     m_edit->selectAll();

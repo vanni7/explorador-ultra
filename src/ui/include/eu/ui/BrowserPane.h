@@ -67,6 +67,9 @@ public:
 
     /// true si la pestaña muestra los resultados de una búsqueda.
     bool showsSearch() const;
+    /// Se está viendo el interior de un archivo comprimido (SPEC §15): se
+    /// navega y se extrae, pero no se modifica.
+    bool showsArchive() const;
     /// true si muestra una carpeta del disco (ni unidades ni resultados).
     bool showsFolder() const { return !showsVolumes() && !showsSearch(); }
     enum class SearchState {
@@ -85,6 +88,13 @@ public:
     /// búsquedas que el índice puede contestar salen de él, al instante.
     using IndexResolver = std::function<std::optional<index::Index>(const QString &)>;
     void setIndexResolver(IndexResolver resolver) { m_indexResolver = std::move(resolver); }
+    /// Da, para las carpetas de una búsqueda, cómo consultar el texto ya
+    /// guardado de sus documentos (índice de contenido). Opcional.
+    using ContentCacheResolver =
+        std::function<std::function<std::unique_ptr<search::ContentCache>()>(const QStringList &)>;
+    void setContentCacheResolver(ContentCacheResolver resolver) { m_contentCacheResolver = std::move(resolver); }
+    /// Etiquetas: se ven en la lista y sirven para buscar (tag:).
+    void setTagStore(std::shared_ptr<tags::TagStore> store);
     /// true si los resultados a la vista salieron del índice y no se han
     /// comprobado en el disco.
     bool searchFromIndex() const { return m_searchFromIndex; }
@@ -194,6 +204,8 @@ signals:
     void openFailed(const QString &path);
     /// El usuario escribió un nombre nuevo para un elemento.
     void renameRequested(const QString &path, const QString &newName);
+    /// F2 con varios seleccionados: renombrado masivo.
+    void bulkRenameRequested();
     /// Clic derecho (o tecla de menú) sobre la lista. `globalPosition` es
     /// dónde mostrar el menú.
     void contextMenuRequested(const QPoint &globalPosition);
@@ -202,9 +214,15 @@ signals:
     /// Cambió el elemento con el cursor o lo seleccionado.
     void currentItemChanged();
 
+protected:
+    bool eventFilter(QObject *watched, QEvent *event) override;
+
 private:
     void changePath(const QString &path, const QString &nameToSelect);
     void onActivated(const QModelIndex &index);
+    /// Saca a una carpeta temporal un archivo de dentro de un comprimido y lo
+    /// abre con su programa.
+    void openInsideArchive(const QString &location);
     void onModelStateChanged(DirectoryModel::State state);
     void rememberSelection();
     void restoreSelection();
@@ -250,6 +268,8 @@ private:
     QPushButton *m_searchAgainButton = nullptr;
     QPushButton *m_searchVerifyButton = nullptr;
     IndexResolver m_indexResolver;
+    ContentCacheResolver m_contentCacheResolver;
+    std::shared_ptr<tags::TagStore> m_tagStore;
     bool m_searchFromIndex = false;
     bool m_searchForceDisk = false;   ///< La próxima búsqueda no usa el índice.
     tasks::TaskHandle m_searchTask;

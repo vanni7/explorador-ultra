@@ -25,7 +25,7 @@ jobs:
           - { name: "Ubuntu 24.04 ASan+UBSan", os: ubuntu-24.04, preset: asan }
           - { name: "Windows (MSVC)",      os: windows-latest, preset: release }
           - { name: "macOS Intel",         os: macos-15-intel, preset: release }
-          - { name: "macOS Apple Silicon", os: macos-latest,   preset: release }
+          - { name: "macOS Apple Silicon", os: macos-15,       preset: release }
     steps:
       - uses: actions/checkout@v4
 
@@ -37,7 +37,7 @@ jobs:
             libxkbcommon-x11-0 libxcb-cursor0 libxcb-icccm4 libxcb-image0 \
             libxcb-keysyms1 libxcb-render-util0 libxcb-xinerama0 libxcb-xkb1 libfontconfig1 \
             pkg-config libavformat-dev libavcodec-dev libswscale-dev libavutil-dev \
-            libarchive-dev libraw-dev libexiv2-dev
+            libarchive-dev libraw-dev libexiv2-dev libssl-dev
 
       - name: Ninja (macOS)
         if: runner.os == 'macOS'

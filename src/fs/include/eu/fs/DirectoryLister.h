@@ -37,4 +37,9 @@ core::Status listDirectory(const QString &path, const ListOptions &options,
 /// Versión cómoda para pruebas y carpetas pequeñas: lo devuelve todo junto.
 core::Result<std::vector<Entry>> listDirectoryAll(const QString &path);
 
+/// Los datos de una sola ruta, sin seguir enlaces: tamaño, fechas y la
+/// identidad del archivo (inodo y dispositivo en Linux y macOS; índice de
+/// archivo y número de serie del volumen en Windows).
+core::Result<Entry> entryFor(const QString &path);
+
 } // namespace eu::fs

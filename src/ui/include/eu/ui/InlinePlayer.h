@@ -48,6 +48,7 @@ signals:
     void stopped();
 
 private:
+    void ensureBackend();
     struct Backend;
     std::unique_ptr<Backend> m_backend;
     QString m_path;

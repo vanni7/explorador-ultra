@@ -6,6 +6,7 @@
 #include "eu/fs/Entry.h"
 #include "eu/fs/TreeSize.h"
 #include "eu/search/Query.h"
+#include "eu/tags/TagStore.h"
 #include "eu/tasks/Scheduler.h"
 #include "eu/ui/EntrySort.h"
 #include "eu/ui/TypeCatalog.h"
@@ -62,6 +63,14 @@ public:
     bool showHidden() const { return m_showHidden; }
 
     void setSizeUnits(core::SizeUnits units);
+
+    /// Etiquetas (SPEC §17): de dónde salen. Al terminar de leer una carpeta
+    /// se piden en segundo plano y se muestran en la columna Etiquetas.
+    void setTagStore(std::shared_ptr<tags::TagStore> store) { m_tagStore = std::move(store); }
+    /// Vuelve a pedir las etiquetas de lo que se ve (tras asignar o quitar).
+    void refreshTags();
+    /// Las de un elemento, por nombre.
+    QList<tags::Tag> tagsOf(const QString &name) const { return m_tags.value(name); }
     core::SizeUnits sizeUnits() const { return m_sizeUnits; }
 
     /// Filtro local (SPEC §6.6): deja a la vista solo los elementos que
@@ -121,6 +130,9 @@ public:
     Qt::DropActions supportedDragActions() const override;
 
 signals:
+    /// Hay (o ya no hay) algo con etiquetas a la vista: para mostrar u ocultar su columna.
+    void tagsPresenceChanged(bool any);
+
     void stateChanged(eu::ui::DirectoryModel::State state);
     /// El contenido se sustituyó (carga terminada o refresco). La vista debe
     /// restaurar la selección a partir de los nombres.
@@ -132,6 +144,9 @@ signals:
 
 private:
     void startLoading(bool keepCurrentContent);
+    /// Lista lo que hay en una carpeta de dentro de un comprimido.
+    static core::Status listInsideArchive(const QString &location, const tasks::CancelToken &cancel,
+                                          std::vector<fs::Entry> *out);
     void cancelRunningTask();
     void retireCurrentTask();
     void onBatch(quint64 generation, std::vector<fs::Entry> batch);
@@ -154,6 +169,9 @@ private:
     quint64 m_generation = 0;   ///< Identifica la carga vigente; lo que llegue de otra se descarta.
 
     QString m_path;
+    std::shared_ptr<tags::TagStore> m_tagStore;
+    QHash<QString, QList<tags::Tag>> m_tags;   ///< Por nombre.
+    quint64 m_tagsGeneration = 0;
     std::vector<fs::Entry> m_entries;   ///< Lo que la vista está mostrando.
     /// Con un filtro puesto, todos los elementos de la carpeta (m_entries es
     /// entonces el subconjunto que lo cumple). Sin filtro está vacío, para no

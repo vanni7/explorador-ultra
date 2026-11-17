@@ -45,6 +45,7 @@ void sortEntries(std::vector<fs::Entry> &entries, Column column, Qt::SortOrder o
             }
             break;
         case Column::Name:
+        case Column::Tags:
         case Column::Count:
             break;
         }

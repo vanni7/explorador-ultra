@@ -1,9 +1,11 @@
 // Explorador Ultra — SPDX-License-Identifier: GPL-3.0-or-later
 #include "eu/ui/PreviewPanel.h"
 
+#include "eu/archive/Archive.h"
 #include "eu/meta/Metadata.h"
 #include "eu/thumbs/Isolated.h"
 #include "eu/thumbs/Thumbnail.h"
+#include "eu/ui/Locations.h"
 
 #include <QApplication>
 #include <QDateTime>
@@ -202,7 +204,18 @@ void PreviewPanel::rebuildFields(const QList<QPair<QString, QList<QPair<QString,
     }
     addRow(tr("Modificado"), dateText(entry.modifiedMs));
     addRow(tr("Creado"), dateText(entry.createdMs));
-    addRow(tr("Ubicación"), QDir::toNativeSeparators(QFileInfo(m_item.path).absolutePath()));
+    if (isArchiveLocation(m_item.path)) {
+        // Dentro de un comprimido: "vacaciones.zip › fotos".
+        const QString inner = archiveInnerOf(m_item.path);
+        const qsizetype slash = inner.lastIndexOf(QLatin1Char('/'));
+        QString where = QDir::toNativeSeparators(archivePathOf(m_item.path));
+        if (slash > 0) {
+            where += QStringLiteral(" › ") + inner.left(slash);
+        }
+        addRow(tr("Ubicación"), where);
+    } else {
+        addRow(tr("Ubicación"), QDir::toNativeSeparators(QFileInfo(m_item.path).absolutePath()));
+    }
     if (entry.isSymlink) {
         addRow(tr("Enlace a"), QDir::toNativeSeparators(QFileInfo(m_item.path).symLinkTarget()));
     }
@@ -224,13 +237,43 @@ void PreviewPanel::startLoading()
     }
     const QPointer<PreviewPanel> self(this);
     const quint64 generation = m_generation;
-    const PreviewItem item = m_item;
+    const PreviewItem shownItem = m_item;
     const qreal ratio = devicePixelRatioF();
     // Lo pedido por el usuario va antes que las miniaturas del fondo.
     m_task = m_scheduler.submitForPaths(
-        tasks::Category::Thumbnails, tasks::Priority::RequestedPreview, {item.path},
-        [self, generation, item, ratio](const tasks::CancelToken &cancel) {
+        tasks::Category::Thumbnails, tasks::Priority::RequestedPreview,
+        {isArchiveLocation(shownItem.path) ? archivePathOf(shownItem.path) : shownItem.path},
+        [self, generation, item = shownItem, ratio](const tasks::CancelToken &cancel) mutable {
             Loaded loaded;
+            // Algo de dentro de un comprimido: se saca ese archivo a una carpeta
+            // temporal y se muestra desde allí (los muy grandes, no).
+            if (isArchiveLocation(item.path)) {
+                const auto finishWith = [&](const QString &text) {
+                    loaded.problem = text;
+                    QMetaObject::invokeMethod(qApp, [self, generation, loaded] {
+                        if (self) {
+                            self->onLoaded(generation, loaded);
+                        }
+                    }, Qt::QueuedConnection);
+                };
+                if (item.entry.isDirectory) {
+                    finishWith(tr("Carpeta dentro de un comprimido"));
+                    return;
+                }
+                if (item.entry.size > 200LL * 1000 * 1000) {
+                    finishWith(tr("Demasiado grande para verlo sin extraerlo"));
+                    return;
+                }
+                const core::Result<QString> extracted =
+                    archive::extractEntryToTemp(archivePathOf(item.path), archiveInnerOf(item.path), cancel);
+                if (!extracted.ok()) {
+                    if (extracted.error().code != core::ErrorCode::Cancelled) {
+                        finishWith(extracted.error().message);
+                    }
+                    return;
+                }
+                item.path = extracted.value();
+            }
             const QString suffix = QFileInfo(item.entry.name).suffix().toLower();
             if (!item.entry.isDirectory) {
                 // En el proceso auxiliar: un EXIF o unas etiquetas hechos para
@@ -254,12 +297,12 @@ void PreviewPanel::startLoading()
             if (source == thumbs::ThumbnailSource::Text) {
                 QFile file(item.path);
                 if (file.open(QIODevice::ReadOnly)) {
-                    const QByteArray data = file.read(textBytes);
+                    const QByteArray bytes = file.read(textBytes);
                     loaded.truncated = file.size() > textBytes;
                     QStringDecoder utf8(QStringDecoder::Utf8);
-                    loaded.text = utf8.decode(data);
+                    loaded.text = utf8.decode(bytes);
                     if (utf8.hasError()) {
-                        loaded.text = QString::fromLatin1(data);
+                        loaded.text = QString::fromLatin1(bytes);
                     }
                     loaded.markdown = isMarkdown(suffix);
                 } else {

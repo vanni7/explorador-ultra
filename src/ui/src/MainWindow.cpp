@@ -3,11 +3,19 @@
 
 #include "eu/ui/Locations.h"
 
+#include "eu/archive/Archive.h"
 #include "eu/core/SizeFormat.h"
 #include "eu/core/Version.h"
 #include "eu/ui/BrowserPane.h"
 #include "eu/trash/Trash.h"
 #include "eu/ui/FileClipboard.h"
+#include "eu/thumbs/Isolated.h"
+#include "eu/ui/BulkRenameDialog.h"
+#include "eu/ui/DuplicatesDialog.h"
+#include "eu/ui/SimilarImagesDialog.h"
+#include "eu/ui/TagsDialog.h"
+#include "eu/ui/OrganizeDialog.h"
+#include "eu/ui/ContentIndexDialog.h"
 #include "eu/ui/IndexDialog.h"
 #include "eu/ui/PathBar.h"
 #include "eu/ui/InlinePlayer.h"
@@ -26,7 +34,10 @@
 #include <QDialog>
 #include <QDialogButtonBox>
 #include <QDir>
+#include <QDockWidget>
+#include <QPointer>
 #include <QHBoxLayout>
+#include <QInputDialog>
 #include <QItemSelectionModel>
 #include <QLabel>
 #include <QLineEdit>
@@ -50,6 +61,9 @@
 #include <QVBoxLayout>
 #include <QTreeView>
 
+#include <chrono>
+#include <future>
+
 namespace eu::ui {
 
 namespace {
@@ -69,13 +83,31 @@ MainWindow::MainWindow(tasks::Scheduler &scheduler, std::shared_ptr<journal::Jou
     m_deviceMap.setVolumes(m_volumeMonitor.volumes());
     connect(&m_volumeMonitor, &fs::VolumeMonitor::volumesChanged, this,
             [this](const QList<fs::Volume> &volumes) { m_deviceMap.setVolumes(volumes); });
+    m_journal = journal;
     m_actions = new FileActions(m_scheduler, std::move(journal), this);
+    // Etiquetas (SPEC §17): en una base propia, junto a los demás datos.
+    {
+        const auto opened = tags::TagStore::open(QStandardPaths::writableLocation(QStandardPaths::AppDataLocation)
+                                                 + QStringLiteral("/etiquetas.db"));
+        if (opened.ok()) {
+            m_tagStore = opened.value();
+        }
+    }
     // Índices de búsqueda: una base por unidad, junto a los demás datos de la
     // aplicación. La carpeta de la papelera no se indexa (SPEC §10).
     m_indexService = new index::IndexService(
         m_scheduler, QStandardPaths::writableLocation(QStandardPaths::AppDataLocation) + QStringLiteral("/indice"),
         this);
     m_indexService->setExcludedNames({trash::trashFolderName()});
+    // Índices de contenido (SPEC §6.5): el texto de los documentos de las
+    // carpetas elegidas, sacado en el proceso auxiliar.
+    m_contentIndexService = new index::ContentIndexService(
+        m_scheduler, QStandardPaths::writableLocation(QStandardPaths::AppDataLocation) + QStringLiteral("/indice"),
+        this);
+    m_contentIndexService->setExcludedNames({trash::trashFolderName()});
+    m_contentIndexService->setTextProvider([](const QString &path, const tasks::CancelToken &cancel) {
+        return thumbs::extractTextIsolated(path, cancel);
+    });
     // Miniaturas: en la carpeta de caché del sistema (se puede borrar sin
     // perder nada), con 256 MB como mucho en memoria (SPEC §5.5).
     // Topes configurables en el archivo de configuración, sección [miniaturas]:
@@ -127,6 +159,7 @@ MainWindow::MainWindow(tasks::Scheduler &scheduler, std::shared_ptr<journal::Jou
     m_indexLabel->hide();
     statusBar()->addPermanentWidget(m_indexLabel);
     connect(m_indexService, &index::IndexService::changed, this, &MainWindow::updateIndexLabel);
+    connect(m_contentIndexService, &index::ContentIndexService::changed, this, &MainWindow::updateIndexLabel);
     statusBar()->addPermanentWidget(m_unitsLabel);
 
     createActions();
@@ -264,6 +297,10 @@ void MainWindow::createActions()
     m_indexAction = new QAction(tr("Índice de búsqueda…"), this);
     m_indexAction->setToolTip(tr("Elegir qué unidades se indexan para buscar en ellas al instante"));
     connect(m_indexAction, &QAction::triggered, this, &MainWindow::showIndexDialog);
+    m_contentIndexAction = new QAction(tr("Índice de contenido…"), this);
+    m_contentIndexAction->setToolTip(tr("Elegir carpetas de documentos cuyo texto se guarda para buscar dentro "
+                                        "de ellos al instante"));
+    connect(m_contentIndexAction, &QAction::triggered, this, &MainWindow::showContentIndexDialog);
 
     m_searchAction = new QAction(themedIcon(QStringLiteral("edit-find"), QStyle::SP_FileDialogContentsView),
                                  tr("Buscar archivos y carpetas"), this);
@@ -322,6 +359,7 @@ void MainWindow::createActions()
     fileMenu->addAction(quitAction);
 
     QMenu *viewMenu = menuBar()->addMenu(tr("&Ver"));
+    viewMenu->setObjectName(QStringLiteral("menuVer"));
     viewMenu->addAction(m_detailsAction);
     viewMenu->addAction(m_thumbnailsAction);
     QMenu *sizeMenu = viewMenu->addMenu(tr("Tamaño de las miniaturas"));
@@ -341,6 +379,7 @@ void MainWindow::createActions()
     viewMenu->addAction(m_filterAction);
     viewMenu->addAction(m_searchAction);
     viewMenu->addAction(m_indexAction);
+    viewMenu->addAction(m_contentIndexAction);
     viewMenu->addSeparator();
     viewMenu->addAction(m_showHiddenAction);
     viewMenu->addAction(m_binaryUnitsAction);
@@ -377,6 +416,26 @@ void MainWindow::createEditActions()
     m_renameAction->setShortcut(QKeySequence(Qt::Key_F2));
 #endif
     connect(m_renameAction, &QAction::triggered, this, &MainWindow::renameSelection);
+    m_bulkRenameAction = new QAction(tr("Renombrar varios…"), this);
+    m_bulkRenameAction->setShortcut(QKeySequence(Qt::SHIFT | Qt::Key_F2));
+    m_bulkRenameAction->setToolTip(tr("Renombrar muchos a la vez con reglas: mayúsculas, sustituir, contador, "
+                                      "fecha de la foto, etiquetas de la música…"));
+    connect(m_bulkRenameAction, &QAction::triggered, this, &MainWindow::showBulkRename);
+    m_organizeAction = new QAction(tr("Organizar esta carpeta…"), this);
+    m_organizeAction->setToolTip(tr("Ordenar en subcarpetas por tipo, fecha, tamaño o datos; siempre con "
+                                    "simulación antes y se deshace todo junto"));
+    connect(m_organizeAction, &QAction::triggered, this, &MainWindow::showOrganize);
+    m_duplicatesAction = new QAction(tr("Buscar duplicados…"), this);
+    m_duplicatesAction->setToolTip(tr("Archivos con el mismo contenido: cuánto ocupan de más y quitar las copias "
+                                      "que elijas (a la papelera)"));
+    connect(m_duplicatesAction, &QAction::triggered, this, &MainWindow::showDuplicates);
+    m_similarAction = new QAction(tr("Imágenes parecidas…"), this);
+    m_similarAction->setToolTip(tr("Fotos casi iguales (recomprimidas, reducidas, retocadas), lado a lado para "
+                                   "elegir cuáles quitar"));
+    connect(m_similarAction, &QAction::triggered, this, &MainWindow::showSimilarImages);
+    m_tagsAction = new QAction(tr("Etiquetas…"), this);
+    m_tagsAction->setToolTip(tr("Crear, renombrar y colorear etiquetas; revisar las que perdieron su archivo"));
+    connect(m_tagsAction, &QAction::triggered, this, &MainWindow::showTags);
 
     m_cutAction = new QAction(themedIcon(QStringLiteral("edit-cut"), QStyle::SP_FileIcon), tr("Cortar"), this);
     m_cutAction->setShortcut(QKeySequence::Cut);
@@ -453,6 +512,16 @@ void MainWindow::createEditActions()
     editMenu->addAction(m_selectAllAction);
     editMenu->addSeparator();
     editMenu->addAction(m_renameAction);
+    editMenu->addAction(m_bulkRenameAction);
+    QMenu *toolsMenu = menuBar()->addMenu(tr("&Herramientas"));
+    toolsMenu->setObjectName(QStringLiteral("menuHerramientas"));
+    toolsMenu->addAction(m_bulkRenameAction);
+    toolsMenu->addAction(m_organizeAction);
+    toolsMenu->addSeparator();
+    toolsMenu->addAction(m_duplicatesAction);
+    toolsMenu->addAction(m_similarAction);
+    toolsMenu->addSeparator();
+    toolsMenu->addAction(m_tagsAction);
     editMenu->addAction(m_trashAction);
     editMenu->addAction(m_deleteAction);
 
@@ -470,15 +539,50 @@ void MainWindow::createProgressWidgets()
     m_cancelButton = new QToolButton(m_progressBox);
     m_cancelButton->setText(tr("Cancelar"));
     m_cancelButton->setToolTip(tr("Detener las operaciones en curso"));
+    m_detailsButton = new QToolButton(m_progressBox);
+    m_detailsButton->setText(tr("Detalles"));
+    m_detailsButton->setToolTip(tr("Ver la cola de transferencias: pausar, reintentar, velocidad…"));
     auto *layout = new QHBoxLayout(m_progressBox);
     layout->setContentsMargins(0, 0, 0, 0);
     layout->addWidget(m_progressLabel);
     layout->addWidget(m_progressBar);
+    layout->addWidget(m_detailsButton);
     layout->addWidget(m_cancelButton);
     statusBar()->addPermanentWidget(m_progressBox);
     m_progressBox->hide();
 
     connect(m_cancelButton, &QToolButton::clicked, m_actions, &FileActions::cancelAll);
+
+    // Panel de la cola de transferencias, abajo; aparece al pedirlo, cuando
+    // hay más de una en la cola o cuando una falla.
+    m_transfersPanel = new TransfersPanel(*m_actions, this);
+    m_transfersDock = new QDockWidget(tr("Transferencias"), this);
+    m_transfersDock->setObjectName(QStringLiteral("transferencias"));
+    m_transfersDock->setWidget(m_transfersPanel);
+    m_transfersDock->setAllowedAreas(Qt::BottomDockWidgetArea | Qt::TopDockWidgetArea);
+    addDockWidget(Qt::BottomDockWidgetArea, m_transfersDock);
+    m_transfersDock->hide();
+    QAction *toggle = m_transfersDock->toggleViewAction();
+    toggle->setText(tr("Transferencias"));
+    toggle->setShortcut(QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_T));
+    for (QAction *menuAction : menuBar()->actions()) {
+        if (menuAction->menu() != nullptr && menuAction->menu()->objectName() == QStringLiteral("menuVer")) {
+            menuAction->menu()->addSeparator();
+            menuAction->menu()->addAction(toggle);
+        }
+    }
+    connect(m_detailsButton, &QToolButton::clicked, m_transfersDock, &QDockWidget::show);
+    connect(m_actions, &FileActions::transfersChanged, this, [this] {
+        int active = 0;
+        bool failed = false;
+        for (const TransferInfo &info : m_actions->transfers()) {
+            active += info.isActive() ? 1 : 0;
+            failed = failed || info.state == TransferInfo::State::Failed;
+        }
+        if (active > 1 || failed) {
+            m_transfersDock->show();
+        }
+    });
     // Crear una carpeta o renombrar tarda milisegundos: el indicador solo
     // aparece si la acción sigue en marcha pasado un momento.
     m_progressDelay.setSingleShot(true);
@@ -528,10 +632,13 @@ void MainWindow::updateEditActions()
     // Tampoco en los resultados de una búsqueda, pero ahí sí se puede copiar,
     // cortar o borrar lo encontrado.
     const bool inFolder = pane != nullptr && pane->showsFolder();
-    const bool canModify = inFolder && m_actions->isAvailable();
-    const bool canRemove = pane != nullptr && m_actions->isAvailable();
+    // Dentro de un comprimido se navega y se extrae, pero no se modifica ni
+    // se copia (lo copiado serían rutas que no existen en el disco).
+    const bool inArchive = pane != nullptr && pane->showsArchive();
+    const bool canModify = inFolder && !inArchive && m_actions->isAvailable();
+    const bool canRemove = pane != nullptr && !inArchive && m_actions->isAvailable();
     m_filterAction->setEnabled(inFolder);
-    m_searchAction->setEnabled(pane != nullptr);
+    m_searchAction->setEnabled(pane != nullptr && !inArchive);
     if (m_searchEdit != nullptr) {
         m_searchEdit->setEnabled(m_searchAction->isEnabled());
     }
@@ -539,10 +646,13 @@ void MainWindow::updateEditActions()
     const bool canPaste = !fileSelectionFrom(QGuiApplication::clipboard()->mimeData()).isEmpty();
 
     m_openAction->setEnabled(selected > 0);
-    m_copyAction->setEnabled(selected > 0);
+    m_copyAction->setEnabled(selected > 0 && !inArchive);
     m_cutAction->setEnabled(canRemove && selected > 0);
     m_pasteAction->setEnabled(canModify && canPaste);
-    m_renameAction->setEnabled(canModify && selected == 1);
+    // F2 con varios seleccionados abre el renombrado masivo.
+    m_renameAction->setEnabled(canModify && selected >= 1);
+    m_bulkRenameAction->setEnabled(canModify);
+    m_organizeAction->setEnabled(canModify);
     m_trashAction->setEnabled(canRemove && selected > 0);
     m_deleteAction->setEnabled(canRemove && selected > 0);
     m_newFolderAction->setEnabled(canModify);
@@ -571,8 +681,84 @@ void MainWindow::showContextMenu(BrowserPane *pane, const QPoint &globalPosition
         menu.exec(globalPosition);
         return;
     }
+    if (pane->showsArchive()) {
+        // Dentro de un comprimido: abrir y sacar, nada más (SPEC §15).
+        const QString location = pane->currentPath();
+        const QString archivePath = archivePathOf(location);
+        const QString inner = archiveInnerOf(location);
+        if (pane->selectedCount() > 0) {
+            menu.addAction(m_openAction);
+            QStringList innerPaths;
+            for (const QString &path : pane->selectedPaths()) {
+                innerPaths.append(archiveInnerOf(path));
+            }
+            QAction *selected = menu.addAction(tr("Extraer lo seleccionado junto al comprimido"));
+            connect(selected, &QAction::triggered, this, [this, archivePath, innerPaths, inner] {
+                extractArchive(archivePath, innerPaths, inner);
+            });
+        }
+        QAction *all = menu.addAction(tr("Extraer todo junto al comprimido"));
+        connect(all, &QAction::triggered, this, [this, archivePath] { extractArchive(archivePath, {}, QString()); });
+        all->setEnabled(m_actions->isAvailable());
+        menu.exec(globalPosition);
+        return;
+    }
     if (pane->selectedCount() > 0) {
         menu.addAction(m_openAction);
+        const QStringList selected = pane->selectedPaths();
+        if (archive::isAvailable() && m_actions->isAvailable()) {
+            if (selected.size() == 1 && archive::isArchiveName(selected.first()) && QFileInfo(selected.first()).isFile()) {
+                QAction *here = menu.addAction(tr("Extraer aquí (en una carpeta nueva)"));
+                const QString archivePath = selected.first();
+                connect(here, &QAction::triggered, this, [this, archivePath] { extractArchive(archivePath, {}, QString()); });
+            }
+            QMenu *compress = menu.addMenu(tr("Comprimir"));
+            for (const auto &[format, name] : {std::pair{archive::Format::Zip, tr("En ZIP")},
+                                               std::pair{archive::Format::SevenZip, tr("En 7z")},
+                                               std::pair{archive::Format::TarGz, tr("En TAR.GZ")}}) {
+                QAction *action = compress->addAction(name);
+                connect(action, &QAction::triggered, this,
+                        [this, pane, format = format] { compressSelection(pane, format); });
+            }
+        }
+        // Etiquetas: marcadas las que tienen todos los seleccionados.
+        if (m_tagStore && !isVirtualLocation(pane->currentPath())) {
+            QMenu *tagMenu = menu.addMenu(tr("Etiquetas"));
+            const QList<tags::Tag> allTags = m_tagStore->tags();
+            for (const tags::Tag &tag : allTags) {
+                bool everyone = true;
+                for (const QString &path : selected) {
+                    bool has = false;
+                    for (const tags::Tag &own : pane->model()->tagsOf(QFileInfo(path).fileName())) {
+                        has = has || own.id == tag.id;
+                    }
+                    everyone = everyone && has;
+                }
+                QAction *action = tagMenu->addAction(tagIcon(tag.color), tag.name);
+                action->setCheckable(true);
+                action->setChecked(everyone);
+                connect(action, &QAction::toggled, this,
+                        [this, selected, id = tag.id](bool on) { setTag(selected, id, on); });
+            }
+            if (!allTags.isEmpty()) {
+                tagMenu->addSeparator();
+            }
+            QAction *create = tagMenu->addAction(tr("Nueva etiqueta…"));
+            connect(create, &QAction::triggered, this, [this, selected] {
+                const QString name = QInputDialog::getText(this, tr("Nueva etiqueta"), tr("Nombre:"));
+                if (name.trimmed().isEmpty()) {
+                    return;
+                }
+                const QStringList colors = tags::defaultColors();
+                const auto created = m_tagStore->createTag(name, colors.value(int(m_tagStore->tags().size()) % colors.size()));
+                if (!created.ok()) {
+                    report(created.error().message, true);
+                    return;
+                }
+                setTag(selected, created.value().id, true);
+            });
+            tagMenu->addAction(m_tagsAction);
+        }
         menu.addSeparator();
         menu.addAction(m_cutAction);
         menu.addAction(m_copyAction);
@@ -591,6 +777,57 @@ void MainWindow::showContextMenu(BrowserPane *pane, const QPoint &globalPosition
         menu.addAction(m_refreshAction);
     }
     menu.exec(globalPosition);
+}
+
+QString MainWindow::freeName(const QString &folder, const QString &stem, const QString &extension)
+{
+    QString name = stem + extension;
+    for (int i = 2; QFileInfo::exists(folder + QLatin1Char('/') + name) || QFileInfo(folder + QLatin1Char('/') + name).isSymLink();
+         ++i) {
+        name = QStringLiteral("%1 (%2)%3").arg(stem).arg(i).arg(extension);
+    }
+    return name;
+}
+
+void MainWindow::extractArchive(const QString &archivePath, const QStringList &innerPaths, const QString &innerFolder)
+{
+    if (!m_actions->isAvailable()) {
+        return;
+    }
+    // La carpeta nueva se llama como el comprimido, sin su extensión
+    // ("fotos.tar.gz" -> "fotos").
+    const QFileInfo info(archivePath);
+    QString stem = info.fileName();
+    const QString lower = stem.toLower();
+    bool stripped = false;
+    for (const char *double_ : {".tar.gz", ".tar.bz2", ".tar.xz", ".tar.zst"}) {
+        if (lower.endsWith(QLatin1String(double_))) {
+            stem.chop(qsizetype(qstrlen(double_)));
+            stripped = true;
+            break;
+        }
+    }
+    if (!stripped) {
+        stem = info.completeBaseName();
+    }
+    const QString folder = info.path();
+    const quint64 id = m_actions->extract(archivePath, innerPaths, innerFolder, folder, freeName(folder, stem, QString()));
+    m_requestedCounts.insert(id, 1);
+}
+
+void MainWindow::compressSelection(BrowserPane *pane, archive::Format format)
+{
+    const QStringList sources = pane->selectedPaths();
+    if (sources.isEmpty() || !pane->showsFolder() || pane->showsArchive() || !m_actions->isAvailable()) {
+        return;
+    }
+    // Un elemento: con su nombre; varios: "Comprimido".
+    const QFileInfo first(sources.first());
+    const QString stem = sources.size() == 1 ? (first.isDir() ? first.fileName() : first.completeBaseName())
+                                             : tr("Comprimido");
+    const QString folder = pane->currentPath();
+    const QString output = folder + QLatin1Char('/') + freeName(folder, stem, archive::extensionOf(format));
+    m_requestedCounts.insert(m_actions->compress(sources, output, format), 1);
 }
 
 void MainWindow::newFolder()
@@ -618,9 +855,187 @@ void MainWindow::newFile()
 
 void MainWindow::renameSelection()
 {
-    if (BrowserPane *pane = currentPane()) {
-        pane->startRename();
+    BrowserPane *pane = currentPane();
+    if (pane == nullptr) {
+        return;
     }
+    if (pane->selectedCount() > 1) {
+        showBulkRename();
+        return;
+    }
+    pane->startRename();
+}
+
+void MainWindow::showBulkRename()
+{
+    BrowserPane *pane = currentPane();
+    if (pane == nullptr || !m_actions->isAvailable() || isVirtualLocation(pane->currentPath())) {
+        return;
+    }
+    const QString folder = pane->currentPath();
+    BulkRenameDialog dialog(m_scheduler, pane->selectedPaths(), folder, this);
+    const bool accepted = m_bulkRenameDriver ? m_bulkRenameDriver(dialog) : dialog.exec() == QDialog::Accepted;
+    const QList<QPair<QString, QString>> renames = dialog.renames();
+    if (!accepted || renames.isEmpty()) {
+        return;
+    }
+    m_requestedCounts.insert(m_actions->renameMany(renames, folder), int(renames.size()));
+}
+
+void MainWindow::showOrganize()
+{
+    BrowserPane *pane = currentPane();
+    if (pane == nullptr || !m_actions->isAvailable() || isVirtualLocation(pane->currentPath())) {
+        return;
+    }
+    OrganizeDialog dialog(m_scheduler, pane->currentPath(), this);
+    const bool accepted = m_organizeDriver ? m_organizeDriver(dialog) : dialog.exec() == QDialog::Accepted;
+    if (!accepted || dialog.plan().moves.isEmpty()) {
+        return;
+    }
+    QList<QPair<QString, QString>> moves;
+    for (const organize::Move &move : dialog.plan().moves) {
+        moves.append({move.source, move.target});
+    }
+    m_requestedCounts.insert(m_actions->organize(moves, dialog.plan().foldersToCreate, dialog.folder()),
+                             int(moves.size()));
+}
+
+void MainWindow::showDuplicates()
+{
+    BrowserPane *pane = currentPane();
+    if (pane == nullptr || isVirtualLocation(pane->currentPath())) {
+        return;
+    }
+    const QString folder = pane->currentPath();
+    const auto [volume, roots] = volumesFor(folder);
+    DuplicatesDialog dialog(m_scheduler, folder, volume, roots, this);
+    const bool accepted = m_duplicatesDriver ? m_duplicatesDriver(dialog) : dialog.exec() == QDialog::Accepted;
+    const QStringList marked = dialog.marked();
+    if (!accepted || marked.isEmpty() || !m_actions->isAvailable()) {
+        return;
+    }
+    // A la papelera propia: se recupera con Deshacer (SPEC §14.1).
+    m_requestedCounts.insert(m_actions->trash(marked), int(marked.size()));
+}
+
+void MainWindow::setTag(const QStringList &paths, qint64 tagId, bool on)
+{
+    if (!m_tagStore || paths.isEmpty()) {
+        return;
+    }
+    const QPointer<MainWindow> self(this);
+    m_scheduler.submit(tasks::Category::Metadata, tasks::Priority::UserInteraction,
+                       [self, store = m_tagStore, paths, tagId, on](const tasks::CancelToken &) {
+        const core::Status status = on ? store->assign(paths, tagId) : store->unassign(paths, tagId);
+        QMetaObject::invokeMethod(qApp, [self, status] {
+            if (!self) {
+                return;
+            }
+            if (!status.ok()) {
+                self->report(status.error().message, true);
+            }
+            self->refreshTagsInPanes();
+        }, Qt::QueuedConnection);
+    });
+}
+
+void MainWindow::refreshTagsInPanes()
+{
+    for (int i = 0; i < m_tabs->count(); ++i) {
+        if (auto *pane = qobject_cast<BrowserPane *>(m_tabs->widget(i))) {
+            pane->model()->refreshTags();
+        }
+    }
+}
+
+void MainWindow::followTags(const ActionResult &result)
+{
+    static const QSet<ActionKind> moving{ActionKind::Move,         ActionKind::Rename,  ActionKind::BulkRename,
+                                         ActionKind::Organize,     ActionKind::Trash,   ActionKind::RestoreTrash,
+                                         ActionKind::Undo,         ActionKind::Revert};
+    if (!m_tagStore || !m_journal || result.outcome.operationId == 0 || !moving.contains(result.kind)) {
+        return;
+    }
+    const QPointer<MainWindow> self(this);
+    const bool reverse = result.kind == ActionKind::Undo || result.kind == ActionKind::Revert;
+    m_scheduler.submit(tasks::Category::Metadata, tasks::Priority::Background,
+                       [self, store = m_tagStore, journal = m_journal, id = result.outcome.operationId,
+                        reverse](const tasks::CancelToken &) {
+        const auto steps = journal->steps(id);
+        if (!steps.ok()) {
+            return;
+        }
+        QList<journal::Step> applied;
+        if (reverse) {
+            // Deshacer: los pasos deshechos, al revés y de vuelta.
+            for (qsizetype i = steps.value().size() - 1; i >= 0; --i) {
+                journal::Step step = steps.value()[i];
+                if (step.state != journal::StepState::Undone) {
+                    continue;
+                }
+                std::swap(step.source, step.target);
+                step.state = journal::StepState::Done;
+                applied.append(step);
+            }
+        } else {
+            applied = steps.value();
+        }
+        store->followSteps(applied);
+        QMetaObject::invokeMethod(qApp, [self] {
+            if (self) {
+                self->refreshTagsInPanes();
+            }
+        }, Qt::QueuedConnection);
+    });
+}
+
+void MainWindow::showTags()
+{
+    if (!m_tagStore) {
+        report(tr("Las etiquetas no están disponibles (no se pudo abrir su base)."), true);
+        return;
+    }
+    QStringList roots;
+    for (const fs::Volume &volume : searchVolumes()) {
+        roots.append(volume.rootPath);
+    }
+    TagsDialog dialog(m_scheduler, m_tagStore, roots, this);
+    connect(&dialog, &TagsDialog::tagsChanged, this, &MainWindow::refreshTagsInPanes);
+    dialog.exec();
+    refreshTagsInPanes();
+}
+
+QPair<QString, QStringList> MainWindow::volumesFor(const QString &folder)
+{
+    QStringList roots;
+    QString volume;
+    for (const fs::Volume &candidate : searchVolumes()) {
+        roots.append(candidate.rootPath);
+        const QString prefix = candidate.rootPath.endsWith(QLatin1Char('/')) ? candidate.rootPath
+                                                                             : candidate.rootPath + QLatin1Char('/');
+        if ((folder == candidate.rootPath || folder.startsWith(prefix)) && candidate.rootPath.size() > volume.size()) {
+            volume = candidate.rootPath;
+        }
+    }
+    return {volume, roots};
+}
+
+void MainWindow::showSimilarImages()
+{
+    BrowserPane *pane = currentPane();
+    if (pane == nullptr || isVirtualLocation(pane->currentPath())) {
+        return;
+    }
+    const QString folder = pane->currentPath();
+    const auto [volume, roots] = volumesFor(folder);
+    SimilarImagesDialog dialog(m_scheduler, folder, volume, roots, this);
+    const bool accepted = m_similarDriver ? m_similarDriver(dialog) : dialog.exec() == QDialog::Accepted;
+    const QStringList marked = dialog.marked();
+    if (!accepted || marked.isEmpty() || !m_actions->isAvailable()) {
+        return;
+    }
+    m_requestedCounts.insert(m_actions->trash(marked), int(marked.size()));
 }
 
 void MainWindow::copyToClipboard(bool cut)
@@ -701,9 +1116,9 @@ void MainWindow::transfer(const QStringList &paths, const QString &destination, 
         return;
     }
     if (!move) {
-        // Copiar sobre la misma carpeta crea "nombre (2)": nunca se sobrescribe.
-        m_requestedCounts.insert(m_actions->copy(paths, destination, ops::CollisionPolicy::AutoRename),
-                                 int(paths.size()));
+        // Copiar sobre la misma carpeta crea "nombre (2)"; en otra, si algo
+        // ya existe, se pregunta qué hacer.
+        m_requestedCounts.insert(m_actions->copy(paths, destination, transferOptions(false)), int(paths.size()));
         return;
     }
     // Mover algo a la carpeta donde ya está no es ninguna operación.
@@ -717,7 +1132,41 @@ void MainWindow::transfer(const QStringList &paths, const QString &destination, 
         report(tr("Los elementos ya están en esta carpeta."), false);
         return;
     }
-    m_requestedCounts.insert(m_actions->move(toMove, destination, ops::CollisionPolicy::Skip), int(toMove.size()));
+    m_requestedCounts.insert(m_actions->move(toMove, destination, transferOptions(true)), int(toMove.size()));
+}
+
+ops::TransferOptions MainWindow::transferOptions(bool move)
+{
+    ops::TransferOptions options(ops::CollisionPolicy::Ask);
+    options.copy = TransfersPanel::copyOptionsFromSettings();
+    // La pregunta llega desde el hilo de la transferencia: se muestra aquí y
+    // ese hilo espera la respuesta (o a que se cancele la operación).
+    const QPointer<MainWindow> self(this);
+    options.ask = [self, move](const ops::Conflict &conflict, const tasks::CancelToken &cancel) {
+        auto answer = std::make_shared<std::promise<ops::CollisionDecision>>();
+        std::future<ops::CollisionDecision> future = answer->get_future();
+        QMetaObject::invokeMethod(qApp, [self, conflict, move, answer, cancel] {
+            ops::CollisionDecision decision;
+            decision.cancel = true;
+            if (self && !cancel.isCancelled()) {
+                if (self->m_testCollisionAnswer) {
+                    decision = self->m_testCollisionAnswer(conflict, cancel);
+                } else {
+                    CollisionDialog dialog(conflict, move, self);
+                    dialog.exec();
+                    decision = dialog.decision();
+                }
+            }
+            answer->set_value(decision);
+        }, Qt::QueuedConnection);
+        while (future.wait_for(std::chrono::milliseconds(100)) != std::future_status::ready) {
+            if (cancel.isCancelled()) {
+                return ops::CollisionDecision{ops::CollisionPolicy::Skip, false, true};
+            }
+        }
+        return future.get();
+    };
+    return options;
 }
 
 void MainWindow::trashSelection()
@@ -842,6 +1291,11 @@ void MainWindow::onInterruptedOperationsFound(const QList<journal::Operation> &o
             m_actions->discardInterrupted(operation);
         }
         break;
+    case RecoveryChoice::Resume:
+        for (const journal::Operation &operation : operations) {
+            m_actions->resumeInterrupted(operation, transferOptions(operation.kind == journal::OperationKind::Move));
+        }
+        break;
     case RecoveryChoice::Later:
         report(tr("Las operaciones interrumpidas quedan pendientes; se volverá a preguntar al abrir."), false);
         break;
@@ -875,16 +1329,25 @@ MainWindow::RecoveryChoice MainWindow::askRecovery(const QList<journal::Operatio
     lines.append(tr("No se perdió ningún archivo: los originales solo se quitan cuando su copia está completa.\n\n"
                     "• Revertir: deshace lo que se alcanzó a hacer y deja todo como estaba antes.\n"
                     "• Descartar: conserva lo ya hecho y borra solo los archivos a medio escribir.\n"
-                    "• Reanudar donde se quedó aún no está disponible (próximamente)."));
+                    "• Reanudar (copiar y mover): termina lo que faltaba; lo ya copiado no se repite y un "
+                    "archivo grande cortado sigue desde donde se quedó."));
     box.setInformativeText(lines.join(QLatin1Char('\n')));
 
     QPushButton *revertButton = box.addButton(tr("Revertir"), QMessageBox::AcceptRole);
     QPushButton *discardButton = box.addButton(tr("Descartar"), QMessageBox::DestructiveRole);
-    // Se muestra deshabilitado y rotulado: no aparenta funcionar (SPEC §25.1).
-    QPushButton *resumeButton = box.addButton(tr("Reanudar (próximamente)"), QMessageBox::ActionRole);
-    resumeButton->setEnabled(false);
+    QPushButton *resumeButton = box.addButton(tr("Reanudar"), QMessageBox::ActionRole);
+    // Solo copiar y mover saben reanudarse.
+    bool allResumable = true;
+    for (const journal::Operation &operation : operations) {
+        allResumable = allResumable
+            && (operation.kind == journal::OperationKind::Copy || operation.kind == journal::OperationKind::Move);
+    }
+    resumeButton->setEnabled(allResumable);
+    if (!allResumable) {
+        resumeButton->setToolTip(tr("Solo se pueden reanudar las copias y los movimientos"));
+    }
     QPushButton *laterButton = box.addButton(tr("Decidir más tarde"), QMessageBox::RejectRole);
-    box.setDefaultButton(revertButton);
+    box.setDefaultButton(allResumable ? resumeButton : revertButton);
     box.setEscapeButton(laterButton);
     box.exec();
     if (box.clickedButton() == revertButton) {
@@ -892,6 +1355,9 @@ MainWindow::RecoveryChoice MainWindow::askRecovery(const QList<journal::Operatio
     }
     if (box.clickedButton() == discardButton) {
         return RecoveryChoice::Discard;
+    }
+    if (box.clickedButton() == resumeButton) {
+        return RecoveryChoice::Resume;
     }
     return RecoveryChoice::Later;
 }
@@ -924,11 +1390,23 @@ void MainWindow::onActionProgressed(quint64 id, const ops::Progress &progress)
     case ActionKind::Delete: verb = tr("Eliminando"); break;
     case ActionKind::Undo:   verb = tr("Deshaciendo"); break;
     case ActionKind::Revert: verb = tr("Revirtiendo"); break;
+    case ActionKind::Extract: verb = tr("Extrayendo"); break;
+    case ActionKind::Compress: verb = tr("Comprimiendo"); break;
     default:                 verb = tr("Trabajando"); break;
     }
     QString text = progress.itemsTotal > 0
         ? tr("%1… %2 de %3").arg(verb).arg(progress.itemsDone).arg(progress.itemsTotal)
         : tr("%1…").arg(verb);
+    const ActionKind kind = m_runningKinds.value(id, ActionKind::Copy);
+    if (kind == ActionKind::Copy || kind == ActionKind::Move) {
+        const TransferInfo total = m_actions->overallTransfer();
+        if (total.bytesPerSecond > 0) {
+            text += tr(" · %1/s").arg(core::formatSize(qint64(total.bytesPerSecond)));
+        }
+        if (total.secondsLeft >= 0) {
+            text += tr(" · quedan %1").arg(formatDuration(total.secondsLeft));
+        }
+    }
     if (m_actions->runningCount() > 1) {
         text += tr(" (%n operación(es) en curso)", nullptr, m_actions->runningCount());
     }
@@ -948,6 +1426,7 @@ void MainWindow::onActionProgressed(quint64 id, const ops::Progress &progress)
 void MainWindow::onActionFinished(const ActionResult &result)
 {
     m_runningKinds.remove(result.id);
+    followTags(result);
     const int requested = m_requestedCounts.take(result.id);
     const ops::Outcome &outcome = result.outcome;
 
@@ -1036,14 +1515,54 @@ void MainWindow::onActionFinished(const ActionResult &result)
         case ActionKind::Discard:
             message = tr("Se descartó la operación interrumpida: %1").arg(result.undoneDescription);
             break;
+        case ActionKind::Extract:
+            if (outcome.ok() && !outcome.resultPaths.isEmpty()) {
+                message = tr("Extraído en «%1».").arg(QFileInfo(outcome.resultPaths.first()).fileName());
+            }
+            if (!outcome.skipped.isEmpty()) {
+                // Aquí lo omitido son rutas peligrosas, enlaces que salen o
+                // cifrados, no solo nombres repetidos.
+                message += tr(" %n elemento(s) omitido(s) por seguridad o porque no se podían extraer (detalle en el "
+                              "registro).",
+                              nullptr, int(outcome.skipped.size()));
+            }
+            break;
+        case ActionKind::Organize:
+            message = tr("Se organizaron %n archivo(s).", nullptr, int(outcome.resultPaths.size()));
+            message += QLatin1Char(' ')
+                + tr("Se deshace todo junto con Deshacer (%1).").arg(m_undoAction->shortcut().toString(QKeySequence::NativeText));
+            break;
+        case ActionKind::BulkRename:
+            message = tr("Se renombraron %n elemento(s).", nullptr, int(outcome.resultPaths.size()));
+            message += QLatin1Char(' ')
+                + tr("Se deshace todo junto con Deshacer (%1).").arg(m_undoAction->shortcut().toString(QKeySequence::NativeText));
+            break;
+        case ActionKind::Compress:
+            if (outcome.ok() && !outcome.resultPaths.isEmpty()) {
+                message = tr("Creado «%1».").arg(QFileInfo(outcome.resultPaths.first()).fileName());
+            }
+            break;
         case ActionKind::CreateFolder:
         case ActionKind::CreateFile:
         case ActionKind::Rename:
             break;   // el resultado está a la vista; no hace falta decir nada
         }
     }
-    if (!outcome.skipped.isEmpty()) {
-        message += tr(" %n omitido(s) porque ya existía(n) en el destino.", nullptr, int(outcome.skipped.size()));
+    if (!outcome.skipped.isEmpty() && result.kind != ActionKind::Extract) {
+        const int identical = int(outcome.identical.size());
+        const int others = int(outcome.skipped.size()) - identical;
+        if (identical > 0) {
+            message += tr(" %n omitido(s) por ser idéntico(s) a lo que ya había.", nullptr, identical);
+        }
+        if (others > 0) {
+            message += tr(" %n omitido(s) porque ya existía(n) en el destino.", nullptr, others);
+        }
+    }
+    if (!outcome.replaced.isEmpty()) {
+        message += tr(" %n reemplazado(s); lo anterior está en la papelera.", nullptr, int(outcome.replaced.size()));
+    }
+    if (outcome.verified > 0) {
+        message += tr(" %n comprobado(s) con su hash.", nullptr, outcome.verified);
     }
 
     if (failed == 0) {
@@ -1154,6 +1673,9 @@ BrowserPane *MainWindow::openTab(const QString &path)
                                                                 : core::SizeUnits::Decimal);
 
     pane->setIndexResolver([this](const QString &folder) { return m_indexService->indexFor(folder); });
+    pane->setTagStore(m_tagStore);
+    pane->setContentCacheResolver(
+        [this](const QStringList &roots) { return m_contentIndexService->cacheFactory(roots); });
     pane->setThumbnailService(m_thumbnailService);
     pane->setThumbnailSize(m_thumbnailSize);
     pane->setInlinePlayer(m_inlinePlayer);
@@ -1186,6 +1708,7 @@ BrowserPane *MainWindow::openTab(const QString &path)
             updateEditActions();
         }
     });
+    connect(pane, &BrowserPane::bulkRenameRequested, this, &MainWindow::showBulkRename);
     connect(pane, &BrowserPane::renameRequested, this, [this](const QString &renamedPath, const QString &newName) {
         m_requestedCounts.insert(m_actions->rename(renamedPath, newName), 1);
     });
@@ -1210,6 +1733,13 @@ BrowserPane *MainWindow::openTab(const QString &path)
 void MainWindow::closeTab(int index)
 {
     if (index < 0) {
+        return;
+    }
+    // La ✕ de una pestaña con resultados de búsqueda sale primero de la
+    // búsqueda (vuelve a la carpeta donde se buscó); otra ✕ cierra la pestaña.
+    // Así salir de una búsqueda nunca cierra la ventana sin querer.
+    if (auto *searching = qobject_cast<BrowserPane *>(m_tabs->widget(index)); searching && searching->showsSearch()) {
+        searching->goUp();
         return;
     }
     // Siempre queda al menos una pestaña: cerrar la última cierra la ventana.
@@ -1283,10 +1813,11 @@ void MainWindow::buildSearchOptions()
     m_searchInNameAction->setCheckable(true);
     m_searchInNameAction->setChecked(true);
     targets->addAction(m_searchInNameAction);
-    m_searchInContentAction = menu->addAction(tr("El contenido (archivos de texto)"));
+    m_searchInContentAction = menu->addAction(tr("El contenido (texto, PDF y documentos)"));
     m_searchInContentAction->setCheckable(true);
-    m_searchInContentAction->setToolTip(tr("Busca las palabras dentro de los archivos de texto de hasta 20 MB. "
-                                           "Todavía no lee PDF ni documentos de oficina."));
+    m_searchInContentAction->setToolTip(tr("Busca las palabras dentro de los archivos: texto y código, PDF, Word, "
+                                           "Excel, PowerPoint, OpenDocument y RTF. Lee cada archivo: en carpetas "
+                                           "grandes tarda."));
     targets->addAction(m_searchInContentAction);
     connect(targets, &QActionGroup::triggered, this, &MainWindow::updateSearchHints);
 
@@ -1294,6 +1825,7 @@ void MainWindow::buildSearchOptions()
     m_searchCaseAction = menu->addAction(tr("Distinguir mayúsculas y minúsculas"));
     menu->addSeparator();
     menu->addAction(m_indexAction);
+    menu->addAction(m_contentIndexAction);
     m_searchCaseAction->setCheckable(true);
     connect(m_searchCaseAction, &QAction::toggled, this, &MainWindow::updateSearchHints);
     menu->setToolTipsVisible(true);
@@ -1306,6 +1838,9 @@ void MainWindow::startIndexing(bool mayAsk)
     const QStringList roots = settings.value(QStringLiteral("index/roots")).toStringList();
     for (const QString &root : roots) {
         m_indexService->addRoot(root);
+    }
+    for (const QString &root : settings.value(QStringLiteral("contenido/carpetas")).toStringList()) {
+        m_contentIndexService->addRoot(root);
     }
     if (mayAsk && !settings.value(QStringLiteral("index/asked"), false).toBool()) {
         // Con la ventana ya a la vista, no antes.
@@ -1376,6 +1911,27 @@ void MainWindow::runIndexWizard()
     }
 }
 
+void MainWindow::saveContentIndexRoots()
+{
+    QSettings().setValue(QStringLiteral("contenido/carpetas"), m_contentIndexService->roots());
+}
+
+void MainWindow::showContentIndexDialog()
+{
+    BrowserPane *pane = currentPane();
+    // La carpeta a la vista; si es una búsqueda, la carpeta donde se buscó.
+    QString folder = pane != nullptr ? pane->currentPath() : QString();
+    if (isSearchLocation(folder)) {
+        folder = searchSpecOf(folder).origin;
+    }
+    if (isVirtualLocation(folder)) {
+        folder.clear();
+    }
+    ContentIndexDialog dialog(*m_contentIndexService, folder, this);
+    connect(&dialog, &ContentIndexDialog::rootsChanged, this, &MainWindow::saveContentIndexRoots);
+    dialog.exec();
+}
+
 void MainWindow::showIndexDialog()
 {
     IndexDialog dialog(*m_indexService, [this] { return searchVolumes(); }, this);
@@ -1392,6 +1948,13 @@ void MainWindow::updateIndexLabel()
         if (status.state == index::RootStatus::State::Building
             || status.state == index::RootStatus::State::Updating) {
             working.append(tr("%1: %2").arg(QDir::toNativeSeparators(status.root), indexStateText(status)));
+        }
+    }
+    for (const index::ContentRootStatus &status : m_contentIndexService->status()) {
+        if (status.state == index::ContentRootStatus::State::Building
+            || status.state == index::ContentRootStatus::State::Updating) {
+            working.append(tr("contenido de %1: %2")
+                               .arg(QDir::toNativeSeparators(status.root), contentIndexStateText(status)));
         }
     }
     if (m_indexService->isPaused() && m_indexService->isBusy()) {
@@ -1718,7 +2281,11 @@ void MainWindow::updateTabTitle(BrowserPane *pane)
     }
     const QString path = pane->currentPath();
     QString title = pane->showsVolumes() ? tr("Unidades")
-        : pane->showsSearch() ? tr("Buscar: %1").arg(searchQueryOf(path)) : QDir(path).dirName();
+        : pane->showsSearch()            ? tr("Buscar: %1").arg(searchQueryOf(path))
+        : pane->showsArchive()
+            ? (archiveInnerOf(path).isEmpty() ? QFileInfo(archivePathOf(path)).fileName()
+                                              : archiveInnerOf(path).section(QLatin1Char('/'), -1))
+            : QDir(path).dirName();
     if (title.isEmpty()) {
         title = QDir::toNativeSeparators(path);   // raíces: "/" o "C:\"
     }

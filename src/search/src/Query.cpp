@@ -9,6 +9,7 @@
 #include <QSet>
 
 #include <algorithm>
+#include <functional>
 #include <limits>
 #include <vector>
 
@@ -56,6 +57,7 @@ struct Query::Node
         Hidden,      ///< isHidden == flag.
         Regex,
         Content,     ///< El texto del archivo contiene `text`.
+        Tag,         ///< El archivo lleva la etiqueta `text`.
         Unavailable, ///< Filtro aún no implementado: nunca se cumple.
     };
 
@@ -916,7 +918,11 @@ private:
         if (token.key == QLatin1String("content")) {
             return makeContentNode(token.value, token.quoted);
         }
-        // tag: existe en la gramática, pero aún no se evalúa.
+        if (token.key == QLatin1String("tag")) {
+            node->kind = Kind::Tag;
+            node->text = token.value.simplified();
+            return node;
+        }
         node->kind = Kind::Unavailable;
         if (!m_unavailable.contains(token.key)) {
             m_unavailable.append(token.key);
@@ -1115,6 +1121,8 @@ bool evaluate(const Query::Node &node, const Item &item, QStringView name, Conte
         return item.isHidden == node.flag;
     case Kind::Regex:
         return node.regex.matchView(name).hasMatch();
+    case Kind::Tag:
+        return content != nullptr && !item.isDirectory && content->hasTag(node.text);
     case Kind::Content: {
         if (content == nullptr || item.isDirectory) {
             return false;
@@ -1207,6 +1215,63 @@ core::Result<Query> Query::parse(const QString &text, const QueryOptions &option
     query.m_unavailable = parser.unavailable();
     query.m_text = text;
     query.m_usesContent = query.m_root != nullptr && nodeUsesContent(*query.m_root);
+    if (query.m_root != nullptr) {
+        const std::function<void(const Query::Node &)> tags = [&](const Query::Node &node) {
+            if (node.kind == Kind::Tag && !node.text.isEmpty()
+                && !query.m_tagNames.contains(node.text, Qt::CaseInsensitive)) {
+                query.m_tagNames.append(node.text);
+            }
+            for (const NodePtr &child : node.children) {
+                tags(*child);
+            }
+        };
+        tags(*query.m_root);
+    }
+    query.m_caseSensitivity = options.caseSensitive ? Qt::CaseSensitive : Qt::CaseInsensitive;
+    if (query.m_root != nullptr) {
+        // Los textos de contenido de la consulta, salvo los negados.
+        const std::function<void(const Query::Node &, bool)> collect = [&](const Query::Node &node, bool negated) {
+            if (node.kind == Kind::Content && !negated && !node.text.isEmpty()) {
+                query.m_contentTerms.append(node.text);
+            }
+            for (const NodePtr &child : node.children) {
+                collect(*child, negated != (node.kind == Kind::Not));
+            }
+        };
+        collect(*query.m_root, false);
+        // Obligatorios: en un AND, los de cualquier hijo; en un OR, solo los
+        // que exigen todas sus ramas; bajo un NOT, ninguno.
+        const std::function<QStringList(const Query::Node &)> required = [&](const Query::Node &node) {
+            QStringList terms;
+            switch (node.kind) {
+            case Kind::Content:
+                if (!node.text.isEmpty()) {
+                    terms.append(node.text);
+                }
+                break;
+            case Kind::And:
+                for (const NodePtr &child : node.children) {
+                    terms += required(*child);
+                }
+                break;
+            case Kind::Or:
+                for (size_t i = 0; i < node.children.size(); ++i) {
+                    const QStringList branch = required(*node.children[i]);
+                    if (i == 0) {
+                        terms = branch;
+                    } else {
+                        terms.removeIf([&](const QString &term) { return !branch.contains(term); });
+                    }
+                }
+                break;
+            default:
+                break;
+            }
+            terms.removeDuplicates();
+            return terms;
+        };
+        query.m_requiredContentTerms = required(*query.m_root);
+    }
     query.m_nameHints = query.m_root != nullptr ? nameHintsOf(*query.m_root) : QStringList();
     return query;
 }

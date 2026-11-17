@@ -315,12 +315,21 @@ private slots:
         QVERIFY(match(QStringLiteral("name:fot*.jpg"), QStringLiteral("foto.jpg")));
     }
 
-    void unavailableFiltersAreReported()
+    void tagFiltersAskTheContentSource()
     {
+        // tag: ya funciona (Fase 4): lo contesta quien da los datos del archivo.
         const Query query = parsed(QStringLiteral("informe tag:rojo"));
-        QCOMPARE(query.unavailableFilters(), QStringList{QStringLiteral("tag")});
-        // No aparentan funcionar: nada los cumple.
+        QVERIFY(query.unavailableFilters().isEmpty());
+        QCOMPARE(query.tagNames(), QStringList{QStringLiteral("rojo")});
+        // Sin quien conteste (el filtro Ctrl+I), nada la cumple.
         QVERIFY(!query.matches(file(QStringLiteral("informe.txt"))));
+        struct Tagged : ContentSource
+        {
+            const QString *text() override { return nullptr; }
+            bool hasTag(const QString &tag) override { return tag == QLatin1String("rojo"); }
+        } tagged;
+        QVERIFY(query.matches(file(QStringLiteral("informe.txt")), &tagged));
+        QVERIFY(!parsed(QStringLiteral("informe tag:azul")).matches(file(QStringLiteral("informe.txt")), &tagged));
         QVERIFY(parsed(QStringLiteral("informe")).unavailableFilters().isEmpty());
     }
 
