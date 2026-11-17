@@ -26,6 +26,7 @@
 #include <QFile>
 #include <QFileInfo>
 #include <QGuiApplication>
+#include <QHeaderView>
 #include <QLineEdit>
 #include <QMimeData>
 #include <QProcess>
@@ -1224,6 +1225,28 @@ private slots:
         QVERIFY(waitReady(pane));
         // Al subir queda marcada la carpeta de la que se venía.
         QTRY_COMPARE(pane->model()->entryAt(pane->view()->currentIndex().row()).name, QStringLiteral("dentro"));
+    }
+
+    void nameColumnKeepsAUsableWidth()
+    {
+        QTemporaryDir directory;
+        writeFile(directory.filePath(QStringLiteral("un nombre de archivo bastante largo.txt")));
+        MainWindow window(m_scheduler, openJournal(directory));
+        BrowserPane *pane = window.openTab(directory.path());
+        QVERIFY(waitReady(pane));
+        window.resize(1400, 800);
+        window.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&window));
+        QHeaderView *header = pane->view()->header();
+        // Ancha: el nombre se queda con lo que sobra, sin barra horizontal.
+        QTRY_VERIFY(header->sectionSize(0) > 300);
+        QTRY_COMPARE(header->length(), pane->view()->viewport()->width());
+        // Estrecha: el nombre no baja de un ancho legible.
+        window.resize(560, 500);
+        QTRY_VERIFY(pane->view()->viewport()->width() < 500);
+        QTRY_COMPARE(header->sectionSize(0), 220);
+        window.resize(1400, 800);
+        QTRY_COMPARE(header->length(), pane->view()->viewport()->width());
     }
 
     void treeArrowsPasteAndRefresh()
