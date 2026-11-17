@@ -71,14 +71,17 @@ private slots:
         touch(root + QStringLiteral("/canción.flac"));
         touch(root + QStringLiteral("/raro.xyz"));
         touch(root + QStringLiteral("/sub/dentro.pdf"));
+        touch(root + QStringLiteral("/guía.html"));
         Options options;
         options.rules = defaultRules();
         Plan plan = simulate(root, options, {});
         QCOMPARE(targets(plan, root),
                  (QStringList{QStringLiteral("Audio/FLAC/canción.flac"), QStringLiteral("Documentos/PDF/informe.PDF"),
-                              QStringLiteral("Documentos/Word/carta.docx"), QStringLiteral("Imágenes/JPG/foto.jpg"),
-                              QStringLiteral("Imágenes/RAW/toma.CR2"), QStringLiteral("Videos/MKV/peli.mkv")}));
+                              QStringLiteral("Documentos/Web/guía.html"), QStringLiteral("Documentos/Word/carta.docx"),
+                              QStringLiteral("Imágenes/JPG/foto.jpg"), QStringLiteral("Imágenes/RAW/toma.CR2"),
+                              QStringLiteral("Videos/MKV/peli.mkv")}));
         QCOMPARE(plan.withoutRule, 1);   // raro.xyz se queda
+        QCOMPARE(plan.inSubfolders, 1);  // sub/dentro.pdf no se mira (y se avisa)
         QVERIFY(plan.foldersToCreate.contains(root + QStringLiteral("/Documentos")));
         QVERIFY(plan.foldersToCreate.contains(root + QStringLiteral("/Documentos/PDF")));
         // Las carpetas, de fuera hacia dentro.
@@ -89,6 +92,7 @@ private slots:
         options.recursive = true;
         plan = simulate(root, options, {});
         QVERIFY(targets(plan, root).contains(QStringLiteral("Documentos/PDF/dentro.pdf")));
+        QCOMPARE(plan.inSubfolders, 0);
     }
 
     void datesSizesMetadataAndClashes()

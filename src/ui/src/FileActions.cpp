@@ -542,18 +542,39 @@ quint64 FileActions::extract(const QString &archivePath, const QStringList &inne
     return start(ActionKind::Extract, destinationDirectory, tasks::Category::Transfer,
                  [archivePath, innerPaths, innerFolder, destinationDirectory, folderName](const Context &context,
                                                                                          ActionResult &result) {
-        // Siempre en una carpeta nueva: lo extraído nunca se mezcla con lo que
-        // ya hay ni pisa nada.
-        const QString target = destinationDirectory + QLatin1Char('/') + folderName;
-        if (!QDir().mkdir(target)) {
+        archive::ExtractOptions options;
+        options.only = innerPaths;
+        options.stripPrefix = innerFolder;
+        // En una carpeta nueva (folderName) o en la misma carpeta. Nunca se pisa
+        // nada: lo que ya existe se omite y se informa.
+        const bool here = folderName.isEmpty();
+        const QString target = here ? destinationDirectory : destinationDirectory + QLatin1Char('/') + folderName;
+        QStringList created;   // lo de primer nivel que no existía (para seleccionarlo)
+        if (here) {
+            const auto listed = archive::listArchive(archivePath, context.cancel);
+            if (listed.ok()) {
+                const QString prefix = innerFolder.isEmpty() ? QString() : innerFolder + QLatin1Char('/');
+                for (const archive::ArchiveEntry &entry : listed.value()) {
+                    if (!prefix.isEmpty() && !entry.path.startsWith(prefix)) {
+                        continue;
+                    }
+                    bool wanted = innerPaths.isEmpty();
+                    for (const QString &only : innerPaths) {
+                        wanted = wanted || entry.path == only || entry.path.startsWith(only + QLatin1Char('/'));
+                    }
+                    const QString top = entry.path.mid(prefix.size()).section(QLatin1Char('/'), 0, 0);
+                    const QString path = target + QLatin1Char('/') + top;
+                    if (wanted && !top.isEmpty() && !created.contains(path) && !QFileInfo::exists(path)) {
+                        created.append(path);
+                    }
+                }
+            }
+        } else if (!QDir().mkdir(target)) {
             result.outcome.errors.append(core::Error{core::ErrorCode::AlreadyExists,
                                                      QCoreApplication::translate("eu::ui", "No se pudo crear la carpeta"),
                                                      target, 0});
             return;
         }
-        archive::ExtractOptions options;
-        options.only = innerPaths;
-        options.stripPrefix = innerFolder;
         const core::Result<archive::ExtractResult> extracted = archive::extractArchive(
             archivePath, target, options, context.cancel, [&context](qint64 bytes) {
                 if (context.progress) {
@@ -562,7 +583,15 @@ quint64 FileActions::extract(const QString &archivePath, const QStringList &inne
                     context.progress(progress);
                 }
             });
-        result.outcome.resultPaths.append(target);
+        if (here) {
+            for (const QString &path : std::as_const(created)) {
+                if (QFileInfo::exists(path)) {
+                    result.outcome.resultPaths.append(path);
+                }
+            }
+        } else {
+            result.outcome.resultPaths.append(target);
+        }
         if (!extracted.ok()) {
             if (extracted.error().code == core::ErrorCode::Cancelled) {
                 result.outcome.cancelled = true;

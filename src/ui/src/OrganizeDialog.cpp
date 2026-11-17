@@ -288,6 +288,10 @@ void OrganizeDialog::showSimulation(quint64 generation, const organize::Plan &pl
     if (plan.withoutRule > 0) {
         parts.append(tr("%n sin regla (se quedan)", nullptr, plan.withoutRule));
     }
+    if (plan.inSubfolders > 0) {
+        parts.append(tr("%n en subcarpetas sin mirar (marca «Incluir lo de las subcarpetas»)", nullptr,
+                        plan.inSubfolders));
+    }
     m_summary->setText(parts.join(QStringLiteral(" · ")) + tr(". Se deshace todo junto con Deshacer."));
     m_applyButton->setEnabled(!plan.moves.isEmpty());
     emit simulated();

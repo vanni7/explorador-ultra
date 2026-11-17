@@ -40,6 +40,7 @@
 #include <QUrl>
 #include <QVBoxLayout>
 
+#include <algorithm>
 #include <functional>
 
 namespace eu::ui {
@@ -429,7 +430,15 @@ BrowserPane::BrowserPane(tasks::Scheduler &scheduler, fs::DirectoryWatcher &watc
     m_view->setAlternatingRowColors(true);
     m_view->setAccessibleName(tr("Contenido de la carpeta"));
     m_view->header()->setStretchLastSection(false);
-    m_view->header()->setSectionResizeMode(int(Column::Name), QHeaderView::Stretch);
+    // No "Stretch": en una ventana estrecha dejaría el nombre en unas letras.
+    m_view->header()->setSectionResizeMode(int(Column::Name), QHeaderView::Interactive);
+    m_view->viewport()->installEventFilter(this);
+    connect(m_view->header(), &QHeaderView::sectionResized, this, [this](int section, int, int) {
+        if (section != int(Column::Name)) {
+            fitNameColumn();
+        }
+    });
+    connect(m_view->header(), &QHeaderView::sectionCountChanged, this, [this] { fitNameColumn(); });
     m_view->header()->resizeSection(int(Column::Size), 100);
     m_view->header()->resizeSection(int(Column::Type), 190);
     m_view->header()->resizeSection(int(Column::Modified), 150);
@@ -516,6 +525,7 @@ BrowserPane::BrowserPane(tasks::Scheduler &scheduler, fs::DirectoryWatcher &watc
     searchBarLayout->addWidget(m_searchAgainButton);
 
     m_resultsView = new QTreeView(m_searchPage);
+    m_resultsView->installEventFilter(this);   // Retroceso / flecha izquierda: salir de la búsqueda
     m_resultsView->setModel(m_resultsModel);
     m_resultsView->setRootIsDecorated(false);
     m_resultsView->setUniformRowHeights(true);
@@ -1016,13 +1026,45 @@ void BrowserPane::setTagStore(std::shared_ptr<tags::TagStore> store)
     m_model->setTagStore(std::move(store));
 }
 
+void BrowserPane::fitNameColumn()
+{
+    constexpr int kMinimumNameWidth = 220;
+    QHeaderView *header = m_view->header();
+    int others = 0;
+    for (int section = 0; section < header->count(); ++section) {
+        if (section != int(Column::Name) && !header->isSectionHidden(section)) {
+            others += header->sectionSize(section);
+        }
+    }
+    const int wanted = std::max(kMinimumNameWidth, m_view->viewport()->width() - others);
+    if (header->sectionSize(int(Column::Name)) != wanted) {
+        header->resizeSection(int(Column::Name), wanted);
+    }
+}
+
 bool BrowserPane::eventFilter(QObject *watched, QEvent *event)
 {
+    if (event->type() == QEvent::Resize && watched == m_view->viewport()) {
+        fitNameColumn();
+        return false;
+    }
     // (La lista edita con F2 aunque haya teclas modificadoras: aquí igual.)
     if (event->type() == QEvent::KeyPress && static_cast<QKeyEvent *>(event)->key() == Qt::Key_F2
         && selectedCount() > 1 && !isVirtualLocation(m_location)) {
         emit bulkRenameRequested();
         return true;
+    }
+    // Retroceso sube un nivel; la flecha izquierda también en la lista de
+    // detalles y en los resultados (en las miniaturas mueve a la izquierda).
+    if (event->type() == QEvent::KeyPress) {
+        const auto *key = static_cast<QKeyEvent *>(event);
+        const bool plain = (key->modifiers() & ~Qt::KeypadModifier) == Qt::NoModifier;
+        const bool up = key->key() == Qt::Key_Backspace
+            || (key->key() == Qt::Key_Left && watched != m_thumbView);
+        if (plain && up && canGoUp()) {
+            goUp();
+            return true;
+        }
     }
     return QWidget::eventFilter(watched, event);
 }

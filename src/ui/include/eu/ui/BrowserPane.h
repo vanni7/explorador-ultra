@@ -227,6 +227,9 @@ private:
     void rememberSelection();
     void restoreSelection();
     bool applyPendingSelection();
+    /// La columna Nombre ocupa lo que dejan las demás, pero nunca menos de un
+    /// ancho legible (si no cabe, aparece la barra horizontal).
+    void fitNameColumn();
     void onEditingFinished();
     void applyFilterText(const QString &text);
     void updateFilterInfo();

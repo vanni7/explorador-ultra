@@ -32,6 +32,12 @@ public:
     void setCurrentPath(const QString &path) { m_currentPath = path; }
     /// Añade un lugar a "Favoritos".
     void addPlace(const QString &name, const QString &path);
+    /// Vuelve a leer las subcarpetas de `path` donde ya se hayan leído (tras
+    /// crear, mover o borrar carpetas), conservando lo desplegado. Si nunca
+    /// se desplegó, solo se corrige si lleva flecha o no.
+    void refreshFolder(const QString &path);
+    /// true si la carpeta tiene alguna subcarpeta visible (para la flecha). Lee el disco.
+    static bool hasSubfolders(const QString &path);
     /// Ruta del nodo que tiene el cursor del teclado, o vacía.
     QString currentPlace() const;
     /// Ruta del nodo que hay en un punto del panel, o vacía (para las pruebas).
@@ -58,9 +64,16 @@ protected:
 private:
     void buildFavorites();
     void rebuildVolumes(const QList<fs::Volume> &volumes);
-    QStandardItem *makeFolderItem(const QString &text, const QString &path, const QIcon &icon);
-    void loadChildren(QStandardItem *item);
-    void applyChildren(const QString &path, const QStringList &folderNames, bool failed);
+    QStandardItem *makeFolderItem(const QString &text, const QString &path, const QIcon &icon,
+                                  bool mayHaveChildren = true);
+    /// `again`: aunque ya se haya leído (para poner el árbol al día).
+    void loadChildren(QStandardItem *item, bool again = false);
+    void applyChildren(const QString &path, const QStringList &folderNames, const QList<bool> &withSubfolders,
+                       bool failed);
+    /// Quita la flecha de los nodos de primer nivel que no tienen subcarpetas.
+    void checkTopLevelArrows(QStandardItem *section);
+    void setArrow(QStandardItem *item, bool hasChildren);
+    void refreshFolderArrow(const QString &path, bool hasChildren);
     QStandardItem *findLoadingItem(const QString &path) const;
 
     tasks::Scheduler &m_scheduler;

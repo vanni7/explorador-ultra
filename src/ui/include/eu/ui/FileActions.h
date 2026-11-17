@@ -127,7 +127,8 @@ public:
     quint64 copy(const QStringList &sources, const QString &destinationDirectory, const ops::TransferOptions &policy);
     quint64 move(const QStringList &sources, const QString &destinationDirectory, const ops::TransferOptions &policy);
     /// Extrae de `archivePath` lo que hay en `innerPaths` (vacío: todo) en una
-    /// carpeta nueva `folderName` dentro de `destinationDirectory`. Se quita
+    /// carpeta nueva `folderName` dentro de `destinationDirectory`, o
+    /// directamente en `destinationDirectory` si `folderName` está vacío. Se quita
     /// `innerFolder` del principio de las rutas (la carpeta de dentro donde
     /// estaba el usuario). Nunca sobrescribe ni escribe fuera de la carpeta.
     quint64 extract(const QString &archivePath, const QStringList &innerPaths, const QString &innerFolder,
