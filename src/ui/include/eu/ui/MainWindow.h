@@ -7,6 +7,7 @@
 #include "eu/index/ContentIndexService.h"
 #include "eu/ui/TransfersPanel.h"
 #include "eu/index/IndexService.h"
+#include "eu/tags/TagStore.h"
 #include "eu/thumbs/ThumbnailService.h"
 #include "eu/journal/Journal.h"
 #include "eu/tasks/Scheduler.h"
@@ -80,6 +81,11 @@ public:
     void showDuplicates();
     /// Abre "Imágenes parecidas" sobre la carpeta a la vista.
     void showSimilarImages();
+    /// Ventana de etiquetas: administrar y revisar huérfanas.
+    void showTags();
+    std::shared_ptr<tags::TagStore> tagStore() const { return m_tagStore; }
+    /// Pone o quita una etiqueta a unos archivos y repinta las listas.
+    void setTag(const QStringList &paths, qint64 tagId, bool on);
     void setSimilarDriverForTesting(std::function<bool(class SimilarImagesDialog &)> driver)
     {
         m_similarDriver = std::move(driver);
@@ -245,6 +251,12 @@ private:
     QAction *m_organizeAction = nullptr;
     QAction *m_duplicatesAction = nullptr;
     QAction *m_similarAction = nullptr;
+    QAction *m_tagsAction = nullptr;
+    std::shared_ptr<tags::TagStore> m_tagStore;
+    std::shared_ptr<journal::Journal> m_journal;
+    /// Las etiquetas siguen a lo que movió, renombró o deshizo una operación.
+    void followTags(const ActionResult &result);
+    void refreshTagsInPanes();
     std::function<bool(class SimilarImagesDialog &)> m_similarDriver;
     /// La unidad de `folder` y las raíces de todas.
     QPair<QString, QStringList> volumesFor(const QString &folder);

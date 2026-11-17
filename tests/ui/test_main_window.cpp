@@ -715,6 +715,53 @@ private slots:
         QVERIFY(waitIdle(window));
     }
 
+    void tagsShowFollowRenamesAndAreSearchable()
+    {
+        QTemporaryDir data;
+        QTemporaryDir directory;
+        writeFile(directory.filePath(QStringLiteral("factura.pdf")), 10);
+        writeFile(directory.filePath(QStringLiteral("otra.pdf")), 10);
+        MainWindow window(m_scheduler, openJournal(data));
+        window.show();
+        QVERIFY(window.tagStore() != nullptr);
+        const auto created = window.tagStore()->createTag(QStringLiteral("Prueba %1").arg(QCoreApplication::applicationPid()),
+                                                          QStringLiteral("#e74c3c"));
+        QVERIFY(created.ok());
+        const tags::Tag tag = created.value();
+        BrowserPane *pane = window.openTab(directory.path());
+        QVERIFY(waitReady(pane));
+        window.setTag({directory.filePath(QStringLiteral("factura.pdf"))}, tag.id, true);
+        const auto tagCell = [&](const QString &name) {
+            const int row = pane->model()->rowOfName(name);
+            return row < 0 ? QString()
+                           : pane->model()->data(pane->model()->index(row, int(Column::Tags))).toString();
+        };
+        QTRY_COMPARE_WITH_TIMEOUT(tagCell(QStringLiteral("factura.pdf")), tag.name, 10000);
+        QCOMPARE(tagCell(QStringLiteral("otra.pdf")), QString());
+
+        // Renombrar desde la aplicación: la etiqueta va con el archivo; deshacer, también.
+        selectNames(pane, {QStringLiteral("factura.pdf")});
+        emit pane->renameRequested(directory.filePath(QStringLiteral("factura.pdf")), QStringLiteral("factura 2026.pdf"));
+        QTRY_VERIFY_WITH_TIMEOUT(QFileInfo::exists(directory.filePath(QStringLiteral("factura 2026.pdf"))), 10000);
+        QVERIFY(waitIdle(window));
+        QTRY_COMPARE_WITH_TIMEOUT(window.tagStore()->pathsWithTag(tag.name),
+                                  QStringList{QDir::cleanPath(directory.filePath(QStringLiteral("factura 2026.pdf")))}, 10000);
+        window.undo();
+        QTRY_VERIFY_WITH_TIMEOUT(QFileInfo::exists(directory.filePath(QStringLiteral("factura.pdf"))), 10000);
+        QVERIFY(waitIdle(window));
+        QTRY_COMPARE_WITH_TIMEOUT(window.tagStore()->pathsWithTag(tag.name),
+                                  QStringList{QDir::cleanPath(directory.filePath(QStringLiteral("factura.pdf")))}, 10000);
+
+        // Buscar por etiqueta.
+        window.searchEdit()->setText(QStringLiteral("tag:\"%1\"").arg(tag.name));
+        QTest::keyClick(window.searchEdit(), Qt::Key_Return);
+        QVERIFY(pane->showsSearch());
+        QVERIFY(QTest::qWaitFor([pane] { return pane->searchState() == BrowserPane::SearchState::Finished; }, 20000));
+        QCOMPARE(pane->resultsModel()->count(), 1);
+        QCOMPARE(pane->resultsModel()->hitAt(0).entry.name, QStringLiteral("factura.pdf"));
+        window.tagStore()->deleteTag(tag.id);
+    }
+
     void interruptedCopyIsResumedAndClosingMidCopyCanBeResumed()
     {
         QTemporaryDir data;

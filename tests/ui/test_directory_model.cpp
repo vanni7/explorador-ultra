@@ -72,7 +72,7 @@ private slots:
                                             QStringLiteral("archivo2.txt"), QStringLiteral("archivo10.txt"),
                                             QStringLiteral("Beta.txt")}));
         QCOMPARE(replaced.count(), 1);
-        QCOMPARE(model.columnCount(), 4);
+        QCOMPARE(model.columnCount(), 5);
     }
 
     void columnsShowReadableData()

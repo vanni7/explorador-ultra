@@ -431,6 +431,11 @@ BrowserPane::BrowserPane(tasks::Scheduler &scheduler, fs::DirectoryWatcher &watc
     m_view->header()->resizeSection(int(Column::Size), 100);
     m_view->header()->resizeSection(int(Column::Type), 190);
     m_view->header()->resizeSection(int(Column::Modified), 150);
+    m_view->header()->resizeSection(int(Column::Tags), 110);
+    // La columna de etiquetas, solo si algo de lo que se ve tiene alguna.
+    m_view->setColumnHidden(int(Column::Tags), true);
+    connect(m_model, &DirectoryModel::tagsPresenceChanged, this,
+            [this](bool any) { m_view->setColumnHidden(int(Column::Tags), !any); });
 
     // Página de mensajes: carpeta vacía, error de lectura…
     m_messagePage = new QWidget(this);
@@ -1003,6 +1008,12 @@ QString BrowserPane::searchWhere() const
     return tr("las unidades %1").arg(names.join(QStringLiteral(", ")));
 }
 
+void BrowserPane::setTagStore(std::shared_ptr<tags::TagStore> store)
+{
+    m_tagStore = store;
+    m_model->setTagStore(std::move(store));
+}
+
 bool BrowserPane::eventFilter(QObject *watched, QEvent *event)
 {
     // (La lista edita con F2 aunque haya teclas modificadoras: aquí igual.)
@@ -1063,6 +1074,9 @@ void BrowserPane::startSearch()
         return thumbs::extractTextIsolated(path, cancel);
     };
     m_searchReadsContent = parsedQuery.value().usesContent();
+    if (m_tagStore) {
+        options.pathsWithTag = [store = m_tagStore](const QString &tag) { return store->pathsWithTag(tag); };
+    }
     // Lo que ya tiene guardado el índice de contenido no se vuelve a leer.
     if (m_searchReadsContent && m_contentCacheResolver) {
         options.contentCache = m_contentCacheResolver(spec.roots);

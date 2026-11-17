@@ -9,6 +9,9 @@
 
 #include <QApplication>
 #include <QDateTime>
+#include <QPointer>
+#include <QPixmap>
+#include <QPainter>
 #include <QDir>
 #include <QFileInfo>
 #include <mutex>
@@ -298,6 +301,47 @@ void DirectoryModel::onFinished(quint64 generation, std::vector<fs::Entry> sorte
     replaceEntries(std::move(visible));
     setState(State::Ready);
     startMeasuringFolders();
+    refreshTags();
+}
+
+void DirectoryModel::refreshTags()
+{
+    const bool had = !m_tags.isEmpty();
+    m_tags.clear();
+    if (had) {
+        emit tagsPresenceChanged(false);
+    }
+    if (!m_tagStore || m_entries.empty() || m_path.isEmpty()) {
+        return;
+    }
+    QStringList paths;
+    paths.reserve(qsizetype(m_entries.size()));
+    const QString prefix = m_path.endsWith(QLatin1Char('/')) ? m_path : m_path + QLatin1Char('/');
+    for (const fs::Entry &entry : m_entries) {
+        paths.append(prefix + entry.name);
+    }
+    const QPointer<DirectoryModel> self(this);
+    const quint64 generation = ++m_tagsGeneration;
+    m_scheduler.submit(tasks::Category::Metadata, tasks::Priority::Background,
+                       [self, generation, paths, store = m_tagStore](const tasks::CancelToken &) {
+        const QHash<QString, QList<tags::Tag>> found = store->tagsFor(paths);
+        if (found.isEmpty()) {
+            return;
+        }
+        QMetaObject::invokeMethod(qApp, [self, generation, found] {
+            if (!self || generation != self->m_tagsGeneration) {
+                return;
+            }
+            for (auto it = found.constBegin(); it != found.constEnd(); ++it) {
+                self->m_tags.insert(QFileInfo(it.key()).fileName(), it.value());
+            }
+            if (self->rowCount() > 0) {
+                emit self->dataChanged(self->index(0, int(Column::Tags)),
+                                       self->index(self->rowCount() - 1, int(Column::Tags)));
+            }
+            emit self->tagsPresenceChanged(!self->m_tags.isEmpty());
+        }, Qt::QueuedConnection);
+    });
 }
 
 void DirectoryModel::setFolderSizesEnabled(bool enabled)
@@ -575,11 +619,36 @@ QVariant DirectoryModel::data(const QModelIndex &index, int role) const
                 return QString();
             }
             return QLocale().toString(QDateTime::fromMSecsSinceEpoch(entry.modifiedMs), QLocale::ShortFormat);
+        case Column::Tags: {
+            QStringList names;
+            for (const tags::Tag &tag : m_tags.value(entry.name)) {
+                names.append(tag.name);
+            }
+            return names.join(QStringLiteral(", "));
+        }
         case Column::Count:
             break;
         }
         break;
     case Qt::DecorationRole:
+        if (column == Column::Tags) {
+            const QList<tags::Tag> tagList = m_tags.value(entry.name);
+            if (tagList.isEmpty()) {
+                return {};
+            }
+            // Un punto de color por etiqueta (hasta cuatro).
+            const int count = int(std::min<qsizetype>(tagList.size(), 4));
+            QPixmap dots(count * 12, 12);
+            dots.fill(Qt::transparent);
+            QPainter painter(&dots);
+            painter.setRenderHint(QPainter::Antialiasing);
+            for (int i = 0; i < count; ++i) {
+                painter.setBrush(QColor(tagList[i].color));
+                painter.setPen(Qt::NoPen);
+                painter.drawEllipse(QRectF(i * 12 + 1, 1, 10, 10));
+            }
+            return dots;
+        }
         if (column == Column::Name) {
             return m_types.infoFor(entry).icon;
         }
@@ -631,6 +700,7 @@ QVariant DirectoryModel::headerData(int section, Qt::Orientation orientation, in
     case Column::Size:     return tr("Tamaño");
     case Column::Type:     return tr("Tipo");
     case Column::Modified: return tr("Modificado");
+    case Column::Tags:     return tr("Etiquetas");
     case Column::Count:    break;
     }
     return {};

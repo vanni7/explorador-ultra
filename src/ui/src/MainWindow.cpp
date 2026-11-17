@@ -13,6 +13,7 @@
 #include "eu/ui/BulkRenameDialog.h"
 #include "eu/ui/DuplicatesDialog.h"
 #include "eu/ui/SimilarImagesDialog.h"
+#include "eu/ui/TagsDialog.h"
 #include "eu/ui/OrganizeDialog.h"
 #include "eu/ui/ContentIndexDialog.h"
 #include "eu/ui/IndexDialog.h"
@@ -36,6 +37,7 @@
 #include <QDockWidget>
 #include <QPointer>
 #include <QHBoxLayout>
+#include <QInputDialog>
 #include <QItemSelectionModel>
 #include <QLabel>
 #include <QLineEdit>
@@ -81,7 +83,16 @@ MainWindow::MainWindow(tasks::Scheduler &scheduler, std::shared_ptr<journal::Jou
     m_deviceMap.setVolumes(m_volumeMonitor.volumes());
     connect(&m_volumeMonitor, &fs::VolumeMonitor::volumesChanged, this,
             [this](const QList<fs::Volume> &volumes) { m_deviceMap.setVolumes(volumes); });
+    m_journal = journal;
     m_actions = new FileActions(m_scheduler, std::move(journal), this);
+    // Etiquetas (SPEC §17): en una base propia, junto a los demás datos.
+    {
+        const auto opened = tags::TagStore::open(QStandardPaths::writableLocation(QStandardPaths::AppDataLocation)
+                                                 + QStringLiteral("/etiquetas.db"));
+        if (opened.ok()) {
+            m_tagStore = opened.value();
+        }
+    }
     // Índices de búsqueda: una base por unidad, junto a los demás datos de la
     // aplicación. La carpeta de la papelera no se indexa (SPEC §10).
     m_indexService = new index::IndexService(
@@ -422,6 +433,9 @@ void MainWindow::createEditActions()
     m_similarAction->setToolTip(tr("Fotos casi iguales (recomprimidas, reducidas, retocadas), lado a lado para "
                                    "elegir cuáles quitar"));
     connect(m_similarAction, &QAction::triggered, this, &MainWindow::showSimilarImages);
+    m_tagsAction = new QAction(tr("Etiquetas…"), this);
+    m_tagsAction->setToolTip(tr("Crear, renombrar y colorear etiquetas; revisar las que perdieron su archivo"));
+    connect(m_tagsAction, &QAction::triggered, this, &MainWindow::showTags);
 
     m_cutAction = new QAction(themedIcon(QStringLiteral("edit-cut"), QStyle::SP_FileIcon), tr("Cortar"), this);
     m_cutAction->setShortcut(QKeySequence::Cut);
@@ -506,6 +520,8 @@ void MainWindow::createEditActions()
     toolsMenu->addSeparator();
     toolsMenu->addAction(m_duplicatesAction);
     toolsMenu->addAction(m_similarAction);
+    toolsMenu->addSeparator();
+    toolsMenu->addAction(m_tagsAction);
     editMenu->addAction(m_trashAction);
     editMenu->addAction(m_deleteAction);
 
@@ -705,6 +721,44 @@ void MainWindow::showContextMenu(BrowserPane *pane, const QPoint &globalPosition
                         [this, pane, format = format] { compressSelection(pane, format); });
             }
         }
+        // Etiquetas: marcadas las que tienen todos los seleccionados.
+        if (m_tagStore && !isVirtualLocation(pane->currentPath())) {
+            QMenu *tagMenu = menu.addMenu(tr("Etiquetas"));
+            const QList<tags::Tag> allTags = m_tagStore->tags();
+            for (const tags::Tag &tag : allTags) {
+                bool everyone = true;
+                for (const QString &path : selected) {
+                    bool has = false;
+                    for (const tags::Tag &own : pane->model()->tagsOf(QFileInfo(path).fileName())) {
+                        has = has || own.id == tag.id;
+                    }
+                    everyone = everyone && has;
+                }
+                QAction *action = tagMenu->addAction(tagIcon(tag.color), tag.name);
+                action->setCheckable(true);
+                action->setChecked(everyone);
+                connect(action, &QAction::toggled, this,
+                        [this, selected, id = tag.id](bool on) { setTag(selected, id, on); });
+            }
+            if (!allTags.isEmpty()) {
+                tagMenu->addSeparator();
+            }
+            QAction *create = tagMenu->addAction(tr("Nueva etiqueta…"));
+            connect(create, &QAction::triggered, this, [this, selected] {
+                const QString name = QInputDialog::getText(this, tr("Nueva etiqueta"), tr("Nombre:"));
+                if (name.trimmed().isEmpty()) {
+                    return;
+                }
+                const QStringList colors = tags::defaultColors();
+                const auto created = m_tagStore->createTag(name, colors.value(int(m_tagStore->tags().size()) % colors.size()));
+                if (!created.ok()) {
+                    report(created.error().message, true);
+                    return;
+                }
+                setTag(selected, created.value().id, true);
+            });
+            tagMenu->addAction(m_tagsAction);
+        }
         menu.addSeparator();
         menu.addAction(m_cutAction);
         menu.addAction(m_copyAction);
@@ -863,6 +917,93 @@ void MainWindow::showDuplicates()
     }
     // A la papelera propia: se recupera con Deshacer (SPEC §14.1).
     m_requestedCounts.insert(m_actions->trash(marked), int(marked.size()));
+}
+
+void MainWindow::setTag(const QStringList &paths, qint64 tagId, bool on)
+{
+    if (!m_tagStore || paths.isEmpty()) {
+        return;
+    }
+    const QPointer<MainWindow> self(this);
+    m_scheduler.submit(tasks::Category::Metadata, tasks::Priority::UserInteraction,
+                       [self, store = m_tagStore, paths, tagId, on](const tasks::CancelToken &) {
+        const core::Status status = on ? store->assign(paths, tagId) : store->unassign(paths, tagId);
+        QMetaObject::invokeMethod(qApp, [self, status] {
+            if (!self) {
+                return;
+            }
+            if (!status.ok()) {
+                self->report(status.error().message, true);
+            }
+            self->refreshTagsInPanes();
+        }, Qt::QueuedConnection);
+    });
+}
+
+void MainWindow::refreshTagsInPanes()
+{
+    for (int i = 0; i < m_tabs->count(); ++i) {
+        if (auto *pane = qobject_cast<BrowserPane *>(m_tabs->widget(i))) {
+            pane->model()->refreshTags();
+        }
+    }
+}
+
+void MainWindow::followTags(const ActionResult &result)
+{
+    static const QSet<ActionKind> moving{ActionKind::Move,         ActionKind::Rename,  ActionKind::BulkRename,
+                                         ActionKind::Organize,     ActionKind::Trash,   ActionKind::RestoreTrash,
+                                         ActionKind::Undo,         ActionKind::Revert};
+    if (!m_tagStore || !m_journal || result.outcome.operationId == 0 || !moving.contains(result.kind)) {
+        return;
+    }
+    const QPointer<MainWindow> self(this);
+    const bool reverse = result.kind == ActionKind::Undo || result.kind == ActionKind::Revert;
+    m_scheduler.submit(tasks::Category::Metadata, tasks::Priority::Background,
+                       [self, store = m_tagStore, journal = m_journal, id = result.outcome.operationId,
+                        reverse](const tasks::CancelToken &) {
+        const auto steps = journal->steps(id);
+        if (!steps.ok()) {
+            return;
+        }
+        QList<journal::Step> applied;
+        if (reverse) {
+            // Deshacer: los pasos deshechos, al revés y de vuelta.
+            for (qsizetype i = steps.value().size() - 1; i >= 0; --i) {
+                journal::Step step = steps.value()[i];
+                if (step.state != journal::StepState::Undone) {
+                    continue;
+                }
+                std::swap(step.source, step.target);
+                step.state = journal::StepState::Done;
+                applied.append(step);
+            }
+        } else {
+            applied = steps.value();
+        }
+        store->followSteps(applied);
+        QMetaObject::invokeMethod(qApp, [self] {
+            if (self) {
+                self->refreshTagsInPanes();
+            }
+        }, Qt::QueuedConnection);
+    });
+}
+
+void MainWindow::showTags()
+{
+    if (!m_tagStore) {
+        report(tr("Las etiquetas no están disponibles (no se pudo abrir su base)."), true);
+        return;
+    }
+    QStringList roots;
+    for (const fs::Volume &volume : searchVolumes()) {
+        roots.append(volume.rootPath);
+    }
+    TagsDialog dialog(m_scheduler, m_tagStore, roots, this);
+    connect(&dialog, &TagsDialog::tagsChanged, this, &MainWindow::refreshTagsInPanes);
+    dialog.exec();
+    refreshTagsInPanes();
 }
 
 QPair<QString, QStringList> MainWindow::volumesFor(const QString &folder)
@@ -1285,6 +1426,7 @@ void MainWindow::onActionProgressed(quint64 id, const ops::Progress &progress)
 void MainWindow::onActionFinished(const ActionResult &result)
 {
     m_runningKinds.remove(result.id);
+    followTags(result);
     const int requested = m_requestedCounts.take(result.id);
     const ops::Outcome &outcome = result.outcome;
 
@@ -1531,6 +1673,7 @@ BrowserPane *MainWindow::openTab(const QString &path)
                                                                 : core::SizeUnits::Decimal);
 
     pane->setIndexResolver([this](const QString &folder) { return m_indexService->indexFor(folder); });
+    pane->setTagStore(m_tagStore);
     pane->setContentCacheResolver(
         [this](const QStringList &roots) { return m_contentIndexService->cacheFactory(roots); });
     pane->setThumbnailService(m_thumbnailService);
