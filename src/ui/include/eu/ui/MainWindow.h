@@ -46,6 +46,9 @@ class MainWindow : public QMainWindow
     Q_OBJECT
 
 public:
+    /// La ✕ de una pestaña: si muestra una búsqueda, sale de ella; si no,
+    /// cierra la pestaña (y la ventana, si era la última).
+    void closeTab(int index);
     /// `journal` es el historial de operaciones. Si es nulo (no se pudo abrir),
     /// la ventana sirve para navegar pero no modifica archivos.
     explicit MainWindow(tasks::Scheduler &scheduler, std::shared_ptr<journal::Journal> journal = nullptr,
@@ -187,7 +190,6 @@ protected:
 private:
     void createActions();
     void createToolBar();
-    void closeTab(int index);
     void duplicateCurrentTab();
     void onCurrentTabChanged();
     void updateNavigationActions();

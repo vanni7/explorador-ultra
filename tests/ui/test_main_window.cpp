@@ -227,6 +227,18 @@ private slots:
         QCOMPARE(window.currentPane(), other);
         QCOMPARE(window.currentPane()->currentPath(), QDir::cleanPath(second.path()));
         QVERIFY(waitReady(other));
+
+        // La ✕ de una pestaña con una búsqueda sale de la búsqueda, no cierra
+        // nada (con una sola pestaña, cerraba la ventana entera).
+        window.closeTab(0);
+        QCOMPARE(window.tabCount(), 1);
+        window.searchEdit()->setText(QStringLiteral("*"));
+        QTest::keyClick(window.searchEdit(), Qt::Key_Return);
+        QVERIFY(other->showsSearch());
+        window.closeTab(0);
+        QCOMPARE(window.tabCount(), 1);
+        QVERIFY(!other->showsSearch());
+        QCOMPARE(other->currentPath(), QDir::cleanPath(second.path()));
     }
 
     void fileClipboardRoundTrip()

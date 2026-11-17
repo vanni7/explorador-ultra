@@ -336,15 +336,15 @@ private:
 
     DropPlan planFor(const QDropEvent *event, int *targetRow) const
     {
-        // Dentro de un comprimido no se suelta nada (aún no se añade a él).
-        if (m_model->path().isEmpty() || isArchiveLocation(m_model->path())) {
+        // Dentro de un comprimido no se suelta nada (aún no se añade a él), ni
+        // en una carpeta que no se pudo leer. Mientras se vuelve a leer (tras
+        // un cambio en el disco) sí: la lista sigue mostrando sus filas.
+        if (m_model->path().isEmpty() || isArchiveLocation(m_model->path())
+            || m_model->state() == DirectoryModel::State::Failed || m_model->state() == DirectoryModel::State::Empty) {
             return {};
         }
-        // Mientras la carpeta se vuelve a leer (tras un cambio en el disco) se
-        // puede soltar en ella; sobre una fila, no: puede estar desfasada.
-        const bool ready = m_model->state() == DirectoryModel::State::Ready;
         QString target = m_model->path();
-        const QModelIndex index = ready ? indexAt(event->position().toPoint()) : QModelIndex();
+        const QModelIndex index = indexAt(event->position().toPoint());
         if (index.isValid() && m_model->entryAt(index.row()).isDirectory) {
             *targetRow = index.row();
             target = m_model->filePath(index.row());

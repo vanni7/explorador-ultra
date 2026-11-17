@@ -1735,6 +1735,13 @@ void MainWindow::closeTab(int index)
     if (index < 0) {
         return;
     }
+    // La ✕ de una pestaña con resultados de búsqueda sale primero de la
+    // búsqueda (vuelve a la carpeta donde se buscó); otra ✕ cierra la pestaña.
+    // Así salir de una búsqueda nunca cierra la ventana sin querer.
+    if (auto *searching = qobject_cast<BrowserPane *>(m_tabs->widget(index)); searching && searching->showsSearch()) {
+        searching->goUp();
+        return;
+    }
     // Siempre queda al menos una pestaña: cerrar la última cierra la ventana.
     if (m_tabs->count() == 1) {
         close();
