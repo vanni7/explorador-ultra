@@ -15,10 +15,15 @@
 #include <QPainter>
 #include <QPointer>
 #include <QStandardItemModel>
+#include <QTimer>
+#include <QFileInfo>
+#include <QDirIterator>
 #include <QStandardPaths>
 #include <QStyle>
 
 #include <algorithm>
+
+#include <functional>
 
 namespace eu::ui {
 
@@ -28,6 +33,7 @@ enum ItemRole {
     PathRole = Qt::UserRole + 1,   ///< Ruta del nodo (vacía en las secciones).
     LoadedRole,                    ///< true si ya se leyeron sus subcarpetas.
     PlaceholderRole,               ///< Hijo ficticio para que aparezca la flecha de desplegar.
+    RefreshingRole,                ///< Se está volviendo a leer una carpeta ya leída.
 };
 
 QIcon themedIcon(const QString &name, QStyle::StandardPixmap fallback)
@@ -63,6 +69,7 @@ Sidebar::Sidebar(tasks::Scheduler &scheduler, fs::VolumeMonitor &volumes, QWidge
     m_model->appendRow(m_volumesSection);
 
     buildFavorites();
+    checkTopLevelArrows(m_favoritesSection);
     rebuildVolumes(volumes.volumes());
     expand(m_favoritesSection->index());
     expand(m_volumesSection->index());
@@ -265,19 +272,110 @@ void Sidebar::paintEvent(QPaintEvent *event)
     painter.drawRect(frame.adjusted(1, 1, -2, -2));
 }
 
-QStandardItem *Sidebar::makeFolderItem(const QString &text, const QString &path, const QIcon &icon)
+QStandardItem *Sidebar::makeFolderItem(const QString &text, const QString &path, const QIcon &icon,
+                                      bool mayHaveChildren)
 {
     auto *item = new QStandardItem(icon, text);
     item->setData(path, PathRole);
-    item->setData(false, LoadedRole);
     item->setToolTip(QDir::toNativeSeparators(path));
-    // Hijo ficticio: sin él la vista no ofrece desplegar. Se sustituye por las
-    // subcarpetas reales la primera vez que se despliega.
-    auto *placeholder = new QStandardItem(tr("Cargando…"));
-    placeholder->setData(true, PlaceholderRole);
-    placeholder->setFlags(Qt::NoItemFlags);
-    item->appendRow(placeholder);
+    setArrow(item, mayHaveChildren);
     return item;
+}
+
+void Sidebar::setArrow(QStandardItem *item, bool hasChildren)
+{
+    // Con subcarpetas: hijo ficticio (sin él la vista no ofrece desplegar), que
+    // se sustituye por las reales al desplegar. Sin ellas: sin flecha, y se da
+    // por leída (refreshFolder la corrige si aparecen).
+    const bool hasPlaceholder = item->rowCount() == 1 && item->child(0)->data(PlaceholderRole).toBool();
+    if (hasChildren && item->rowCount() == 0) {
+        auto *placeholder = new QStandardItem(tr("Cargando…"));
+        placeholder->setData(true, PlaceholderRole);
+        placeholder->setFlags(Qt::NoItemFlags);
+        item->appendRow(placeholder);
+        item->setData(false, LoadedRole);
+    } else if (!hasChildren && (hasPlaceholder || item->rowCount() == 0)) {
+        item->removeRows(0, item->rowCount());
+        item->setData(true, LoadedRole);
+    }
+}
+
+bool Sidebar::hasSubfolders(const QString &path)
+{
+    // Basta con la primera carpeta que aparezca (las ocultas no se muestran).
+    QDirIterator it(path, QDir::Dirs | QDir::NoDotAndDotDot);
+    return it.hasNext();
+}
+
+void Sidebar::checkTopLevelArrows(QStandardItem *section)
+{
+    QStringList paths;
+    for (int row = 0; row < section->rowCount(); ++row) {
+        paths.append(section->child(row)->data(PathRole).toString());
+    }
+    const QPointer<Sidebar> self(this);
+    m_scheduler.submit(tasks::Category::Listing, tasks::Priority::Background,
+                       [self, paths](const tasks::CancelToken &cancel) {
+        QStringList leaves;
+        for (const QString &path : paths) {
+            if (cancel.isCancelled()) {
+                return;
+            }
+            if (!path.isEmpty() && QFileInfo(path).isDir() && !hasSubfolders(path)) {
+                leaves.append(path);
+            }
+        }
+        QMetaObject::invokeMethod(qApp, [self, leaves] {
+            if (!self) {
+                return;
+            }
+            for (QStandardItem *group : {self->m_favoritesSection, self->m_volumesSection}) {
+                for (int row = 0; row < group->rowCount(); ++row) {
+                    QStandardItem *item = group->child(row);
+                    if (leaves.contains(item->data(PathRole).toString()) && !item->data(LoadedRole).toBool()) {
+                        self->setArrow(item, false);
+                    }
+                }
+            }
+        }, Qt::QueuedConnection);
+    });
+}
+
+void Sidebar::refreshFolder(const QString &path)
+{
+    const QString clean = QDir::cleanPath(path);
+    // Los nodos de esa carpeta, en todo el árbol (puede estar en Favoritos y en Unidades).
+    QList<QStandardItem *> found;
+    const std::function<void(QStandardItem *)> walk = [&](QStandardItem *parent) {
+        for (int row = 0; row < parent->rowCount(); ++row) {
+            QStandardItem *child = parent->child(row);
+            if (child->data(PathRole).toString() == clean) {
+                found.append(child);
+            }
+            if (child->data(LoadedRole).toBool()) {
+                walk(child);
+            }
+        }
+    };
+    walk(m_favoritesSection);
+    walk(m_volumesSection);
+    for (QStandardItem *item : std::as_const(found)) {
+        if (item->data(LoadedRole).toBool()) {
+            loadChildren(item, true);   // se vuelve a leer y se junta con lo que hay
+            continue;
+        }
+        // Sin desplegar: solo si lleva flecha o no.
+        const QPointer<Sidebar> self(this);
+        m_scheduler.submit(tasks::Category::Listing, tasks::Priority::Background,
+                           [self, clean](const tasks::CancelToken &) {
+            const bool any = hasSubfolders(clean);
+            QMetaObject::invokeMethod(qApp, [self, clean, any] {
+                if (self) {
+                    self->refreshFolderArrow(clean, any);
+                }
+            }, Qt::QueuedConnection);
+        });
+    }
 }
 
 void Sidebar::buildFavorites()
@@ -328,6 +426,7 @@ void Sidebar::rebuildVolumes(const QList<fs::Volume> &volumes)
     });
     m_volumesSection->removeRows(0, m_volumesSection->rowCount());
 
+    QTimer::singleShot(0, this, [this] { checkTopLevelArrows(m_volumesSection); });
     for (const fs::Volume &volume : volumes) {
         QStandardItem *item = makeFolderItem(volume.displayName, volume.rootPath, iconForVolume(volume));
         item->setToolTip(tr("%1\n%2 libres de %3 · %4")
@@ -338,9 +437,9 @@ void Sidebar::rebuildVolumes(const QList<fs::Volume> &volumes)
     }
 }
 
-void Sidebar::loadChildren(QStandardItem *item)
+void Sidebar::loadChildren(QStandardItem *item, bool again)
 {
-    if (item == nullptr || item->data(LoadedRole).toBool() || m_loadingItems.contains(item)) {
+    if (item == nullptr || (item->data(LoadedRole).toBool() && !again) || m_loadingItems.contains(item)) {
         return;
     }
     const QString path = item->data(PathRole).toString();
@@ -348,6 +447,8 @@ void Sidebar::loadChildren(QStandardItem *item)
         return;
     }
     m_loadingItems.append(item);
+    // Si ya estaba leída (refreshFolder) se vuelve a leer y se junta.
+    item->setData(item->data(LoadedRole).toBool(), RefreshingRole);
 
     // La tarea no toca `this` directamente: el resultado vuelve al hilo de
     // interfaz y allí se comprueba, con el QPointer, que el panel sigue vivo.
@@ -366,10 +467,16 @@ void Sidebar::loadChildren(QStandardItem *item)
         std::sort(folders.begin(), folders.end(), [](const QString &a, const QString &b) {
             return core::naturalCompare(a, b) < 0;
         });
+        // Cuáles tienen a su vez subcarpetas, para poner flecha solo en esas
+        // (con muchas, las del final la llevan hasta que se desplieguen).
+        QList<bool> withSubfolders;
+        for (qsizetype i = 0; i < folders.size(); ++i) {
+            withSubfolders.append(i >= 400 || cancel.isCancelled() || hasSubfolders(QDir(path).filePath(folders[i])));
+        }
         const bool failed = !status.ok();
-        QMetaObject::invokeMethod(qApp, [self, path, folders, failed] {
+        QMetaObject::invokeMethod(qApp, [self, path, folders, withSubfolders, failed] {
             if (self) {
-                self->applyChildren(path, folders, failed);
+                self->applyChildren(path, folders, withSubfolders, failed);
             }
         }, Qt::QueuedConnection);
     });
@@ -385,13 +492,53 @@ QStandardItem *Sidebar::findLoadingItem(const QString &path) const
     return nullptr;
 }
 
-void Sidebar::applyChildren(const QString &path, const QStringList &folderNames, bool failed)
+void Sidebar::applyChildren(const QString &path, const QStringList &folderNames, const QList<bool> &withSubfolders,
+                            bool failed)
 {
     QStandardItem *item = findLoadingItem(path);
     if (item == nullptr) {
         return;   // el nodo desapareció mientras se leía (p. ej. se desconectó la unidad)
     }
     m_loadingItems.removeAll(item);
+    const QIcon folderIcon = themedIcon(QStringLiteral("folder"), QStyle::SP_DirIcon);
+    if (!failed && item->data(RefreshingRole).toBool()) {
+        // Ya estaba leída: se juntan los cambios sin tocar lo que sigue igual
+        // (así no se pliega lo que el usuario tenía desplegado).
+        item->setData(false, RefreshingRole);
+        for (int row = item->rowCount() - 1; row >= 0; --row) {
+            const QString name = QFileInfo(item->child(row)->data(PathRole).toString()).fileName();
+            if (!folderNames.contains(name)) {
+                item->removeRow(row);
+            }
+        }
+        for (qsizetype i = 0; i < folderNames.size(); ++i) {
+            const QString childPath = QDir(path).filePath(folderNames[i]);
+            int row = 0;
+            bool exists = false;
+            for (; row < item->rowCount(); ++row) {
+                const QString existing = item->child(row)->data(PathRole).toString();
+                if (existing == childPath) {
+                    exists = true;
+                    break;
+                }
+                if (core::naturalCompare(QFileInfo(existing).fileName(), folderNames[i]) > 0) {
+                    break;
+                }
+            }
+            if (exists) {
+                if (!item->child(row)->data(LoadedRole).toBool() || item->child(row)->rowCount() == 0) {
+                    setArrow(item->child(row), withSubfolders.value(i, true));
+                }
+            } else {
+                item->insertRow(row, makeFolderItem(folderNames[i], childPath, folderIcon, withSubfolders.value(i, true)));
+            }
+        }
+        if (item->rowCount() == 0) {
+            setArrow(item, false);
+        }
+        return;
+    }
+    item->setData(false, RefreshingRole);
     item->removeRows(0, item->rowCount());
 
     if (failed) {
@@ -401,10 +548,28 @@ void Sidebar::applyChildren(const QString &path, const QStringList &folderNames,
         return;   // LoadedRole queda en false: al volver a desplegar se reintenta
     }
     item->setData(true, LoadedRole);
-    const QIcon folderIcon = themedIcon(QStringLiteral("folder"), QStyle::SP_DirIcon);
-    for (const QString &name : folderNames) {
-        item->appendRow(makeFolderItem(name, QDir(path).filePath(name), folderIcon));
+    for (qsizetype i = 0; i < folderNames.size(); ++i) {
+        item->appendRow(makeFolderItem(folderNames[i], QDir(path).filePath(folderNames[i]), folderIcon,
+                                       withSubfolders.value(i, true)));
     }
+}
+
+void Sidebar::refreshFolderArrow(const QString &path, bool hasChildren)
+{
+    const std::function<void(QStandardItem *)> walk = [&](QStandardItem *parent) {
+        for (int row = 0; row < parent->rowCount(); ++row) {
+            QStandardItem *child = parent->child(row);
+            if (child->data(PathRole).toString() == path && !m_loadingItems.contains(child)
+                && (!child->data(LoadedRole).toBool() || child->rowCount() == 0)) {
+                setArrow(child, hasChildren);
+            }
+            if (child->data(LoadedRole).toBool()) {
+                walk(child);
+            }
+        }
+    };
+    walk(m_favoritesSection);
+    walk(m_volumesSection);
 }
 
 } // namespace eu::ui

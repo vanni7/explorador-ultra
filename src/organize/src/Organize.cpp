@@ -93,6 +93,7 @@ QList<Rule> defaultRules()
         rule(tr("Excel"), QStringLiteral("xls xlsx ods csv"), tr("Documentos/Excel")),
         rule(tr("PowerPoint"), QStringLiteral("ppt pptx odp"), tr("Documentos/PowerPoint")),
         rule(tr("Texto"), QStringLiteral("txt md"), tr("Documentos/Texto")),
+        rule(tr("Páginas web"), QStringLiteral("html htm mhtml"), tr("Documentos/Web")),
         rule(tr("JPG"), QStringLiteral("jpg jpeg"), tr("Imágenes/JPG")),
         rule(tr("PNG"), QStringLiteral("png"), tr("Imágenes/PNG")),
         rule(tr("RAW"), QStringLiteral("cr2 cr3 nef arw dng orf rw2 raf pef srw"), tr("Imágenes/RAW")),
@@ -139,6 +140,17 @@ Plan simulate(const QString &root, const Options &options, const tasks::CancelTo
         const QString path = it.next();
         if (!QFileInfo(path).isSymLink()) {
             files.append(path);
+        }
+    }
+    if (!options.recursive) {
+        // Lo que hay en subcarpetas no se mira: se cuenta para decirlo.
+        QDirIterator inside(base, QDir::Dirs | QDir::NoDotAndDotDot, QDirIterator::NoIteratorFlags);
+        while (inside.hasNext() && !cancel.isCancelled() && plan.inSubfolders < 100000) {
+            QDirIterator nested(inside.next(), filters, QDirIterator::Subdirectories);
+            while (nested.hasNext() && plan.inSubfolders < 100000) {
+                nested.next();
+                ++plan.inSubfolders;
+            }
         }
     }
     files.sort();

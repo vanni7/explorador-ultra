@@ -161,6 +161,11 @@ public:
     /// pregunta qué hacer. Solo debe llamarlo la instancia que es dueña del
     /// historial: otra instancia en marcha tendría operaciones "en curso" legítimas.
     void checkInterruptedOperations();
+    /// Extrae del comprimido (lo seleccionado dentro de él, o todo) junto al
+    /// comprimido: en una carpeta nueva con su nombre, o en la misma carpeta
+    /// (sin sobrescribir lo que ya exista).
+    void extractArchive(const QString &archivePath, const QStringList &innerPaths, const QString &innerFolder,
+                        bool intoNewFolder = true);
 
 public slots:
     // Acciones sobre la pestaña activa (las mismas del menú y los atajos).
@@ -237,6 +242,7 @@ private:
     std::function<RecoveryChoice(const QList<journal::Operation> &)> m_recoveryChoice;
     QHash<quint64, ActionKind> m_runningKinds;
     QHash<quint64, int> m_requestedCounts;   ///< Cuántos elementos se pidieron en cada acción.
+    QList<quint64> m_extractHereIds;          ///< Extracciones en la misma carpeta (sin carpeta nueva).
     quint64 m_renameAfterCreateId = 0;       ///< Acción "nuevo…" cuyo resultado se deja listo para nombrar.
 
     // Indicador de avance en la barra de estado.
@@ -291,9 +297,6 @@ private:
     QHash<int, QAction *> m_thumbnailSizeActions;   ///< Por tamaño en píxeles.
     int m_thumbnailSize = 160;
     void syncViewActions();
-    /// Extrae del comprimido (lo seleccionado dentro de él, o todo) en una
-    /// carpeta nueva junto al comprimido.
-    void extractArchive(const QString &archivePath, const QStringList &innerPaths, const QString &innerFolder);
     /// Comprime lo seleccionado en la carpeta actual.
     void compressSelection(BrowserPane *pane, archive::Format format);
     /// Nombre libre en `folder` para `stem` + `extension` ("x", "x (2)"…).

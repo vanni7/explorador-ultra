@@ -1202,6 +1202,92 @@ private slots:
         QCOMPARE(pane->currentPath(), QDir::cleanPath(QDir::rootPath()));
     }
 
+    void backspaceAndLeftArrowGoUp()
+    {
+        QTemporaryDir directory;
+        const QString root = QDir::cleanPath(directory.path());
+        QVERIFY(QDir(root).mkpath(QStringLiteral("dentro/más")));
+        writeFile(root + QStringLiteral("/dentro/más/a.txt"));
+
+        MainWindow window(m_scheduler, openJournal(directory));
+        BrowserPane *pane = window.openTab(root + QStringLiteral("/dentro/más"));
+        QVERIFY(waitReady(pane));
+        window.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&window));
+        pane->view()->setFocus();
+
+        QTest::keyClick(pane->view(), Qt::Key_Backspace);
+        QTRY_COMPARE(pane->currentPath(), root + QStringLiteral("/dentro"));
+        QVERIFY(waitReady(pane));
+        QTest::keyClick(pane->view(), Qt::Key_Left);
+        QTRY_COMPARE(pane->currentPath(), root);
+        QVERIFY(waitReady(pane));
+        // Al subir queda marcada la carpeta de la que se venía.
+        QTRY_COMPARE(pane->model()->entryAt(pane->view()->currentIndex().row()).name, QStringLiteral("dentro"));
+    }
+
+    void treeArrowsPasteAndRefresh()
+    {
+        QTemporaryDir directory;
+        QVERIFY(QDir(directory.path()).mkpath(QStringLiteral("raiz/alfa/dentro")));
+        QVERIFY(QDir(directory.path()).mkpath(QStringLiteral("raiz/beta")));
+        const QString root = QDir::cleanPath(directory.filePath(QStringLiteral("raiz")));
+        const QString alfa = root + QStringLiteral("/alfa");
+        const QString beta = root + QStringLiteral("/beta");
+        writeFile(root + QStringLiteral("/nota.txt"), 3);
+
+        MainWindow window(m_scheduler, openJournal(directory));
+        BrowserPane *pane = window.openTab(root);
+        QVERIFY(waitReady(pane));
+        window.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&window));
+        window.activateWindow();
+
+        Sidebar *sidebar = window.sidebar();
+        sidebar->addPlace(QStringLiteral("Raíz"), root);
+        const auto indexOf = [sidebar](const QString &path) {
+            const QPoint position = sidebar->positionOf(path);
+            return position.isNull() ? QModelIndex() : sidebar->indexAt(position);
+        };
+        QTest::mouseClick(sidebar->viewport(), Qt::LeftButton, Qt::NoModifier, sidebar->positionOf(root));
+        QTRY_VERIFY(indexOf(beta).isValid());
+        // Flecha solo en las carpetas que tienen subcarpetas.
+        QTRY_VERIFY(sidebar->model()->hasChildren(indexOf(alfa)));
+        QVERIFY(!sidebar->model()->hasChildren(indexOf(beta)));
+
+        // Ctrl+V con el teclado en el árbol pega en la carpeta elegida en él.
+        std::unique_ptr<QMimeData> copied(makeFileMimeData({root + QStringLiteral("/nota.txt")}, false));
+        QGuiApplication::clipboard()->setMimeData(copied.release());
+        QTest::mouseClick(sidebar->viewport(), Qt::LeftButton, Qt::NoModifier, sidebar->positionOf(beta));
+        QTRY_COMPARE(pane->currentPath(), beta);
+        QCOMPARE(window.focusWidget(), sidebar);
+        QCOMPARE(sidebar->currentPlace(), beta);
+        QTest::keyClick(sidebar, Qt::Key_V, Qt::ControlModifier);
+        QVERIFY(waitIdle(window));
+        QTRY_VERIFY(QFileInfo(beta + QStringLiteral("/nota.txt")).isFile());
+
+        // Una carpeta pegada en "beta": el árbol le pone flecha y la muestra.
+        std::unique_ptr<QMimeData> folder(makeFileMimeData({alfa}, false));
+        QGuiApplication::clipboard()->setMimeData(folder.release());
+        QTest::keyClick(sidebar, Qt::Key_V, Qt::ControlModifier);
+        QVERIFY(waitIdle(window));
+        QTRY_VERIFY(sidebar->model()->hasChildren(indexOf(beta)));
+        sidebar->expand(indexOf(beta));
+        QTRY_VERIFY(indexOf(beta + QStringLiteral("/alfa")).isValid());
+        QTRY_VERIFY(sidebar->model()->hasChildren(indexOf(beta + QStringLiteral("/alfa"))));
+
+        // Hecho por otro programa: al leer la carpeta, el árbol se pone al día.
+        QVERIFY(QDir(root).mkdir(QStringLiteral("gamma")));
+        QVERIFY(QDir(beta + QStringLiteral("/alfa")).removeRecursively());
+        pane->navigateTo(root);
+        QVERIFY(waitReady(pane));
+        QTRY_VERIFY(indexOf(root + QStringLiteral("/gamma")).isValid());
+        QVERIFY(!sidebar->model()->hasChildren(indexOf(root + QStringLiteral("/gamma"))));
+        pane->navigateTo(beta);
+        QVERIFY(waitReady(pane));
+        QTRY_VERIFY(!sidebar->model()->hasChildren(indexOf(beta)));
+    }
+
     void arrowKeysWorkInsideTheTree()
     {
         QTemporaryDir directory;
@@ -1898,6 +1984,24 @@ private slots:
         QVERIFY(QFileInfo(root + QStringLiteral("/parcial/sub/foto2.txt")).isFile());
         QVERIFY(!QFileInfo::exists(root + QStringLiteral("/parcial/álbum")));
         QVERIFY(!QFileInfo::exists(root + QStringLiteral("/parcial/foto1.txt")));
+
+        // Extraer aquí, en la misma carpeta del comprimido: lo nuevo queda
+        // junto a él y lo que ya existía no se toca.
+        const QString here = root + QStringLiteral("/aquí");
+        QVERIFY(QDir().mkdir(here));
+        QVERIFY(QFile::copy(zip, here + QStringLiteral("/paquete.zip")));
+        writeFile(here + QStringLiteral("/notas.txt"), 2);
+        QSignalSpy hereReports(&window, &MainWindow::actionReported);
+        window.extractArchive(here + QStringLiteral("/paquete.zip"), {}, QString(), false);
+        QVERIFY(waitIdle(window));
+        QVERIFY(QFileInfo(here + QStringLiteral("/álbum/sub/foto2.txt")).isFile());
+        QCOMPARE(QFileInfo(here + QStringLiteral("/notas.txt")).size(), 2);
+        QCOMPARE(QDir(here).entryList(QDir::AllEntries | QDir::NoDotAndDotDot).size(), 3);   // zip, notas y álbum
+        QTRY_COMPARE(hereReports.count(), 1);
+        QVERIFY2(hereReports.first().at(0).toString().contains(QStringLiteral("1 elemento(s) nuevo")),
+                 qPrintable(hereReports.first().at(0).toString()));
+        QVERIFY2(hereReports.first().at(0).toString().contains(QStringLiteral("ya existían")),
+                 qPrintable(hereReports.first().at(0).toString()));
 
         // Comprimir encima de uno que ya existe: error, y el existente sigue igual.
         const qint64 before = QFileInfo(zip).size();

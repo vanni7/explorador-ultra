@@ -185,6 +185,18 @@ MainWindow::MainWindow(tasks::Scheduler &scheduler, std::shared_ptr<journal::Jou
     });
     connect(m_sidebar, &Sidebar::filesDropped, this, &MainWindow::transfer);
     connect(m_sidebar, &Sidebar::contextMenuRequested, this, &MainWindow::showSidebarMenu);
+    // Ctrl+V con el teclado en el árbol pega en la carpeta elegida en él
+    // (como "Pegar en esta carpeta" de su menú).
+    auto *pasteInTree = new QAction(tr("Pegar en la carpeta del árbol"), m_sidebar);
+    pasteInTree->setShortcut(QKeySequence::Paste);
+    pasteInTree->setShortcutContext(Qt::WidgetShortcut);
+    m_sidebar->addAction(pasteInTree);
+    connect(pasteInTree, &QAction::triggered, this, [this] {
+        const QString place = m_sidebar->currentPlace();
+        if (m_actions->isAvailable() && !place.isEmpty() && QFileInfo(place).isDir()) {
+            pasteInto(place);
+        }
+    });
     m_sidebar->setMoveByDefaultRule([this](const QString &source, const QString &destination) {
         return movesByDefault(source, destination);
     });
@@ -708,9 +720,14 @@ void MainWindow::showContextMenu(BrowserPane *pane, const QPoint &globalPosition
         const QStringList selected = pane->selectedPaths();
         if (archive::isAvailable() && m_actions->isAvailable()) {
             if (selected.size() == 1 && archive::isArchiveName(selected.first()) && QFileInfo(selected.first()).isFile()) {
-                QAction *here = menu.addAction(tr("Extraer aquí (en una carpeta nueva)"));
                 const QString archivePath = selected.first();
-                connect(here, &QAction::triggered, this, [this, archivePath] { extractArchive(archivePath, {}, QString()); });
+                QAction *here = menu.addAction(tr("Extraer aquí"));
+                here->setToolTip(tr("En esta misma carpeta; lo que ya exista no se sobrescribe"));
+                connect(here, &QAction::triggered, this,
+                        [this, archivePath] { extractArchive(archivePath, {}, QString(), false); });
+                QAction *newFolder = menu.addAction(tr("Extraer aquí (en una carpeta nueva)"));
+                connect(newFolder, &QAction::triggered, this,
+                        [this, archivePath] { extractArchive(archivePath, {}, QString()); });
             }
             QMenu *compress = menu.addMenu(tr("Comprimir"));
             for (const auto &[format, name] : {std::pair{archive::Format::Zip, tr("En ZIP")},
@@ -789,7 +806,8 @@ QString MainWindow::freeName(const QString &folder, const QString &stem, const Q
     return name;
 }
 
-void MainWindow::extractArchive(const QString &archivePath, const QStringList &innerPaths, const QString &innerFolder)
+void MainWindow::extractArchive(const QString &archivePath, const QStringList &innerPaths, const QString &innerFolder,
+                                bool intoNewFolder)
 {
     if (!m_actions->isAvailable()) {
         return;
@@ -811,8 +829,12 @@ void MainWindow::extractArchive(const QString &archivePath, const QStringList &i
         stem = info.completeBaseName();
     }
     const QString folder = info.path();
-    const quint64 id = m_actions->extract(archivePath, innerPaths, innerFolder, folder, freeName(folder, stem, QString()));
+    const quint64 id = m_actions->extract(archivePath, innerPaths, innerFolder, folder,
+                                          intoNewFolder ? freeName(folder, stem, QString()) : QString());
     m_requestedCounts.insert(id, 1);
+    if (!intoNewFolder) {
+        m_extractHereIds.append(id);
+    }
 }
 
 void MainWindow::compressSelection(BrowserPane *pane, archive::Format format)
@@ -1454,6 +1476,21 @@ void MainWindow::onActionFinished(const ActionResult &result)
     if (result.id == m_renameAfterCreateId) {
         m_renameAfterCreateId = 0;
     }
+    // El árbol: la carpeta de la operación y las que quedaron entre ella y lo
+    // creado (al organizar aparecen "Documentos" y "Documentos/PDF").
+    if (!directory.isEmpty()) {
+        QStringList changed{directory};
+        for (const QString &path : outcome.resultPaths) {
+            for (QString folder = parentPathOf(path); changed.size() < 200 && folder.size() > directory.size()
+                                                      && folder.startsWith(directory) && !changed.contains(folder);
+                 folder = parentPathOf(folder)) {
+                changed.append(folder);
+            }
+        }
+        for (const QString &folder : std::as_const(changed)) {
+            m_sidebar->refreshFolder(folder);
+        }
+    }
 
     // 2. Enviar a la papelera en un volumen sin papelera: se ofrece la
     //    eliminación permanente, con la confirmación reforzada (SPEC §10.2).
@@ -1516,6 +1553,17 @@ void MainWindow::onActionFinished(const ActionResult &result)
             message = tr("Se descartó la operación interrumpida: %1").arg(result.undoneDescription);
             break;
         case ActionKind::Extract:
+            if (m_extractHereIds.removeAll(result.id) > 0) {
+                message = tr("Extraído en «%1»: %n elemento(s) nuevo(s).", nullptr, int(outcome.resultPaths.size()))
+                              .arg(QFileInfo(directory).fileName().isEmpty() ? QDir::toNativeSeparators(directory)
+                                                                              : QFileInfo(directory).fileName());
+                if (!outcome.skipped.isEmpty()) {
+                    message += tr(" %n elemento(s) no se extrajeron porque ya existían en la carpeta (no se "
+                                  "sobrescribe nada) o no se podían extraer; detalle en el registro.",
+                                  nullptr, int(outcome.skipped.size()));
+                }
+                break;
+            }
             if (outcome.ok() && !outcome.resultPaths.isEmpty()) {
                 message = tr("Extraído en «%1».").arg(QFileInfo(outcome.resultPaths.first()).fileName());
             }
@@ -1706,6 +1754,13 @@ BrowserPane *MainWindow::openTab(const QString &path)
         if (pane == currentPane()) {
             updateStatus();
             updateEditActions();
+        }
+    });
+    // Cada vez que se lee la carpeta a la vista, el árbol la pone al día (carpetas
+    // creadas o borradas desde aquí o desde otro programa).
+    connect(pane->model(), &DirectoryModel::stateChanged, this, [this, pane](DirectoryModel::State state) {
+        if (state == DirectoryModel::State::Ready && pane->showsFolder() && !pane->showsArchive()) {
+            m_sidebar->refreshFolder(pane->currentPath());
         }
     });
     connect(pane, &BrowserPane::bulkRenameRequested, this, &MainWindow::showBulkRename);

@@ -54,6 +54,7 @@ struct Plan
     QStringList foldersToCreate;   ///< Rutas completas, de fuera hacia dentro.
     int alreadyInPlace = 0;        ///< Ya estaban donde les toca.
     int withoutRule = 0;           ///< Ninguna regla los cubre: se quedan.
+    int inSubfolders = 0;          ///< Sin recorrer subcarpetas: archivos que hay en ellas y no se miran.
 };
 
 struct PlanOptions

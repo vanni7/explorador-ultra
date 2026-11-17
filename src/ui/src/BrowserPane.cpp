@@ -516,6 +516,7 @@ BrowserPane::BrowserPane(tasks::Scheduler &scheduler, fs::DirectoryWatcher &watc
     searchBarLayout->addWidget(m_searchAgainButton);
 
     m_resultsView = new QTreeView(m_searchPage);
+    m_resultsView->installEventFilter(this);   // Retroceso / flecha izquierda: salir de la búsqueda
     m_resultsView->setModel(m_resultsModel);
     m_resultsView->setRootIsDecorated(false);
     m_resultsView->setUniformRowHeights(true);
@@ -1023,6 +1024,18 @@ bool BrowserPane::eventFilter(QObject *watched, QEvent *event)
         && selectedCount() > 1 && !isVirtualLocation(m_location)) {
         emit bulkRenameRequested();
         return true;
+    }
+    // Retroceso sube un nivel; la flecha izquierda también en la lista de
+    // detalles y en los resultados (en las miniaturas mueve a la izquierda).
+    if (event->type() == QEvent::KeyPress) {
+        const auto *key = static_cast<QKeyEvent *>(event);
+        const bool plain = (key->modifiers() & ~Qt::KeypadModifier) == Qt::NoModifier;
+        const bool up = key->key() == Qt::Key_Backspace
+            || (key->key() == Qt::Key_Left && watched != m_thumbView);
+        if (plain && up && canGoUp()) {
+            goUp();
+            return true;
+        }
     }
     return QWidget::eventFilter(watched, event);
 }
