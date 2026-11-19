@@ -14,6 +14,9 @@
 #include "eu/ui/DuplicatesDialog.h"
 #include "eu/ui/SimilarImagesDialog.h"
 #include "eu/ui/SyncDialog.h"
+#include "eu/ui/Appearance.h"
+#include "eu/ui/PreferencesDialog.h"
+#include "eu/ui/Shortcuts.h"
 #include "eu/ui/TagsDialog.h"
 #include "eu/ui/OrganizeDialog.h"
 #include "eu/ui/ContentIndexDialog.h"
@@ -258,6 +261,8 @@ MainWindow::MainWindow(tasks::Scheduler &scheduler, std::shared_ptr<journal::Jou
     createEditActions();
     createToolBar();
     createProgressWidgets();
+    // Los atajos de fábrica, antes de aplicar los que el usuario haya cambiado.
+    rememberDefaultShortcuts(customizableActions());
 
     connect(m_actions, &FileActions::started, this, &MainWindow::onActionStarted);
     connect(m_actions, &FileActions::progressed, this, &MainWindow::onActionProgressed);
@@ -599,6 +604,12 @@ void MainWindow::createEditActions()
     m_similarAction->setToolTip(tr("Fotos casi iguales (recomprimidas, reducidas, retocadas), lado a lado para "
                                    "elegir cuáles quitar"));
     connect(m_similarAction, &QAction::triggered, this, &MainWindow::showSimilarImages);
+    m_preferencesAction = new QAction(themedIcon(QStringLiteral("configure"), QStyle::SP_FileDialogDetailedView),
+                                      tr("Preferencias…"), this);
+    m_preferencesAction->setShortcuts({QKeySequence(Qt::CTRL | Qt::Key_Comma)});
+    m_preferencesAction->setMenuRole(QAction::PreferencesRole);   // en macOS va al menú de la aplicación
+    m_preferencesAction->setToolTip(tr("Tema, colores, letra, atajos de teclado y exportar o importar la configuración"));
+    connect(m_preferencesAction, &QAction::triggered, this, &MainWindow::showPreferences);
     m_syncAction = new QAction(tr("Comparar y sincronizar carpetas…"), this);
     m_syncAction->setToolTip(tr("Ver qué cambia entre dos carpetas y copiar en uno o en los dos sentidos; con el "
                                 "doble panel, compara las carpetas de los dos paneles"));
@@ -687,6 +698,8 @@ void MainWindow::createEditActions()
     editMenu->addAction(m_moveToOtherAction);
     editMenu->addSeparator();
     editMenu->addAction(m_selectAllAction);
+    editMenu->addSeparator();
+    editMenu->addAction(m_preferencesAction);
     editMenu->addSeparator();
     editMenu->addAction(m_renameAction);
     editMenu->addAction(m_bulkRenameAction);
@@ -1092,6 +1105,30 @@ void MainWindow::showOrganize()
     }
     m_requestedCounts.insert(m_actions->organize(moves, dialog.plan().foldersToCreate, dialog.folder()),
                              int(moves.size()));
+}
+
+QList<QAction *> MainWindow::customizableActions() const
+{
+    return menuActions(menuBar());
+}
+
+void MainWindow::showPreferences()
+{
+    PreferencesDialog dialog(customizableActions(), this);
+    connect(&dialog, &PreferencesDialog::appearanceChanged, this, [this](const Appearance &appearance) {
+        applyAppearance(appearance);
+        m_listIconSize = appearance.listIconSize;
+        for (BrowserPane *pane : allPanes()) {
+            pane->setListIconSize(m_listIconSize);
+        }
+        updatePaneMarks();
+    });
+    connect(&dialog, &PreferencesDialog::settingsReplaced, this, [this] { loadPreferences(); });
+    if (m_preferencesDriver) {
+        m_preferencesDriver(dialog);
+        return;
+    }
+    dialog.exec();
 }
 
 void MainWindow::showSync()
@@ -1931,6 +1968,7 @@ BrowserPane *MainWindow::openTabIn(QTabWidget *group, const QString &path, bool 
         [this](const QStringList &roots) { return m_contentIndexService->cacheFactory(roots); });
     pane->setThumbnailService(m_thumbnailService);
     pane->setThumbnailSize(m_thumbnailSize);
+    pane->setListIconSize(m_listIconSize);
     pane->setInlinePlayer(m_inlinePlayer);
     pane->setInlinePlaybackEnabled(m_inlinePlaybackAction->isChecked());
     // Una pestaña nueva se abre con la vista que se está usando.
@@ -2945,6 +2983,14 @@ void MainWindow::restoreSession()
 void MainWindow::loadPreferences()
 {
     QSettings settings;
+    // Apariencia y atajos (Preferencias).
+    const Appearance appearance = loadAppearance(settings);
+    applyAppearance(appearance);
+    m_listIconSize = appearance.listIconSize;
+    for (BrowserPane *pane : allPanes()) {
+        pane->setListIconSize(m_listIconSize);
+    }
+    applyShortcuts(customizableActions(), settings);
     restoreGeometry(settings.value(QStringLiteral("window/geometry")).toByteArray());
     // "splitter3": la disposición con el panel de previsualización. La antigua,
     // de dos paneles, dejaría el nuevo con ancho cero; se ignora.

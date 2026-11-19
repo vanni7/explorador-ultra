@@ -1,6 +1,7 @@
 # Módulo ui: la interfaz gráfica (Qt Widgets). Es el único, junto con app,
 # que puede depender de Qt Widgets.
 add_library(eu_ui STATIC
+    src/Appearance.cpp
     src/BrowserPane.cpp
     src/DirectoryModel.cpp
     src/EntrySort.cpp
@@ -18,14 +19,17 @@ add_library(eu_ui STATIC
     src/MainWindow.cpp
     src/MillerView.cpp
     src/PathBar.cpp
+    src/PreferencesDialog.cpp
     src/PreviewPanel.cpp
     src/SearchResultsModel.cpp
+    src/Shortcuts.cpp
     src/Sidebar.cpp
     src/SyncDialog.cpp
     src/TrashDialog.cpp
     src/ThumbnailView.cpp
     src/TypeCatalog.cpp
     src/VolumesView.cpp
+    include/eu/ui/Appearance.h
     include/eu/ui/BrowserPane.h
     include/eu/ui/DirectoryModel.h
     include/eu/ui/FileActions.h
@@ -43,8 +47,10 @@ add_library(eu_ui STATIC
     include/eu/ui/MainWindow.h
     include/eu/ui/MillerView.h
     include/eu/ui/PathBar.h
+    include/eu/ui/PreferencesDialog.h
     include/eu/ui/PreviewPanel.h
     include/eu/ui/SearchResultsModel.h
+    include/eu/ui/Shortcuts.h
     include/eu/ui/Sidebar.h
     include/eu/ui/SyncDialog.h
     include/eu/ui/TrashDialog.h

@@ -81,6 +81,7 @@ public:
     void showChild(const QString &folder);
     void setShowHidden(bool show);
     void setMoveByDefaultRule(MoveByDefaultRule rule);
+    void setIconSize(int size);
     std::function<void(const QStringList &, const QString &, bool)> onDrop;
 
     /// Ancho de las columnas que no se han ensanchado a mano.
@@ -130,6 +131,7 @@ private:
     QHBoxLayout *m_layout = nullptr;
     QString m_path;
     bool m_showHidden = false;
+    int m_iconSize = 0;   ///< 0: el de fábrica del estilo.
     MoveByDefaultRule m_moveByDefault;
     QHash<QString, int> m_widths;          ///< Anchos puestos a mano, por carpeta.
     QHash<QObject *, MillerColumn *> m_gripColumns;   ///< Cada borde, con la columna que ensancha.

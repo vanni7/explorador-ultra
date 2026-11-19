@@ -137,6 +137,8 @@ public:
     };
     CurrentItem currentItem() const;
     void setThumbnailSize(int size);
+    /// Iconos de la vista detallada, de las columnas y de los resultados (Preferencias).
+    void setListIconSize(int size);
     void setInlinePlayer(InlinePlayer *player);
     void setInlinePlaybackEnabled(bool enabled);
 

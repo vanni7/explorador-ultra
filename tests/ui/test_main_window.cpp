@@ -5,6 +5,9 @@
 #include "eu/ui/MainWindow.h"
 #include "eu/ui/MillerView.h"
 #include "eu/ui/SyncDialog.h"
+#include "eu/ui/Appearance.h"
+#include "eu/ui/PreferencesDialog.h"
+#include "eu/ui/Shortcuts.h"
 #include "eu/ui/BulkRenameDialog.h"
 #include "eu/ui/DuplicatesDialog.h"
 #include "eu/ui/SimilarImagesDialog.h"
@@ -35,6 +38,7 @@
 #include <QItemSelectionModel>
 #include <QLabel>
 #include <QSettings>
+#include <QStyle>
 #include <QSignalSpy>
 #include <QStandardPaths>
 #include <QTemporaryDir>
@@ -1510,6 +1514,86 @@ private slots:
         }
         restored.show();
         QVERIFY(restored.close());
+    }
+
+    void preferencesThemeShortcutsAndExport()
+    {
+        QTemporaryDir data;
+        QTemporaryDir directory;
+        MainWindow window(m_scheduler, openJournal(data));
+        BrowserPane *pane = window.openTab(directory.path());
+        QVERIFY(waitReady(pane));
+        const QList<QAction *> actions = window.customizableActions();
+        const auto actionNamed = [&actions](const QString &id) -> QAction * {
+            for (QAction *action : actions) {
+                if (shortcutId(action) == id) {
+                    return action;
+                }
+            }
+            return nullptr;
+        };
+        QAction *copy = actionNamed(QStringLiteral("copiar"));
+        QAction *cut = actionNamed(QStringLiteral("cortar"));
+        QVERIFY(copy != nullptr && cut != nullptr);
+        QCOMPARE(copy->shortcut(), QKeySequence(QKeySequence::Copy));
+        const QColor systemBase = QApplication::palette().color(QPalette::Base);
+        const QString exported = data.filePath(QStringLiteral("config.ini"));
+
+        bool driven = false;
+        window.setPreferencesDriverForTesting([&](PreferencesDialog &dialog) {
+            driven = true;
+            // Tema oscuro e iconos grandes: al momento y guardado.
+            Appearance dark;
+            dark.theme = ThemeKind::Dark;
+            dark.listIconSize = 24;
+            dialog.chooseAppearance(dark);
+            QVERIFY(QApplication::palette().color(QPalette::Base).lightnessF() < 0.3f);
+            QCOMPARE(QApplication::style()->name().toLower(), QStringLiteral("fusion"));
+            QCOMPARE(pane->view()->iconSize(), QSize(24, 24));
+            QCOMPARE(QSettings().value(QStringLiteral("apariencia/tema")).toString(), QStringLiteral("oscuro"));
+            // Personalizado: el texto de la selección se elige legible.
+            Appearance custom;
+            custom.theme = ThemeKind::Custom;
+            custom.selection = QColor(Qt::yellow);
+            dialog.chooseAppearance(custom);
+            QCOMPARE(QApplication::palette().color(QPalette::Highlight), QColor(Qt::yellow));
+            QCOMPARE(QApplication::palette().color(QPalette::HighlightedText), QColor(Qt::black));
+
+            // Atajos: libre, ocupado (con y sin quitárselo al otro) y reservado.
+            QVERIFY(dialog.assignShortcut(copy, QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_Y)));
+            QCOMPARE(copy->shortcut(), QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_Y));
+            QVERIFY(QSettings().contains(QStringLiteral("atajos/copiar")));
+            dialog.setConflictAnswerForTesting([](QAction *) { return false; });
+            QVERIFY(!dialog.assignShortcut(copy, QKeySequence(QKeySequence::Cut)));
+            QVERIFY(dialog.shortcutMessage()->text().contains(QStringLiteral("cortar")));
+            dialog.setConflictAnswerForTesting([](QAction *) { return true; });
+            QVERIFY(dialog.assignShortcut(copy, QKeySequence(QKeySequence::Cut)));
+            QCOMPARE(copy->shortcut(), QKeySequence(QKeySequence::Cut));
+            QVERIFY(cut->shortcuts().isEmpty());
+            QVERIFY(!dialog.assignShortcut(copy, QKeySequence(Qt::ALT | Qt::Key_F4)));
+
+            // Exportar, volver a la de fábrica e importar.
+            QVERIFY(dialog.exportTo(exported));
+            QVERIFY(QSettings(exported, QSettings::IniFormat).contains(QStringLiteral("atajos/copiar")));
+            QVERIFY(!QSettings(exported, QSettings::IniFormat).contains(QStringLiteral("session/tabs")));
+            dialog.setConfirmForTesting([] { return true; });
+            dialog.restoreFactorySettings();
+            QCOMPARE(copy->shortcut(), QKeySequence(QKeySequence::Copy));
+            QCOMPARE(cut->shortcut(), QKeySequence(QKeySequence::Cut));
+            QCOMPARE(QApplication::palette().color(QPalette::Base), systemBase);
+            QCOMPARE(pane->view()->iconSize(), QSize(16, 16));
+            QVERIFY(dialog.importFrom(exported));
+            QCOMPARE(copy->shortcut(), QKeySequence(QKeySequence::Cut));
+            QVERIFY(cut->shortcuts().isEmpty());
+            QCOMPARE(QApplication::palette().color(QPalette::Highlight), QColor(Qt::yellow));
+            QVERIFY(!dialog.importFrom(directory.filePath(QStringLiteral("no-es-config.ini"))));
+
+            // Para las demás pruebas.
+            dialog.restoreFactorySettings();
+        });
+        window.showPreferences();
+        QVERIFY(driven);
+        QCOMPARE(copy->shortcut(), QKeySequence(QKeySequence::Copy));
     }
 
     void nameColumnKeepsAUsableWidth()

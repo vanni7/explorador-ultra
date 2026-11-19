@@ -102,6 +102,10 @@ public:
     void showDuplicates();
     /// Comparar y sincronizar (SPEC §16); con doble panel, las carpetas de los dos.
     void showSync();
+    /// Preferencias: apariencia, atajos y configuración (SPEC §5.2, §18, §20).
+    void showPreferences();
+    /// Las acciones de los menús, cuyos atajos se pueden cambiar.
+    QList<QAction *> customizableActions() const;
     /// Abre "Imágenes parecidas" sobre la carpeta a la vista.
     void showSimilarImages();
     /// Ventana de etiquetas: administrar y revisar huérfanas.
@@ -114,6 +118,10 @@ public:
         m_similarDriver = std::move(driver);
     }
     void setSyncDriverForTesting(std::function<void(class SyncDialog &)> driver) { m_syncDriver = std::move(driver); }
+    void setPreferencesDriverForTesting(std::function<void(class PreferencesDialog &)> driver)
+    {
+        m_preferencesDriver = std::move(driver);
+    }
     void setDuplicatesDriverForTesting(std::function<bool(class DuplicatesDialog &)> driver)
     {
         m_duplicatesDriver = std::move(driver);
@@ -301,6 +309,8 @@ private:
     QAction *m_similarAction = nullptr;
     QAction *m_tagsAction = nullptr;
     QAction *m_syncAction = nullptr;
+    QAction *m_preferencesAction = nullptr;
+    int m_listIconSize = 16;
     std::shared_ptr<tags::TagStore> m_tagStore;
     std::shared_ptr<journal::Journal> m_journal;
     /// Las etiquetas siguen a lo que movió, renombró o deshizo una operación.
@@ -311,6 +321,7 @@ private:
     QPair<QString, QStringList> volumesFor(const QString &folder);
     std::function<bool(class DuplicatesDialog &)> m_duplicatesDriver;
     std::function<void(class SyncDialog &)> m_syncDriver;
+    std::function<void(class PreferencesDialog &)> m_preferencesDriver;
     std::function<bool(class OrganizeDialog &)> m_organizeDriver;
     QTimer m_progressDelay;   ///< El indicador solo aparece si la acción no es instantánea.
 

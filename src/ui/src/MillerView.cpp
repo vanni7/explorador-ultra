@@ -259,6 +259,9 @@ MillerView::Level MillerView::makeColumn(const QString &path, const QString &sel
     column.view = new MillerColumn(column.model, m_strip);
     column.view->setSelectionMode(QAbstractItemView::SingleSelection);
     column.view->setFocusPolicy(Qt::ClickFocus);
+    if (m_iconSize > 0) {
+        column.view->setIconSize(QSize(m_iconSize, m_iconSize));
+    }
     column.view->moveByDefault = m_moveByDefault;
     column.view->setAccessibleName(tr("Carpeta %1").arg(QDir::toNativeSeparators(path)));
     column.view->onDrop = m_current->onDrop;
@@ -386,6 +389,19 @@ void MillerView::setShowHidden(bool show)
     }
     if (m_child.model != nullptr) {
         m_child.model->setShowHidden(show);
+    }
+}
+
+void MillerView::setIconSize(int size)
+{
+    m_iconSize = size;
+    const QSize iconSize(size, size);
+    m_current->setIconSize(iconSize);
+    for (Level &column : m_ancestors) {
+        column.view->setIconSize(iconSize);
+    }
+    if (m_child.view != nullptr) {
+        m_child.view->setIconSize(iconSize);
     }
 }
 

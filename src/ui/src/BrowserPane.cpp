@@ -771,6 +771,14 @@ void BrowserPane::setThumbnailSize(int size)
     m_thumbView->setThumbnailSize(size);
 }
 
+void BrowserPane::setListIconSize(int size)
+{
+    const QSize iconSize(size, size);
+    m_view->setIconSize(iconSize);
+    m_resultsView->setIconSize(iconSize);
+    m_millerView->setIconSize(size);
+}
+
 void BrowserPane::setInlinePlayer(InlinePlayer *player)
 {
     m_thumbView->setInlinePlayer(player);
