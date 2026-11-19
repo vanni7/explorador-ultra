@@ -843,6 +843,70 @@ Outcome Engine::applyMoves(const QList<QPair<QString, QString>> &moves, const QS
     return run.outcome;
 }
 
+Outcome Engine::synchronize(const QList<QPair<QString, QString>> &copies, const QStringList &toTrash,
+                            const QString &description, const CopyOptions &copyOptions,
+                            const tasks::CancelToken &cancel, const ProgressCallback &progress)
+{
+    TransferOptions options(CollisionPolicy::Overwrite);
+    options.copy = copyOptions;
+    Run run(*m_journal, cancel, progress, options);
+    for (const auto &copy : copies) {
+        measureTree(copy.first, cancel, run.progress);
+    }
+    run.progress.itemsTotal += int(toTrash.size());
+    if (!run.begin(journal::OperationKind::Copy, description)) {
+        return run.outcome;
+    }
+    for (const auto &[source, target] : copies) {
+        if (run.cancelled()) {
+            run.outcome.unfinished.append({source, target});
+            continue;
+        }
+        const QFileInfo info(target);
+        const QString directory = info.absolutePath();
+        // Las carpetas que falten hasta el destino, de fuera hacia dentro
+        // (deshacer las quita si quedan vacías).
+        QStringList missing;
+        for (QString folder = directory; !stampOf(folder).exists;) {
+            missing.prepend(folder);
+            const QString parent = QFileInfo(folder).absolutePath();
+            if (parent == folder) {
+                break;
+            }
+            folder = parent;
+        }
+        bool ready = true;
+        for (const QString &folder : std::as_const(missing)) {
+            if (!run.step(journal::StepKind::MakeDirectory, {}, folder, {}, [&] { return makeDirectory(folder); })) {
+                ready = false;
+                break;
+            }
+        }
+        if (!ready || !run.transfer(source, directory, info.fileName(), false, true)) {
+            run.outcome.unfinished.append({source, target});
+        }
+    }
+    for (const QString &path : toTrash) {
+        if (run.cancelled()) {
+            break;
+        }
+        const core::Result<trash::TrashItem> item = trash::prepareItem(path);
+        if (!item.ok()) {
+            run.fail(item.error());
+            continue;
+        }
+        const QString stored = item.value().storedPath();
+        if (run.step(journal::StepKind::Rename, item.value().originalPath, stored, stored,
+                     [&] { return trash::moveIntoTrash(item.value()); })) {
+            ++run.progress.itemsDone;
+        } else {
+            trash::discardItemRecord(item.value());
+        }
+    }
+    run.finish();
+    return run.outcome;
+}
+
 Outcome Engine::resumeInterrupted(journal::OperationId operationId, const TransferOptions &options,
                                   const tasks::CancelToken &cancel, const ProgressCallback &progress)
 {

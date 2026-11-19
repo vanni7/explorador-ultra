@@ -4,7 +4,7 @@ file(MAKE_DIRECTORY "${EU_TEST_LOGS}")
 
 function(eu_add_test name)
     qt_add_executable(${name} ${ARGN})
-    target_link_libraries(${name} PRIVATE eu::core eu::tasks eu::fs eu::search eu::index eu::thumbs eu::meta eu::archive eu::content eu::rename eu::organize eu::dupes eu::similar eu::tags eu::journal eu::ops eu::trash eu::ops_engine eu::ui Qt6::Test)
+    target_link_libraries(${name} PRIVATE eu::core eu::tasks eu::fs eu::search eu::index eu::thumbs eu::meta eu::archive eu::content eu::rename eu::organize eu::sync eu::dupes eu::similar eu::tags eu::journal eu::ops eu::trash eu::ops_engine eu::ui Qt6::Test)
     eu_target_defaults(${name})
     # Los límites de tiempo solo tienen sentido en compilaciones optimizadas:
     # con sanitizers o en Debug todo va muchas veces más lento.
@@ -53,6 +53,7 @@ eu_add_test(test_index_service index/test_index_service.cpp)
 eu_add_test(test_content_index index/test_content_index.cpp)
 eu_add_test(test_rename rename/test_rename.cpp)
 eu_add_test(test_organize organize/test_organize.cpp)
+eu_add_test(test_sync sync/test_sync.cpp)
 eu_add_test(test_dupes dupes/test_dupes.cpp)
 eu_add_test(test_tags tags/test_tags.cpp)
 eu_add_test(test_archive archive/test_archive.cpp)

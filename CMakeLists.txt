@@ -50,6 +50,7 @@ add_subdirectory(src/dupes)
 add_subdirectory(src/similar)
 add_subdirectory(src/tags)
 add_subdirectory(src/trash)
+add_subdirectory(src/sync)
 add_subdirectory(src/ui)
 add_subdirectory(src/app)
 

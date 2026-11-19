@@ -142,6 +142,15 @@ public:
                        const QString &description, const tasks::CancelToken &cancel,
                        const ProgressCallback &progress = {});
 
+    /// Sincronización de carpetas (SPEC §16) como una sola operación del
+    /// historial: copia cada origen (archivo o carpeta) a su destino exacto
+    /// creando las carpetas que falten —si ahí ya hay algo, se reemplaza y lo
+    /// reemplazado va a la papelera propia; carpeta contra carpeta se juntan—
+    /// y envía a la papelera propia lo de `toTrash`. Deshacer lo devuelve todo.
+    Outcome synchronize(const QList<QPair<QString, QString>> &copies, const QStringList &toTrash,
+                        const QString &description, const CopyOptions &copyOptions,
+                        const tasks::CancelToken &cancel, const ProgressCallback &progress = {});
+
     /// Reanuda una copia o un movimiento que quedó a medias por un cierre
     /// inesperado (SPEC §9): con el plan guardado en el historial, hace lo que
     /// falta (lo ya llegado no se repite; el archivo cortado sigue desde su
