@@ -294,6 +294,7 @@ private:
     thumbs::ThumbnailService *m_thumbnailService = nullptr;
     QAction *m_detailsAction = nullptr;
     QAction *m_thumbnailsAction = nullptr;
+    QAction *m_columnsAction = nullptr;
     QHash<int, QAction *> m_thumbnailSizeActions;   ///< Por tamaño en píxeles.
     int m_thumbnailSize = 160;
     void syncViewActions();

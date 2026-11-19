@@ -1,5 +1,7 @@
 // Explorador Ultra — SPDX-License-Identifier: GPL-3.0-or-later
 #include "eu/ui/BrowserPane.h"
+
+#include "eu/ui/MillerView.h"
 #include "eu/archive/Archive.h"
 #include "eu/ui/ThumbnailView.h"
 #include "eu/thumbs/Isolated.h"
@@ -480,11 +482,39 @@ BrowserPane::BrowserPane(tasks::Scheduler &scheduler, fs::DirectoryWatcher &watc
     });
     connect(m_thumbView, &QAbstractItemView::activated, this, &BrowserPane::onActivated);
 
+    // Columnas Miller: la de la carpeta actual comparte modelo y selección con
+    // la vista detallada; las demás piden navegar al elegir algo en ellas.
+    m_millerView = new MillerView(scheduler, m_model, m_view->selectionModel(), this);
+    {
+        MillerColumn *column = m_millerView->currentColumn();
+        column->installEventFilter(this);
+        column->onEditingStarted = [this] { m_editing = true; };
+        connect(column->itemDelegate(), &QAbstractItemDelegate::closeEditor, this, &BrowserPane::onEditingFinished);
+        column->setContextMenuPolicy(Qt::CustomContextMenu);
+        connect(column, &QWidget::customContextMenuRequested, this, [this, column](const QPoint &position) {
+            emit contextMenuRequested(column->viewport()->mapToGlobal(position));
+        });
+        connect(column, &QAbstractItemView::activated, this, &BrowserPane::onActivated);
+    }
+    m_millerView->onDrop = fileView->onDrop;
+    connect(m_millerView, &MillerView::navigateRequested, this, [this](const QString &folder, const QString &name) {
+        if (folder == currentPath()) {
+            selectWhenAvailable({name});
+        } else {
+            m_backHistory.append(currentPath());
+            m_forwardHistory.clear();
+            changePath(folder, name);
+        }
+        m_millerView->currentColumn()->setFocus();
+    });
+    connect(m_view->selectionModel(), &QItemSelectionModel::currentChanged, this, &BrowserPane::updateMillerChild);
+
     auto *stackHost = new QWidget(this);
     m_stack = new QStackedLayout(stackHost);
     m_stack->setContentsMargins(0, 0, 0, 0);
     m_stack->addWidget(m_view);
     m_stack->addWidget(m_thumbView);
+    m_stack->addWidget(m_millerView);
     m_stack->addWidget(m_messagePage);
 
     // Lista de unidades: lo que se ve en la ubicación "Unidades".
@@ -674,8 +704,35 @@ BrowserPane::CurrentItem BrowserPane::currentItem() const
 
 QAbstractItemView *BrowserPane::fileView() const
 {
-    return m_viewMode == ViewMode::Thumbnails ? static_cast<QAbstractItemView *>(m_thumbView)
-                                              : static_cast<QAbstractItemView *>(m_view);
+    switch (m_viewMode) {
+    case ViewMode::Thumbnails:
+        return m_thumbView;
+    case ViewMode::Columns:
+        // Dentro de un comprimido no hay columnas: no es una ruta del disco.
+        return showsArchive() ? static_cast<QAbstractItemView *>(m_view) : m_millerView->currentColumn();
+    case ViewMode::Details:
+        break;
+    }
+    return m_view;
+}
+
+QWidget *BrowserPane::filesPage() const
+{
+    if (m_viewMode == ViewMode::Columns && !showsArchive()) {
+        return m_millerView;
+    }
+    return fileView();
+}
+
+void BrowserPane::updateMillerChild()
+{
+    if (m_viewMode != ViewMode::Columns || !showsFolder() || showsArchive()) {
+        return;
+    }
+    const QModelIndex current = m_view->selectionModel()->currentIndex();
+    const bool folder = current.isValid() && current.row() < m_model->rowCount()
+        && m_model->state() == DirectoryModel::State::Ready && m_model->entryAt(current.row()).isDirectory;
+    m_millerView->showChild(folder ? m_model->filePath(current.row()) : QString());
 }
 
 void BrowserPane::setViewMode(ViewMode mode)
@@ -684,11 +741,15 @@ void BrowserPane::setViewMode(ViewMode mode)
         return;
     }
     QWidget *shown = m_stack->currentWidget();
-    const bool wasShowingFiles = shown == m_view || shown == m_thumbView;
-    const bool hadFocus = m_view->hasFocus() || m_thumbView->hasFocus();
+    const bool wasShowingFiles = shown == m_view || shown == m_thumbView || shown == m_millerView;
+    const bool hadFocus = m_view->hasFocus() || m_thumbView->hasFocus() || m_millerView->currentColumn()->hasFocus();
     m_viewMode = mode;
+    if (mode == ViewMode::Columns && showsFolder() && !showsArchive()) {
+        m_millerView->setPath(currentPath());
+        updateMillerChild();
+    }
     if (wasShowingFiles) {
-        m_stack->setCurrentWidget(fileView());
+        m_stack->setCurrentWidget(filesPage());
     }
     // Lo seleccionado sigue a la vista.
     const QModelIndex current = m_view->selectionModel()->currentIndex();
@@ -723,6 +784,7 @@ void BrowserPane::setInlinePlaybackEnabled(bool enabled)
 void BrowserPane::setMoveByDefaultRule(MoveByDefaultRule rule)
 {
     static_cast<FileView *>(m_view)->moveByDefault = rule;
+    m_millerView->setMoveByDefaultRule(rule);
     m_thumbView->moveByDefault = std::move(rule);
 }
 
@@ -850,7 +912,10 @@ void BrowserPane::changePath(const QString &path, const QString &nameToSelect)
         m_volumesTimer.start();
     } else {
         m_volumesTimer.stop();
-        m_stack->setCurrentWidget(fileView());
+        if (m_viewMode == ViewMode::Columns && !showsArchive()) {
+            m_millerView->setPath(path);
+        }
+        m_stack->setCurrentWidget(filesPage());
         m_model->setPath(path);
         // setPath vacía el modelo; lo que haya que seleccionar se fija después.
         m_selectedNames = nameToSelect.isEmpty() ? QStringList() : QStringList{nameToSelect};
@@ -1063,6 +1128,19 @@ bool BrowserPane::eventFilter(QObject *watched, QEvent *event)
             || (key->key() == Qt::Key_Left && watched != m_thumbView);
         if (plain && up && canGoUp()) {
             goUp();
+            return true;
+        }
+        // En las columnas, la flecha derecha entra en la carpeta con el cursor
+        // y deja seleccionado lo primero que tiene.
+        if (plain && key->key() == Qt::Key_Right && watched == m_millerView->currentColumn()) {
+            const QModelIndex current = m_view->selectionModel()->currentIndex();
+            if (current.isValid() && current.row() < m_model->rowCount()
+                && m_model->entryAt(current.row()).isDirectory) {
+                m_backHistory.append(currentPath());
+                m_forwardHistory.clear();
+                m_selectFirstWhenLoaded = true;
+                changePath(m_model->filePath(current.row()), {});
+            }
             return true;
         }
     }
@@ -1562,6 +1640,7 @@ QString BrowserPane::unusedName(const QString &wanted) const
 void BrowserPane::setShowHidden(bool show)
 {
     m_model->setShowHidden(show);
+    m_millerView->setShowHidden(show);
 }
 
 void BrowserPane::setFolderSizesEnabled(bool enabled)
@@ -1590,11 +1669,11 @@ void BrowserPane::onModelStateChanged(DirectoryModel::State state)
             }
             m_watchedPath = m_watcher.watch(m_model->path()) ? m_model->path() : QString();
         }
-        m_stack->setCurrentWidget(fileView());
+        m_stack->setCurrentWidget(filesPage());
         break;
     case DirectoryModel::State::Loading:
     case DirectoryModel::State::Empty:
-        m_stack->setCurrentWidget(fileView());
+        m_stack->setCurrentWidget(filesPage());
         break;
     }
     emit statusChanged();
@@ -1624,6 +1703,13 @@ void BrowserPane::restoreSelection()
         }
         if (--m_pendingAttempts <= 0) {
             m_pendingNames.clear();
+        }
+    }
+    if (m_selectFirstWhenLoaded) {
+        m_selectFirstWhenLoaded = false;
+        if (m_selectedNames.isEmpty() && m_model->rowCount() > 0) {
+            m_selectedNames = {m_model->entryAt(0).name};
+            m_currentName = m_selectedNames.first();
         }
     }
     QItemSelectionModel *selection = m_view->selectionModel();

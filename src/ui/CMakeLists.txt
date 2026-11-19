@@ -16,6 +16,7 @@ add_library(eu_ui STATIC
     src/TagsDialog.cpp
     src/InlinePlayer.cpp
     src/MainWindow.cpp
+    src/MillerView.cpp
     src/PathBar.cpp
     src/PreviewPanel.cpp
     src/SearchResultsModel.cpp
@@ -39,6 +40,7 @@ add_library(eu_ui STATIC
     include/eu/ui/InlinePlayer.h
     include/eu/ui/Locations.h
     include/eu/ui/MainWindow.h
+    include/eu/ui/MillerView.h
     include/eu/ui/PathBar.h
     include/eu/ui/PreviewPanel.h
     include/eu/ui/SearchResultsModel.h

@@ -3,6 +3,7 @@
 #include "eu/ui/FileClipboard.h"
 #include "eu/ui/Locations.h"
 #include "eu/ui/MainWindow.h"
+#include "eu/ui/MillerView.h"
 #include "eu/ui/BulkRenameDialog.h"
 #include "eu/ui/DuplicatesDialog.h"
 #include "eu/ui/SimilarImagesDialog.h"
@@ -1225,6 +1226,80 @@ private slots:
         QVERIFY(waitReady(pane));
         // Al subir queda marcada la carpeta de la que se venía.
         QTRY_COMPARE(pane->model()->entryAt(pane->view()->currentIndex().row()).name, QStringLiteral("dentro"));
+    }
+
+    void millerColumnsNavigateWithKeysAndClicks()
+    {
+        QTemporaryDir directory;
+        const QString root = QDir::cleanPath(directory.path());
+        QVERIFY(QDir(root).mkpath(QStringLiteral("a/b/c")));
+        writeFile(root + QStringLiteral("/a/b/c/primero.txt"));
+        writeFile(root + QStringLiteral("/a/b/c/segundo.txt"));
+        writeFile(root + QStringLiteral("/a/b/foto.png"));
+        writeFile(root + QStringLiteral("/a/x.txt"));
+
+        MainWindow window(m_scheduler, openJournal(directory));
+        BrowserPane *pane = window.openTab(root + QStringLiteral("/a/b"));
+        QVERIFY(waitReady(pane));
+        window.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&window));
+        window.setViewMode(BrowserPane::ViewMode::Columns);
+        MillerView *miller = pane->millerView();
+        QVERIFY(miller->isVisible());
+        QCOMPARE(pane->fileView(), static_cast<QAbstractItemView *>(miller->currentColumn()));
+
+        // Una columna por cada carpeta de la ruta, desde la raíz; en la de
+        // arriba queda marcada la carpeta por la que se pasa.
+        QStringList columns = miller->columnPaths();
+        QCOMPARE(columns.last(), root + QStringLiteral("/a/b"));
+        QCOMPARE(columns.at(columns.size() - 2), root + QStringLiteral("/a"));
+        QCOMPARE(QDir(columns.first()).isRoot(), true);
+        MillerColumn *upper = miller->columnFor(root + QStringLiteral("/a"));
+        QVERIFY(upper != nullptr);
+        QTRY_COMPARE(upper->currentIndex().data().toString(), QStringLiteral("b"));
+
+        // Con el cursor en una subcarpeta, su contenido se ve a la derecha.
+        selectNames(pane, {QStringLiteral("c")});
+        QTRY_COMPARE(miller->columnPaths().last(), root + QStringLiteral("/a/b/c"));
+        MillerColumn *child = miller->columnFor(root + QStringLiteral("/a/b/c"));
+        QVERIFY(child != nullptr);
+        QTRY_COMPARE(child->model()->rowCount(), 2);
+        // Con un archivo, no.
+        selectNames(pane, {QStringLiteral("foto.png")});
+        QTRY_COMPARE(miller->columnPaths().last(), root + QStringLiteral("/a/b"));
+
+        // → entra en la carpeta y deja seleccionado lo primero; ← vuelve con
+        // la carpeta marcada.
+        selectNames(pane, {QStringLiteral("c")});
+        miller->currentColumn()->setFocus();
+        QTest::keyClick(miller->currentColumn(), Qt::Key_Right);
+        QTRY_COMPARE(pane->currentPath(), root + QStringLiteral("/a/b/c"));
+        QVERIFY(waitReady(pane));
+        QTRY_COMPARE(pane->selectedPaths(), (QStringList{root + QStringLiteral("/a/b/c/primero.txt")}));
+        QCOMPARE(miller->columnPaths().last(), root + QStringLiteral("/a/b/c"));
+        QTest::keyClick(miller->currentColumn(), Qt::Key_Left);
+        QTRY_COMPARE(pane->currentPath(), root + QStringLiteral("/a/b"));
+        QVERIFY(waitReady(pane));
+        QTRY_COMPARE(pane->selectedPaths(), (QStringList{root + QStringLiteral("/a/b/c")}));
+
+        // Un clic en una columna de la izquierda va a esa carpeta con lo
+        // pulsado seleccionado (y Atrás vuelve).
+        upper = miller->columnFor(root + QStringLiteral("/a"));
+        QTRY_VERIFY(upper->model()->rowCount() == 2);
+        const QModelIndex xIndex = upper->model()->index(
+            static_cast<DirectoryModel *>(upper->model())->rowOfName(QStringLiteral("x.txt")), 0);
+        QTest::mouseClick(upper->viewport(), Qt::LeftButton, {}, upper->visualRect(xIndex).center());
+        QTRY_COMPARE(pane->currentPath(), root + QStringLiteral("/a"));
+        QVERIFY(waitReady(pane));
+        QTRY_COMPARE(pane->selectedPaths(), (QStringList{root + QStringLiteral("/a/x.txt")}));
+        QCOMPARE(miller->columnPaths().last(), root + QStringLiteral("/a"));
+        pane->goBack();
+        QTRY_COMPARE(pane->currentPath(), root + QStringLiteral("/a/b"));
+
+        // La vista se recuerda al cerrar.
+        window.close();
+        QCOMPARE(QSettings().value(QStringLiteral("view/mode")).toString(), QStringLiteral("columnas"));
+        QSettings().setValue(QStringLiteral("view/mode"), QStringLiteral("detalles"));   // para las demás pruebas
     }
 
     void nameColumnKeepsAUsableWidth()

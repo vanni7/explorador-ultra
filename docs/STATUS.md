@@ -1,10 +1,24 @@
 # Estado del proyecto
 
-Última actualización: 2026-11-19 · Fase actual: **5 (por empezar)**; la Fase 4 se entregó el 17-nov con puntos abiertos (ver `INFORME_FASE_4.md`); la Fase 3, el 16-nov (`INFORME_FASE_3.md`); la Fase 2, el 14-nov (`INFORME_FASE_2.md`)
+Última actualización: 2026-11-19 · Fase actual: **5 (en curso, rama `fase-5/profesional`)**; la Fase 4 se entregó el 17-nov con puntos abiertos (ver `INFORME_FASE_4.md`); la Fase 3, el 16-nov (`INFORME_FASE_3.md`); la Fase 2, el 14-nov (`INFORME_FASE_2.md`)
 
 Estados: **Terminada** (cumple §26) · **Parcial** · **Pendiente** · **Bloqueada**.
 
 ## Punto de reanudación (se actualiza tras cada paso; si hubo un corte, empieza aquí)
+Fase 5 — Funciones profesionales, rama `fase-5/profesional` (salió de `fase-4/docx-epub`, que se fusiona a `main` en cuanto su CI esté verde; después se fusiona `main` en esta rama). Plan y criterios en `PHASE_PLAN.md` y SPEC §5.3, §5.6, §5.7, §16, §18–§20. Cada paso terminado queda en un commit ya enviado a GitHub; lo que no esté en `git log` no está hecho.
+
+| # | Paso | Estado |
+|---|---|---|
+| 1 | Columnas Miller (SPEC §5.6): una columna por carpeta de la ruta, la de la derecha con la subcarpeta con el cursor; ← y → para subir y entrar; anchos ajustables; integradas con la vista previa | **Hecho** (19-nov): `MillerView`/`MillerColumn`; la columna de la carpeta actual comparte modelo y selección con la vista detallada (copiar, renombrar con F2, menú, arrastrar y soltar y vista previa funcionan igual); las demás tienen su modelo, marcan el tramo de la ruta y al pulsar algo van allí con eso seleccionado (Atrás vuelve); la de la derecha espera 120 ms para no leer cada carpeta al pasar con las flechas; «›» en las carpetas; borde arrastrable (doble clic: al contenido); se desplaza sola para ver la actual. Ver → «Columnas» (Ctrl+3) y botón; se recuerda al cerrar. Dentro de un comprimido se ve como detalles. Prueba `millerColumnsNavigateWithKeysAndClicks`; visto en Xvfb con `PruebaExploradorUltra`. **Falta**: CI |
+| 2 | Doble panel (SPEC §5.3): dividir el centro en dos exploradores independientes (ruta, vista e historial propios), arrastrar entre ellos, cambiar de panel con el teclado | Pendiente |
+| 3 | Comparación y sincronización (SPEC §16): motor `sync` (idéntico, diferente, ausente, más reciente, conflicto; por nombre, tamaño, fecha, hash o contenido), uni y bidireccional con estado guardado por par de carpetas, simulación obligatoria, sin propagar borrados sin política explícita, historial y papelera propia; ventana integrada con el doble panel | Pendiente |
+| 4 | Pestañas y sesión (SPEC §5.7): fijar, bloquear (navegar abre otra), recuperar cerradas, reordenar; restaurar pestañas, vistas, paneles, anchos de columnas y doble panel; rutas no disponibles con «Reintentar» | Pendiente |
+| 5 | Personalización (SPEC §5.2, §18, §20): temas claro, oscuro y personalizado con colores; tamaño de iconos, miniaturas y fuente; atajos personalizables con detección de conflictos; exportar e importar la configuración; restaurar valores de fábrica | Pendiente |
+| 6 | Impresión (SPEC §19): Ctrl+P con vista previa para imagen, PDF, texto y código; aviso para lo demás | Pendiente |
+| 7 | Servicio opcional de Windows (MFT/USN): instalar y desinstalar con elevación explícita, solo lectura, la aplicación funciona igual sin él; verificado en la VM | Pendiente |
+| 8 | Mediciones, verificación manual, CI, fusionar a `main`, informe | Pendiente |
+
+## Pasos de la Fase 4 (entregada el 17-nov; ver `INFORME_FASE_4.md`)
 Fase 4 — Herramientas, rama `fase-4/herramientas` (sale de `main` con la Fase 3 ya fusionada). Cada paso terminado queda en un commit ya enviado a GitHub; lo que no esté en `git log` no está hecho. Antes de seguir: `git status` y compilar con el preset `release`. Si git dice «objeto vacío» tras un corte, ver las notas de `CLAUDE.md`.
 
 | # | Paso | Estado |

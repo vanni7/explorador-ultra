@@ -353,8 +353,14 @@ void MainWindow::createActions()
                                      tr("Miniaturas"), viewModes);
     m_thumbnailsAction->setShortcut(QKeySequence(Qt::CTRL | Qt::Key_2));
     m_thumbnailsAction->setCheckable(true);
+    m_columnsAction = new QAction(themedIcon(QStringLiteral("view-list-tree"), QStyle::SP_FileDialogContentsView),
+                                  tr("Columnas"), viewModes);
+    m_columnsAction->setShortcut(QKeySequence(Qt::CTRL | Qt::Key_3));
+    m_columnsAction->setCheckable(true);
+    m_columnsAction->setToolTip(tr("Columnas: una por cada carpeta de la ruta (← y → para subir y entrar)"));
     connect(m_detailsAction, &QAction::triggered, this, [this] { setViewMode(BrowserPane::ViewMode::Details); });
     connect(m_thumbnailsAction, &QAction::triggered, this, [this] { setViewMode(BrowserPane::ViewMode::Thumbnails); });
+    connect(m_columnsAction, &QAction::triggered, this, [this] { setViewMode(BrowserPane::ViewMode::Columns); });
 
     m_editPathAction = new QAction(tr("Escribir una ruta"), this);
     m_editPathAction->setShortcuts({QKeySequence(Qt::CTRL | Qt::Key_L), QKeySequence(Qt::ALT | Qt::Key_D)});
@@ -374,6 +380,7 @@ void MainWindow::createActions()
     viewMenu->setObjectName(QStringLiteral("menuVer"));
     viewMenu->addAction(m_detailsAction);
     viewMenu->addAction(m_thumbnailsAction);
+    viewMenu->addAction(m_columnsAction);
     QMenu *sizeMenu = viewMenu->addMenu(tr("Tamaño de las miniaturas"));
     auto *sizes = new QActionGroup(sizeMenu);
     for (const auto &[size, name] : {std::pair{96, tr("Pequeñas")}, std::pair{160, tr("Medianas")},
@@ -1708,6 +1715,7 @@ void MainWindow::createToolBar()
     toolBar->addSeparator();
     toolBar->addAction(m_detailsAction);
     toolBar->addAction(m_thumbnailsAction);
+    toolBar->addAction(m_columnsAction);
     toolBar->addAction(m_newTabAction);
     toolBar->addAction(m_showTrashAction);
 }
@@ -1733,6 +1741,8 @@ BrowserPane *MainWindow::openTab(const QString &path)
         pane->setViewMode(current->viewMode());
     } else if (m_thumbnailsAction->isChecked()) {
         pane->setViewMode(BrowserPane::ViewMode::Thumbnails);
+    } else if (m_columnsAction->isChecked()) {
+        pane->setViewMode(BrowserPane::ViewMode::Columns);
     }
 
     connect(pane, &BrowserPane::pathChanged, this, [this, pane] {
@@ -2245,8 +2255,11 @@ void MainWindow::setThumbnailSize(int size)
 void MainWindow::syncViewActions()
 {
     const BrowserPane *pane = currentPane();
-    const bool thumbnails = pane != nullptr && pane->viewMode() == BrowserPane::ViewMode::Thumbnails;
-    (thumbnails ? m_thumbnailsAction : m_detailsAction)->setChecked(true);
+    const BrowserPane::ViewMode mode = pane != nullptr ? pane->viewMode() : BrowserPane::ViewMode::Details;
+    (mode == BrowserPane::ViewMode::Thumbnails ? m_thumbnailsAction
+     : mode == BrowserPane::ViewMode::Columns  ? m_columnsAction
+                                               : m_detailsAction)
+        ->setChecked(true);
     if (QAction *size = m_thumbnailSizeActions.value(m_thumbnailSize)) {
         size->setChecked(true);
     }
@@ -2389,8 +2402,11 @@ void MainWindow::loadPreferences()
         m_inlinePlaybackAction->setChecked(settings.value(QStringLiteral("view/inlinePlayback"), true).toBool());
     }
 
-    const bool thumbnails = settings.value(QStringLiteral("view/mode")).toString() == QLatin1String("miniaturas");
-    (thumbnails ? m_thumbnailsAction : m_detailsAction)->setChecked(true);
+    const QString mode = settings.value(QStringLiteral("view/mode")).toString();
+    (mode == QLatin1String("miniaturas") ? m_thumbnailsAction
+     : mode == QLatin1String("columnas") ? m_columnsAction
+                                         : m_detailsAction)
+        ->setChecked(true);
     // El alcance y "en el contenido" no se guardan: una búsqueda en todos los
     // discos no debe heredarse sin querer de la sesión anterior.
     m_searchCaseAction->setChecked(settings.value(QStringLiteral("search/caseSensitive"), false).toBool());
@@ -2410,8 +2426,9 @@ void MainWindow::saveSession()
     if (InlinePlayer::isAvailable()) {
         settings.setValue(QStringLiteral("view/inlinePlayback"), m_inlinePlaybackAction->isChecked());
     }
-    settings.setValue(QStringLiteral("view/mode"),
-                      m_thumbnailsAction->isChecked() ? QStringLiteral("miniaturas") : QStringLiteral("detalles"));
+    settings.setValue(QStringLiteral("view/mode"), m_thumbnailsAction->isChecked() ? QStringLiteral("miniaturas")
+                                                   : m_columnsAction->isChecked()  ? QStringLiteral("columnas")
+                                                                                   : QStringLiteral("detalles"));
     settings.setValue(QStringLiteral("search/caseSensitive"), m_searchCaseAction->isChecked());
     settings.setValue(QStringLiteral("search/recent"), m_recentSearches);
 

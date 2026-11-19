@@ -33,6 +33,7 @@ class ThumbnailService;
 namespace eu::ui {
 
 class InlinePlayer;
+class MillerView;
 class ThumbnailView;
 
 class SearchResultsModel;
@@ -111,14 +112,16 @@ public:
     DirectoryModel *model() const { return m_model; }
     QTreeView *view() const { return m_view; }
 
-    /// Cómo se ve el contenido de una carpeta (SPEC §5.3). Las dos vistas
+    /// Cómo se ve el contenido de una carpeta (SPEC §5.3). Las vistas
     /// comparten la selección: al cambiar se conservan la carpeta y lo
-    /// seleccionado.
-    enum class ViewMode { Details, Thumbnails };
+    /// seleccionado. Dentro de un comprimido, las columnas se ven como detalles.
+    enum class ViewMode { Details, Thumbnails, Columns };
     void setViewMode(ViewMode mode);
     ViewMode viewMode() const { return m_viewMode; }
     ThumbnailView *thumbnailView() const { return m_thumbView; }
-    /// La vista de archivos que se usa ahora (detallada o miniaturas).
+    MillerView *millerView() const { return m_millerView; }
+    /// La vista de archivos que se usa ahora (detallada, miniaturas o la
+    /// columna de la carpeta actual en las columnas Miller).
     QAbstractItemView *fileView() const;
     void setThumbnailService(thumbs::ThumbnailService *service);
 
@@ -219,6 +222,11 @@ protected:
 
 private:
     void changePath(const QString &path, const QString &nameToSelect);
+    /// Lo que se pone a la vista para enseñar una carpeta (la vista, o el
+    /// conjunto de columnas Miller).
+    QWidget *filesPage() const;
+    /// Columnas Miller: a la derecha, el contenido de la carpeta con el cursor.
+    void updateMillerChild();
     void onActivated(const QModelIndex &index);
     /// Saca a una carpeta temporal un archivo de dentro de un comprimido y lo
     /// abre con su programa.
@@ -248,7 +256,9 @@ private:
     fs::DirectoryWatcher &m_watcher;
     QTreeView *m_view = nullptr;
     ThumbnailView *m_thumbView = nullptr;
+    MillerView *m_millerView = nullptr;
     ViewMode m_viewMode = ViewMode::Details;
+    bool m_selectFirstWhenLoaded = false;   ///< Al entrar con → en las columnas: el primero.
     QStackedLayout *m_stack = nullptr;
     QWidget *m_messagePage = nullptr;
     QLabel *m_messageLabel = nullptr;
