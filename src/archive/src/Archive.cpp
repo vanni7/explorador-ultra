@@ -173,6 +173,10 @@ core::Status createArchive(const QString &outputPath, Format, const QStringList 
 
 namespace {
 
+/// Tipo de una entrada (AE_IFREG, AE_IFDIR…). Windows no tiene mode_t: libarchive
+/// usa allí otro tipo entero, así que se toma el que devuelve la propia función.
+using EntryType = decltype(archive_entry_filetype(nullptr));
+
 struct ReadDeleter
 {
     void operator()(struct archive *handle) const { archive_read_free(handle); }
@@ -317,7 +321,7 @@ core::Result<QList<ArchiveEntry>> listArchive(const QString &archivePath, const 
             archive_read_data_skip(handle.get());
             continue;
         }
-        const mode_t type = archive_entry_filetype(entry);
+        const EntryType type = archive_entry_filetype(entry);
         item.isDirectory = type == AE_IFDIR;
         item.isSymlink = type == AE_IFLNK;
         item.linkTarget = item.isSymlink ? linkTargetOf(entry) : QString();
@@ -437,10 +441,15 @@ core::Result<ExtractResult> extractArchive(const QString &archivePath, const QSt
                 skip(raw, tr("es un enlace que apunta fuera de la carpeta de destino"));
                 continue;
             }
+#ifdef Q_OS_WIN
+            archive_entry_copy_hardlink_w(
+                entry, reinterpret_cast<const wchar_t *>(QDir::toNativeSeparators(root + QLatin1Char('/') + linked).utf16()));
+#else
             const QByteArray absolute = QFile::encodeName(root + QLatin1Char('/') + linked);
             archive_entry_copy_hardlink(entry, absolute.constData());
+#endif
         }
-        const mode_t type = hardlink != nullptr ? mode_t(AE_IFREG) : archive_entry_filetype(entry);
+        const EntryType type = hardlink != nullptr ? EntryType(AE_IFREG) : archive_entry_filetype(entry);
         if (type != AE_IFREG && type != AE_IFDIR && type != AE_IFLNK) {
             skip(raw, tr("no es un archivo, carpeta ni enlace"));
             continue;

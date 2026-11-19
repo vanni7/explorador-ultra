@@ -2,6 +2,7 @@
 #include "eu/content/TextExtractor.h"
 
 #include <QCoreApplication>
+#include <QDir>
 #include <QFile>
 #include <QFileInfo>
 #include <QRegularExpression>
@@ -197,7 +198,14 @@ QList<QByteArray> readZipEntries(const QString &path, const QRegularExpression &
     };
     std::unique_ptr<struct archive, Deleter> handle(archive_read_new());
     archive_read_support_format_zip(handle.get());
-    if (archive_read_open_filename(handle.get(), QFile::encodeName(path).constData(), 64 * 1024) != ARCHIVE_OK) {
+#ifdef Q_OS_WIN
+    // En Windows, con la ruta en UTF-16: con la de 8 bits fallarían los nombres con acentos.
+    const int opened = archive_read_open_filename_w(
+        handle.get(), reinterpret_cast<const wchar_t *>(QDir::toNativeSeparators(path).utf16()), 64 * 1024);
+#else
+    const int opened = archive_read_open_filename(handle.get(), QFile::encodeName(path).constData(), 64 * 1024);
+#endif
+    if (opened != ARCHIVE_OK) {
         return {};
     }
     QList<QPair<QString, QByteArray>> found;

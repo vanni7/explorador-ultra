@@ -61,7 +61,7 @@ struct Raw
 {
     QByteArray path;
     QByteArray data;
-    mode_t type = AE_IFREG;
+    decltype(archive_entry_filetype(nullptr)) type = AE_IFREG;   // Windows no tiene mode_t
     QByteArray link;      ///< Destino de un enlace simbólico.
     QByteArray hardlink;  ///< Destino de un enlace duro.
     qint64 zeros = 0;     ///< Escribe tantos ceros (para bombas) en vez de `data`.
