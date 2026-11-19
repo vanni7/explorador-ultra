@@ -70,13 +70,15 @@ VBoxManage unattended install EU-Win11-Build --iso ~/VMs/iso/Win11_Enterprise_Ev
 | CMake | 4.4.4 (MSI oficial) |
 | Git para Windows | 2.56.0.4 |
 | Python | 3.13.17 |
-| Qt | 6.12.0 `msvc2022_64` en `C:\Qt` (sin Qt PDF por ahora) |
+| Qt | 6.12.0 `msvc2022_64` en `C:\Qt`, con Qt PDF (desde el 19-nov) |
+| vcpkg | etiqueta `2026.10.16` en `C:\vcpkg`: libarchive 3.8.9 (bzip2, lz4, lzma, zstd) con el triplete `x64-windows-release` (19-nov) |
 
 Cómo se hizo (guiones en `tools/windows/`):
 1. **UAC desactivado en la VM** (`EnableLUA=0`), porque las órdenes enviadas con `VBoxManage guestcontrol` no pueden aceptar el aviso de administrador. Se hizo una vez desde un PowerShell elevado abierto con el teclado virtual. Consecuencia: en esa VM ya no funcionan las aplicaciones de la tienda, incluido `winget`; por eso los guiones descargan los instaladores con `curl`.
 2. `provision-launch.cmd` ejecuta `provision.cmd` como tarea programada (cuenta SYSTEM), independiente de la sesión remota, con registro en `C:\eu\provision.log`. `status.cmd` muestra el avance.
 3. Qt: `aqtinstall` 3.3.0 **no encuentra Qt 6.12 para Windows** (busca la carpeta `qt6_6120`; el repositorio ahora usa `qt6_6120_msvc2022_64`). Se descarga en Ubuntu con `tools/windows/fetch_qt_windows.py ~/VMs/qt-windows` (comprueba las sumas SHA-1; requiere `sudo apt install 7zip`) y se copia a la VM con `copy-qt.cmd` por la carpeta compartida `qtwin`.
-4. Compilar y probar: `build.cmd` copia el código de la carpeta compartida `proyecto` (solo lectura) a `C:\eu\src`, compila con MSVC + Ninja y ejecuta las pruebas.
+4. libarchive: `instalar-vcpkg.cmd` clona vcpkg en la etiqueta fijada, lo prepara y compila libarchive con el triplete propio de `tools/windows/vcpkg-triplets` (unos 4,5 min la primera vez; la CI usa el mismo guion con caché). Qt PDF lo descarga `fetch_qt_windows.py` junto con lo demás.
+5. Compilar y probar: `build.cmd` copia el código de la carpeta compartida `proyecto` (solo lectura) a `C:\eu\src`, compila con MSVC + Ninja (con el toolchain de vcpkg si existe `C:\vcpkg`) y ejecuta las pruebas. `actualizar.cmd` cierra la aplicación, llama a `build.cmd` y la vuelve a abrir.
 
 ```bash
 # Desde Ubuntu, con la VM encendida:
@@ -87,4 +89,3 @@ Instantáneas: `windows-recien-instalado` y `herramientas-instaladas`. El teclad
 
 ### Pendiente en el entorno
 - Autenticación de `gh` y creación del repositorio en GitHub.
-- Qt PDF para Windows (repositorio "extensions"), necesario en la Fase 3.

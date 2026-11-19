@@ -1943,7 +1943,7 @@ private slots:
 
     void archivesAreBrowsedLikeFoldersAndExtracted()
     {
-        if (!archive::isAvailable()) {
+        if (!eu::archive::isAvailable()) {
             QSKIP("Compilado sin libarchive.");
         }
         QTemporaryDir data;
@@ -1963,7 +1963,7 @@ private slots:
         // Comprimir lo seleccionado (lo mismo que hace el menú contextual).
         const QString zip = root + QStringLiteral("/paquete.zip");
         window.fileActions()->compress({root + QStringLiteral("/álbum"), root + QStringLiteral("/notas.txt")}, zip,
-                                       archive::Format::Zip);
+                                       eu::archive::Format::Zip);
         QVERIFY(waitIdle(window));
         QVERIFY(QFileInfo(zip).isFile());
         QTRY_VERIFY(pane->model()->rowOfName(QStringLiteral("paquete.zip")) >= 0);
@@ -2032,7 +2032,7 @@ private slots:
         // Comprimir encima de uno que ya existe: error, y el existente sigue igual.
         const qint64 before = QFileInfo(zip).size();
         QSignalSpy reports(&window, &MainWindow::actionReported);
-        window.fileActions()->compress({root + QStringLiteral("/notas.txt")}, zip, archive::Format::Zip);
+        window.fileActions()->compress({root + QStringLiteral("/notas.txt")}, zip, eu::archive::Format::Zip);
         QVERIFY(waitIdle(window));
         QTRY_COMPARE(reports.count(), 1);
         QCOMPARE(reports.first().at(1).toBool(), true);   // es un error

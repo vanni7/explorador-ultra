@@ -173,6 +173,10 @@ core::Status createArchive(const QString &outputPath, Format, const QStringList 
 
 namespace {
 
+/// Tipo de una entrada (AE_IFREG, AE_IFDIR…). Windows no tiene mode_t: libarchive
+/// usa allí otro tipo entero, así que se toma el que devuelve la propia función.
+using EntryType = decltype(archive_entry_filetype(nullptr));
+
 struct ReadDeleter
 {
     void operator()(struct archive *handle) const { archive_read_free(handle); }
@@ -216,7 +220,14 @@ ReadHandle openForReading(const QString &archivePath, core::Error *error)
 /// La ruta de una entrada tal como viene, con "/" y sin "./" ni "/" final.
 QString rawPathOf(struct archive_entry *entry, const QString &archivePath)
 {
+    // En Windows primero la versión ancha: con el locale "C" de un programa,
+    // libarchive no sabe pasar a 8 bits lo que no es ASCII.
     QString path;
+#ifdef Q_OS_WIN
+    if (const wchar_t *wide = archive_entry_pathname_w(entry)) {
+        path = QString::fromWCharArray(wide);
+    } else
+#endif
     if (const char *utf8 = archive_entry_pathname_utf8(entry)) {
         path = QString::fromUtf8(utf8);
     } else if (const char *local = archive_entry_pathname(entry)) {
@@ -238,6 +249,11 @@ QString rawPathOf(struct archive_entry *entry, const QString &archivePath)
 
 QString linkTargetOf(struct archive_entry *entry)
 {
+#ifdef Q_OS_WIN
+    if (const wchar_t *wide = archive_entry_symlink_w(entry)) {
+        return QString::fromWCharArray(wide);
+    }
+#endif
     if (const char *utf8 = archive_entry_symlink_utf8(entry)) {
         return QString::fromUtf8(utf8);
     }
@@ -317,7 +333,7 @@ core::Result<QList<ArchiveEntry>> listArchive(const QString &archivePath, const 
             archive_read_data_skip(handle.get());
             continue;
         }
-        const mode_t type = archive_entry_filetype(entry);
+        const EntryType type = archive_entry_filetype(entry);
         item.isDirectory = type == AE_IFDIR;
         item.isSymlink = type == AE_IFLNK;
         item.linkTarget = item.isSymlink ? linkTargetOf(entry) : QString();
@@ -430,17 +446,28 @@ core::Result<ExtractResult> extractArchive(const QString &archivePath, const QSt
         }
         // Un enlace duro apunta a otra entrada ya extraída: tiene que ser una
         // ruta segura (y entonces cuenta como archivo).
+#ifdef Q_OS_WIN
+        const wchar_t *hardlink = archive_entry_hardlink_w(entry);
+        const QString hardlinkName = hardlink != nullptr ? QString::fromWCharArray(hardlink) : QString();
+#else
         const char *hardlink = archive_entry_hardlink(entry);
+        const QString hardlinkName = hardlink != nullptr ? QString::fromLocal8Bit(hardlink) : QString();
+#endif
         if (hardlink != nullptr) {
-            const QString linked = safeRelativePath(QString::fromLocal8Bit(hardlink));
+            const QString linked = safeRelativePath(hardlinkName);
             if (linked.isEmpty()) {
                 skip(raw, tr("es un enlace que apunta fuera de la carpeta de destino"));
                 continue;
             }
+#ifdef Q_OS_WIN
+            archive_entry_copy_hardlink_w(
+                entry, reinterpret_cast<const wchar_t *>(QDir::toNativeSeparators(root + QLatin1Char('/') + linked).utf16()));
+#else
             const QByteArray absolute = QFile::encodeName(root + QLatin1Char('/') + linked);
             archive_entry_copy_hardlink(entry, absolute.constData());
+#endif
         }
-        const mode_t type = hardlink != nullptr ? mode_t(AE_IFREG) : archive_entry_filetype(entry);
+        const EntryType type = hardlink != nullptr ? EntryType(AE_IFREG) : archive_entry_filetype(entry);
         if (type != AE_IFREG && type != AE_IFDIR && type != AE_IFLNK) {
             skip(raw, tr("no es un archivo, carpeta ni enlace"));
             continue;
@@ -603,7 +630,13 @@ core::Status createArchive(const QString &outputPath, Format format, const QStri
         if (archive_read_disk_entry_from_file(disk.get(), entry, -1, nullptr) != ARCHIVE_OK) {
             return archiveError(disk.get(), path, core::ErrorCode::IoError);
         }
+#ifdef Q_OS_WIN
+        // Ancha: el 7z guarda los nombres en UTF-16 y, desde UTF-8, libarchive
+        // los pasaría por la página de códigos (con "?" en lo que no sea ASCII).
+        archive_entry_copy_pathname_w(entry, reinterpret_cast<const wchar_t *>(inside.utf16()));
+#else
         archive_entry_set_pathname_utf8(entry, inside.toUtf8().constData());
+#endif
         archive_entry_set_uname(entry, "");
         archive_entry_set_gname(entry, "");
         if (archive_write_header(writer.get(), entry) < ARCHIVE_WARN) {
