@@ -1,11 +1,14 @@
 # Módulo content: el texto de los documentos, para buscar en ellos (SPEC §6.5).
 add_library(eu_content STATIC
+    src/DocumentPreview.cpp
     src/TextExtractor.cpp
+    include/eu/content/DocumentPreview.h
     include/eu/content/TextExtractor.h)
 add_library(eu::content ALIAS eu_content)
 
 target_include_directories(eu_content PUBLIC include)
-target_link_libraries(eu_content PUBLIC eu::core eu::tasks Qt6::Core)
+# Qt Gui: las imágenes de los documentos se decodifican y reducen para la vista previa.
+target_link_libraries(eu_content PUBLIC eu::core eu::tasks Qt6::Core Qt6::Gui)
 eu_target_defaults(eu_content)
 
 if(EU_LIBARCHIVE_FOUND)

@@ -13,7 +13,11 @@
 //              La imagen se deja en "out" (PNG sin comprimir, que es lo más rápido).
 //   Metadatos: {"op":"meta","path":"…"}
 //              -> {"ok":true,"sections":[{"title":"Cámara","fields":[["ISO","200"],…]}]}
+//   Texto:     {"op":"text","path":"…","out":"…"} -> el texto en UTF-8 en "out".
+//   Documento: {"op":"preview","path":"…","out":"…"} -> la vista previa de un
+//              documento de oficina (content::documentPreview) en JSON en "out".
 
+#include "eu/content/DocumentPreview.h"
 #include "eu/content/TextExtractor.h"
 #include "eu/meta/Metadata.h"
 #include "eu/thumbs/Thumbnail.h"
@@ -97,6 +101,25 @@ int main(int argc, char *argv[])
             if (!file.open(QIODevice::WriteOnly) || file.write(text.value().toUtf8()) < 0 || !file.commit()) {
                 reply({{QStringLiteral("ok"), false}, {QStringLiteral("code"), int(eu::core::ErrorCode::IoError)},
                        {QStringLiteral("message"), QStringLiteral("No se pudo escribir el texto")}});
+                continue;
+            }
+            reply({{QStringLiteral("ok"), true}});
+            continue;
+        }
+        if (request.value(QStringLiteral("op")).toString() == QLatin1String("preview")) {
+            const eu::core::Result<eu::content::DocumentPreview> preview = eu::content::documentPreview(path, {});
+            if (!preview.ok()) {
+                reply({{QStringLiteral("ok"), false}, {QStringLiteral("code"), int(preview.error().code)},
+                       {QStringLiteral("message"), preview.error().message}});
+                continue;
+            }
+            QSaveFile file(request.value(QStringLiteral("out")).toString());
+            if (!file.open(QIODevice::WriteOnly)
+                || file.write(QJsonDocument(eu::content::documentPreviewToJson(preview.value()))
+                                  .toJson(QJsonDocument::Compact)) < 0
+                || !file.commit()) {
+                reply({{QStringLiteral("ok"), false}, {QStringLiteral("code"), int(eu::core::ErrorCode::IoError)},
+                       {QStringLiteral("message"), QStringLiteral("No se pudo escribir la vista previa")}});
                 continue;
             }
             reply({{QStringLiteral("ok"), true}});

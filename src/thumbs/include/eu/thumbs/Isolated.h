@@ -1,6 +1,7 @@
 // Explorador Ultra — SPDX-License-Identifier: GPL-3.0-or-later
 #pragma once
 
+#include "eu/content/DocumentPreview.h"
 #include "eu/meta/Metadata.h"
 #include "eu/thumbs/Thumbnail.h"
 
@@ -28,6 +29,11 @@ QList<meta::Section> readMetadataIsolated(const QString &path, const tasks::Canc
 /// en el proceso auxiliar si no es texto plano: un PDF o un DOCX dañados no
 /// cierran la aplicación.
 core::Result<QString> extractTextIsolated(const QString &path, const tasks::CancelToken &cancel);
+
+/// La vista previa de un documento de oficina (content::documentPreview),
+/// leída en el proceso auxiliar: un DOCX o un XLSX dañados o hechos a
+/// propósito no cierran la aplicación.
+core::Result<content::DocumentPreview> documentPreviewIsolated(const QString &path, const tasks::CancelToken &cancel);
 
 /// true si está el auxiliar (si no, renderThumbnailIsolated no aísla).
 bool hasThumbnailHelper();

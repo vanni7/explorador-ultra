@@ -1,6 +1,7 @@
 // Explorador Ultra — SPDX-License-Identifier: GPL-3.0-or-later
 #include "eu/thumbs/Isolated.h"
 
+#include "eu/content/DocumentPreview.h"
 #include "eu/content/TextExtractor.h"
 
 #include <QCoreApplication>
@@ -134,6 +135,34 @@ public:
         return text;
     }
 
+    core::Result<content::DocumentPreview> document(const QString &path, const tasks::CancelToken &cancel)
+    {
+        if (!ensureRunning()) {
+            return content::documentPreview(path, cancel);
+        }
+        const QString out = m_scratch->filePath(QStringLiteral("documento.json"));
+        QFile::remove(out);
+        const core::Result<QJsonObject> reply =
+            ask({{QStringLiteral("op"), QStringLiteral("preview")}, {QStringLiteral("path"), path},
+                 {QStringLiteral("out"), out}},
+                path, cancel);
+        if (!reply.ok()) {
+            return reply.error();
+        }
+        if (!reply.value().value(QStringLiteral("ok")).toBool()) {
+            return core::Error{core::ErrorCode(reply.value().value(QStringLiteral("code")).toInt(int(core::ErrorCode::Unknown))),
+                               reply.value().value(QStringLiteral("message")).toString(), path, 0};
+        }
+        QFile file(out);
+        if (!file.open(QIODevice::ReadOnly)) {
+            return core::Error{core::ErrorCode::IoError, tr("No se pudo leer la vista previa del documento"), path, 0};
+        }
+        const QJsonObject object = QJsonDocument::fromJson(file.readAll()).object();
+        file.close();
+        QFile::remove(out);
+        return content::documentPreviewFromJson(object);
+    }
+
     core::Result<QImage> render(const ThumbnailRequest &request, const tasks::CancelToken &cancel)
     {
         if (!ensureRunning()) {
@@ -238,6 +267,14 @@ core::Result<QString> extractTextIsolated(const QString &path, const tasks::Canc
         return content::extractText(path, cancel);
     }
     return helperForThisThread().text(path, cancel);
+}
+
+core::Result<content::DocumentPreview> documentPreviewIsolated(const QString &path, const tasks::CancelToken &cancel)
+{
+    if (cancel.isCancelled()) {
+        return core::Error{core::ErrorCode::Cancelled, tr("Cancelado"), path, 0};
+    }
+    return helperForThisThread().document(path, cancel);
 }
 
 QList<meta::Section> readMetadataIsolated(const QString &path, const tasks::CancelToken &cancel)
