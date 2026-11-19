@@ -1,6 +1,7 @@
 // Explorador Ultra — SPDX-License-Identifier: GPL-3.0-or-later
 #pragma once
 
+#include "eu/content/DocumentPreview.h"
 #include "eu/core/SizeFormat.h"
 #include "eu/fs/Entry.h"
 #include "eu/tasks/Scheduler.h"
@@ -14,9 +15,14 @@ class QLabel;
 class QPlainTextEdit;
 class QScrollArea;
 class QStackedWidget;
+class QTabBar;
+class QTableView;
 class QTextBrowser;
 
 namespace eu::ui {
+
+class PreviewDocumentView;
+class PreviewSheetModel;
 
 /// Lo que el panel necesita saber del elemento a la vista.
 struct PreviewItem
@@ -32,7 +38,9 @@ struct PreviewItem
 ///
 /// Todo lo que lee el disco se hace en una tarea; si la selección cambia
 /// antes de que acabe, lo anterior se cancela y se descarta. Nunca ejecuta
-/// nada del archivo: los documentos se ven como imagen y los textos como texto.
+/// nada del archivo: Word y OpenDocument se ven con su formato (leídos en el
+/// proceso auxiliar), las hojas de cálculo como cuadrícula, otros documentos
+/// como imagen (o, si no se puede, su texto) y los textos como texto.
 class PreviewPanel : public QWidget
 {
     Q_OBJECT
@@ -49,11 +57,15 @@ public:
     /// Para las pruebas: lo que se está mostrando.
     QString title() const;
     QString fieldValue(const QString &label) const;
-    enum class Shown { Nothing, Picture, Text, Markdown, Message };
+    enum class Shown { Nothing, Picture, Text, Markdown, Document, Spreadsheet, Message };
     Shown shown() const;
     bool isLoading() const { return m_loading; }
     QImage picture() const { return m_picture; }
+    /// El texto a la vista; de una hoja de cálculo, sus celdas (tabulador entre
+    /// columnas, una fila por línea).
     QString text() const;
+    QStringList sheetNames() const;
+    void showSheet(int index);
 
 protected:
     void resizeEvent(QResizeEvent *event) override;
@@ -65,6 +77,7 @@ private:
     void onLoaded(quint64 generation, const Loaded &loaded);
     void rebuildFields(const QList<QPair<QString, QList<QPair<QString, QString>>>> &extra);
     void updatePicture();
+    void showDocument(const content::DocumentPreview &document);
 
     tasks::Scheduler &m_scheduler;
     core::SizeUnits m_units = core::SizeUnits::Decimal;
@@ -84,6 +97,13 @@ private:
     QLabel *m_pictureLabel = nullptr;
     QPlainTextEdit *m_textView = nullptr;
     QTextBrowser *m_markdownView = nullptr;
+    PreviewDocumentView *m_documentView = nullptr;
+    QWidget *m_sheetView = nullptr;
+    QTabBar *m_sheetTabs = nullptr;
+    QTableView *m_sheetTable = nullptr;
+    PreviewSheetModel *m_sheetModel = nullptr;
+    QLabel *m_sheetNote = nullptr;
+    content::DocumentPreview m_document;   ///< El documento a la vista (sus hojas, al cambiar de pestaña).
     QLabel *m_message = nullptr;
 };
 

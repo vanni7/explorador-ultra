@@ -94,6 +94,8 @@ QList<Rule> defaultRules()
         rule(tr("PowerPoint"), QStringLiteral("ppt pptx odp"), tr("Documentos/PowerPoint")),
         rule(tr("Texto"), QStringLiteral("txt md"), tr("Documentos/Texto")),
         rule(tr("Páginas web"), QStringLiteral("html htm mhtml"), tr("Documentos/Web")),
+        rule(tr("Libros electrónicos"), QStringLiteral("epub mobi azw azw3 kfx fb2 djvu cbz cbr"),
+             tr("Documentos/Libros")),
         rule(tr("JPG"), QStringLiteral("jpg jpeg"), tr("Imágenes/JPG")),
         rule(tr("PNG"), QStringLiteral("png"), tr("Imágenes/PNG")),
         rule(tr("RAW"), QStringLiteral("cr2 cr3 nef arw dng orf rw2 raf pef srw"), tr("Imágenes/RAW")),

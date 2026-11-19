@@ -72,11 +72,14 @@ private slots:
         touch(root + QStringLiteral("/raro.xyz"));
         touch(root + QStringLiteral("/sub/dentro.pdf"));
         touch(root + QStringLiteral("/guía.html"));
+        touch(root + QStringLiteral("/novela.epub"));
+        touch(root + QStringLiteral("/manual.MOBI"));
         Options options;
         options.rules = defaultRules();
         Plan plan = simulate(root, options, {});
         QCOMPARE(targets(plan, root),
-                 (QStringList{QStringLiteral("Audio/FLAC/canción.flac"), QStringLiteral("Documentos/PDF/informe.PDF"),
+                 (QStringList{QStringLiteral("Audio/FLAC/canción.flac"), QStringLiteral("Documentos/Libros/manual.MOBI"),
+                              QStringLiteral("Documentos/Libros/novela.epub"), QStringLiteral("Documentos/PDF/informe.PDF"),
                               QStringLiteral("Documentos/Web/guía.html"), QStringLiteral("Documentos/Word/carta.docx"),
                               QStringLiteral("Imágenes/JPG/foto.jpg"), QStringLiteral("Imágenes/RAW/toma.CR2"),
                               QStringLiteral("Videos/MKV/peli.mkv")}));

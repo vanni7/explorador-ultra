@@ -2,11 +2,13 @@
 #include "eu/ui/PreviewPanel.h"
 
 #include "eu/archive/Archive.h"
+#include "eu/content/TextExtractor.h"
 #include "eu/meta/Metadata.h"
 #include "eu/thumbs/Isolated.h"
 #include "eu/thumbs/Thumbnail.h"
 #include "eu/ui/Locations.h"
 
+#include <QAbstractTableModel>
 #include <QApplication>
 #include <QDateTime>
 #include <QDir>
@@ -15,6 +17,7 @@
 #include <QFileInfo>
 #include <QFontDatabase>
 #include <QFormLayout>
+#include <QHeaderView>
 #include <QLabel>
 #include <QLocale>
 #include <QPlainTextEdit>
@@ -22,6 +25,8 @@
 #include <QScrollArea>
 #include <QStackedWidget>
 #include <QStringDecoder>
+#include <QTabBar>
+#include <QTableView>
 #include <QTextBrowser>
 #include <QVBoxLayout>
 
@@ -51,6 +56,104 @@ QString dateText(qint64 milliseconds)
 
 } // namespace
 
+/// Muestra el HTML de un documento. Solo carga las imágenes que trae el
+/// propio documento (ya reducidas en el proceso auxiliar): nada del disco ni
+/// de la red, y los enlaces no se abren.
+class PreviewDocumentView : public QTextBrowser
+{
+public:
+    explicit PreviewDocumentView(QWidget *parent) : QTextBrowser(parent)
+    {
+        setOpenLinks(false);
+        setOpenExternalLinks(false);
+    }
+
+    void setImages(const QList<QByteArray> &images)
+    {
+        m_images.clear();
+        for (qsizetype i = 0; i < images.size(); ++i) {
+            m_images.insert(QStringLiteral("eu-imagen:%1").arg(i), QImage::fromData(images.at(i)));
+        }
+    }
+
+protected:
+    QVariant loadResource(int type, const QUrl &name) override
+    {
+        if (type == QTextDocument::ImageResource) {
+            const auto image = m_images.constFind(name.toString());
+            if (image != m_images.cend()) {
+                return *image;
+            }
+        }
+        return {};
+    }
+
+private:
+    QHash<QString, QImage> m_images;
+};
+
+/// Una hoja de cálculo para la cuadrícula: columnas A, B, C… y el número de
+/// cada fila; los números a la derecha.
+class PreviewSheetModel : public QAbstractTableModel
+{
+public:
+    using QAbstractTableModel::QAbstractTableModel;
+
+    void setSheet(const content::SheetPreview &sheet)
+    {
+        beginResetModel();
+        m_sheet = sheet;
+        endResetModel();
+    }
+
+    int rowCount(const QModelIndex &parent = QModelIndex()) const override
+    {
+        return parent.isValid() ? 0 : int(m_sheet.cells.size());
+    }
+
+    int columnCount(const QModelIndex &parent = QModelIndex()) const override
+    {
+        return parent.isValid() ? 0 : m_sheet.columns;
+    }
+
+    QVariant data(const QModelIndex &index, int role) const override
+    {
+        if (!index.isValid() || index.row() >= m_sheet.cells.size()) {
+            return {};
+        }
+        const QStringList &row = m_sheet.cells.at(index.row());
+        const QString text = index.column() < row.size() ? row.at(index.column()) : QString();
+        if (role == Qt::DisplayRole) {
+            return text;
+        }
+        if (role == Qt::ToolTipRole && text.size() > 30) {
+            return text;
+        }
+        if (role == Qt::TextAlignmentRole) {
+            const QByteArray flags = m_sheet.numeric.value(index.row());
+            const bool number = index.column() < flags.size() && flags.at(index.column()) == '1';
+            return QVariant::fromValue(Qt::Alignment((number ? Qt::AlignRight : Qt::AlignLeft) | Qt::AlignVCenter));
+        }
+        return {};
+    }
+
+    QVariant headerData(int section, Qt::Orientation orientation, int role) const override
+    {
+        if (role != Qt::DisplayRole) {
+            return QAbstractTableModel::headerData(section, orientation, role);
+        }
+        if (orientation == Qt::Horizontal) {
+            return content::spreadsheetColumnName(section + 1);
+        }
+        return section < m_sheet.rowNumbers.size() ? QString::number(m_sheet.rowNumbers.at(section)) : QString();
+    }
+
+    const content::SheetPreview &sheet() const { return m_sheet; }
+
+private:
+    content::SheetPreview m_sheet;
+};
+
 struct PreviewPanel::Loaded
 {
     QList<QPair<QString, QList<QPair<QString, QString>>>> sections;   ///< Título y campos.
@@ -58,6 +161,8 @@ struct PreviewPanel::Loaded
     QString text;
     bool truncated = false;
     bool markdown = false;
+    bool hasDocument = false;
+    content::DocumentPreview document;
     QString problem;
 };
 
@@ -95,6 +200,31 @@ PreviewPanel::PreviewPanel(tasks::Scheduler &scheduler, QWidget *parent) : QWidg
     // Un Markdown puede enlazar a lo que sea: no se abre nada desde aquí.
     m_markdownView->setOpenLinks(false);
     m_markdownView->setOpenExternalLinks(false);
+    m_documentView = new PreviewDocumentView(m_preview);
+    m_documentView->setAccessibleName(tr("Documento"));
+    m_sheetView = new QWidget(m_preview);
+    m_sheetTabs = new QTabBar(m_sheetView);
+    m_sheetTabs->setDocumentMode(true);
+    m_sheetTabs->setExpanding(false);
+    m_sheetTabs->setUsesScrollButtons(true);
+    m_sheetTabs->setAccessibleName(tr("Hojas"));
+    m_sheetModel = new PreviewSheetModel(this);
+    m_sheetTable = new QTableView(m_sheetView);
+    m_sheetTable->setModel(m_sheetModel);
+    m_sheetTable->setEditTriggers(QAbstractItemView::NoEditTriggers);
+    m_sheetTable->setWordWrap(false);
+    m_sheetTable->setAccessibleName(tr("Celdas de la hoja"));
+    m_sheetTable->verticalHeader()->setDefaultSectionSize(m_sheetTable->fontMetrics().height() + 6);
+    m_sheetNote = new QLabel(m_sheetView);
+    m_sheetNote->setWordWrap(true);
+    m_sheetNote->setEnabled(false);
+    auto *sheetLayout = new QVBoxLayout(m_sheetView);
+    sheetLayout->setContentsMargins(0, 0, 0, 0);
+    sheetLayout->setSpacing(2);
+    sheetLayout->addWidget(m_sheetTabs);
+    sheetLayout->addWidget(m_sheetTable, 1);
+    sheetLayout->addWidget(m_sheetNote);
+    connect(m_sheetTabs, &QTabBar::currentChanged, this, &PreviewPanel::showSheet);
     m_message = new QLabel(m_preview);
     m_message->setAlignment(Qt::AlignCenter);
     m_message->setWordWrap(true);
@@ -102,6 +232,8 @@ PreviewPanel::PreviewPanel(tasks::Scheduler &scheduler, QWidget *parent) : QWidg
     m_preview->addWidget(m_pictureLabel);
     m_preview->addWidget(m_textView);
     m_preview->addWidget(m_markdownView);
+    m_preview->addWidget(m_documentView);
+    m_preview->addWidget(m_sheetView);
     m_preview->addWidget(m_message);
 
     auto *layout = new QVBoxLayout(this);
@@ -287,6 +419,29 @@ void PreviewPanel::startLoading()
                     loaded.sections.append({section.title, fields});
                 }
             }
+            const auto post = [&self, generation](const Loaded &result) {
+                QMetaObject::invokeMethod(qApp, [self, generation, result] {
+                    if (self) {
+                        self->onLoaded(generation, result);
+                    }
+                }, Qt::QueuedConnection);
+            };
+            // Word, Excel y OpenDocument: con su formato, leídos en el proceso
+            // auxiliar (sin LibreOffice, así que también en Windows).
+            if (!item.entry.isDirectory && content::hasDocumentPreview(item.entry.name)) {
+                const core::Result<content::DocumentPreview> document =
+                    thumbs::documentPreviewIsolated(item.path, cancel);
+                if (document.ok()) {
+                    loaded.hasDocument = true;
+                    loaded.document = document.value();
+                    post(loaded);
+                    return;
+                }
+                if (document.error().code == core::ErrorCode::Cancelled || cancel.isCancelled()) {
+                    return;
+                }
+                // Si no se pudo, se intenta como imagen (LibreOffice) o como texto.
+            }
             thumbs::ThumbnailRequest request;
             request.path = item.path;
             request.size = item.entry.size;
@@ -316,11 +471,22 @@ void PreviewPanel::startLoading()
                     loaded.problem = picture.error().message;
                 }
             }
-            QMetaObject::invokeMethod(qApp, [self, generation, loaded] {
-                if (self) {
-                    self->onLoaded(generation, loaded);
+            // Un documento sin imagen (un PowerPoint sin LibreOffice, un RTF…): su texto.
+            const content::TextSource textSource = content::textSourceFor(item.entry.name);
+            if (loaded.picture.isNull() && loaded.text.isNull() && !item.entry.isDirectory && !cancel.isCancelled()
+                && textSource != content::TextSource::None && textSource != content::TextSource::Plain) {
+                const core::Result<QString> text = thumbs::extractTextIsolated(item.path, cancel);
+                if (text.ok() && !text.value().trimmed().isEmpty()) {
+                    loaded.text = text.value().left(textBytes);
+                    loaded.text.replace(QLatin1Char('\f'), QStringLiteral("\n\n"));   // páginas y diapositivas
+                    loaded.truncated = text.value().size() > textBytes;
+                    loaded.problem.clear();
                 }
-            }, Qt::QueuedConnection);
+            }
+            if (cancel.isCancelled()) {
+                return;
+            }
+            post(loaded);
         });
 }
 
@@ -332,7 +498,9 @@ void PreviewPanel::onLoaded(quint64 generation, const Loaded &loaded)
     m_loading = false;
     m_task = tasks::TaskHandle();
     rebuildFields(loaded.sections);
-    if (!loaded.picture.isNull()) {
+    if (loaded.hasDocument) {
+        showDocument(loaded.document);
+    } else if (!loaded.picture.isNull()) {
         m_picture = loaded.picture;
         m_picture.setDevicePixelRatio(1.0);
         // Primero a la vista, para que la etiqueta tenga ya su tamaño real.
@@ -353,6 +521,71 @@ void PreviewPanel::onLoaded(quint64 generation, const Loaded &loaded)
                                                     : tr("No se puede mostrar: %1").arg(loaded.problem));
         m_preview->setCurrentWidget(m_message);
     }
+}
+
+void PreviewPanel::showDocument(const content::DocumentPreview &document)
+{
+    m_document = document;
+    if (!m_document.isSpreadsheet()) {
+        m_documentView->setImages(m_document.images);
+        m_documentView->setHtml(m_document.html);
+        m_preview->setCurrentWidget(m_documentView);
+        return;
+    }
+    {
+        const QSignalBlocker blocker(m_sheetTabs);
+        while (m_sheetTabs->count() > 0) {
+            m_sheetTabs->removeTab(0);
+        }
+        for (const content::SheetPreview &sheet : std::as_const(m_document.sheets)) {
+            m_sheetTabs->addTab(sheet.name);
+        }
+        m_sheetTabs->setCurrentIndex(0);
+    }
+    showSheet(0);
+    m_preview->setCurrentWidget(m_sheetView);
+}
+
+void PreviewPanel::showSheet(int index)
+{
+    if (index < 0 || index >= m_document.sheets.size()) {
+        return;
+    }
+    const content::SheetPreview &sheet = m_document.sheets.at(index);
+    m_sheetModel->setSheet(sheet);
+    // Columnas a la medida de lo que llevan, sin que una muy larga se coma el panel.
+    m_sheetTable->resizeColumnsToContents();
+    for (int column = 0; column < sheet.columns; ++column) {
+        m_sheetTable->setColumnWidth(column, std::clamp(m_sheetTable->columnWidth(column), 40, 260));
+    }
+    QStringList notes;
+    if (sheet.cells.isEmpty()) {
+        notes.append(tr("Hoja vacía."));
+    }
+    if (sheet.moreRows) {
+        notes.append(sheet.totalRows > 0
+                         ? tr("Se muestran las primeras %1 filas con datos (la hoja llega hasta la fila %2).")
+                               .arg(sheet.rowNumbers.size())
+                               .arg(sheet.totalRows)
+                         : tr("Se muestran las primeras %1 filas con datos.").arg(sheet.rowNumbers.size()));
+    }
+    if (sheet.moreColumns) {
+        notes.append(tr("Se muestran las columnas hasta la %1.").arg(content::spreadsheetColumnName(sheet.columns)));
+    }
+    if (m_document.moreSheets > 0) {
+        notes.append(tr("%n hoja(s) más sin mostrar.", nullptr, m_document.moreSheets));
+    }
+    m_sheetNote->setText(notes.join(QLatin1Char(' ')));
+    m_sheetNote->setVisible(!notes.isEmpty());
+}
+
+QStringList PreviewPanel::sheetNames() const
+{
+    QStringList names;
+    for (const content::SheetPreview &sheet : m_document.sheets) {
+        names.append(sheet.name);
+    }
+    return names;
 }
 
 void PreviewPanel::updatePicture()
@@ -408,6 +641,12 @@ PreviewPanel::Shown PreviewPanel::shown() const
     if (current == m_markdownView) {
         return Shown::Markdown;
     }
+    if (current == m_documentView) {
+        return Shown::Document;
+    }
+    if (current == m_sheetView) {
+        return Shown::Spreadsheet;
+    }
     return m_hasItem ? Shown::Message : Shown::Nothing;
 }
 
@@ -419,6 +658,16 @@ QString PreviewPanel::text() const
     }
     if (current == m_markdownView) {
         return m_markdownView->toPlainText();
+    }
+    if (current == m_documentView) {
+        return m_documentView->toPlainText();
+    }
+    if (current == m_sheetView) {
+        QStringList lines;
+        for (const QStringList &row : m_sheetModel->sheet().cells) {
+            lines.append(row.join(QLatin1Char('\t')));
+        }
+        return lines.join(QLatin1Char('\n'));
     }
     return m_message->text();
 }

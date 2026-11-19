@@ -1812,6 +1812,26 @@ private slots:
             markdown.write("# Título grande\n\nUn párrafo con **negrita**.\n");
         }
         writeFile(directory.filePath(QStringLiteral("datos.bin")), 100);
+#ifdef EU_HAVE_LIBARCHIVE
+        QVERIFY(eu::testsupport::writeZip(directory.filePath(QStringLiteral("carta.docx")), {
+            {QStringLiteral("word/document.xml"),
+             "<?xml version=\"1.0\"?><w:document xmlns:w=\"w\"><w:body><w:p><w:pPr><w:pStyle w:val=\"Heading1\"/>"
+             "</w:pPr><w:r><w:t>Querida familia</w:t></w:r></w:p><w:p><w:r><w:rPr><w:b/></w:rPr><w:t>Les escribo</w:t>"
+             "</w:r></w:p></w:body></w:document>"}}));
+        QVERIFY(eu::testsupport::writeZip(directory.filePath(QStringLiteral("gastos.xlsx")), {
+            {QStringLiteral("xl/workbook.xml"),
+             "<?xml version=\"1.0\"?><workbook xmlns:r=\"r\"><sheets><sheet name=\"Enero\" r:id=\"rId1\"/>"
+             "<sheet name=\"Febrero\" r:id=\"rId2\"/></sheets></workbook>"},
+            {QStringLiteral("xl/_rels/workbook.xml.rels"),
+             "<?xml version=\"1.0\"?><Relationships><Relationship Id=\"rId1\" Target=\"worksheets/sheet1.xml\"/>"
+             "<Relationship Id=\"rId2\" Target=\"worksheets/sheet2.xml\"/></Relationships>"},
+            {QStringLiteral("xl/worksheets/sheet1.xml"),
+             "<?xml version=\"1.0\"?><worksheet><sheetData><row r=\"1\"><c r=\"A1\" t=\"inlineStr\"><is><t>Luz</t></is>"
+             "</c><c r=\"B1\"><v>350</v></c></row></sheetData></worksheet>"},
+            {QStringLiteral("xl/worksheets/sheet2.xml"),
+             "<?xml version=\"1.0\"?><worksheet><sheetData><row r=\"4\"><c r=\"C4\" t=\"inlineStr\"><is><t>Agua</t></is>"
+             "</c></row></sheetData></worksheet>"}}));
+#endif
 
         MainWindow window(m_scheduler, openJournal(data));
         BrowserPane *pane = window.openTab(directory.path());
@@ -1845,6 +1865,20 @@ private slots:
         QTRY_COMPARE_WITH_TIMEOUT(panel->shown(), PreviewPanel::Shown::Message, 10000);
         QTRY_VERIFY(!panel->isLoading());
         QVERIFY(panel->fieldValue(QStringLiteral("Tamaño")).contains(QStringLiteral("100")));
+
+#ifdef EU_HAVE_LIBARCHIVE
+        // Word con su formato y Excel como cuadrícula, sin LibreOffice.
+        selectNames(pane, {QStringLiteral("carta.docx")});
+        QTRY_COMPARE_WITH_TIMEOUT(panel->shown(), PreviewPanel::Shown::Document, 10000);
+        QVERIFY2(panel->text().contains(QStringLiteral("Querida familia")), qPrintable(panel->text()));
+        QVERIFY(panel->text().contains(QStringLiteral("Les escribo")));
+        selectNames(pane, {QStringLiteral("gastos.xlsx")});
+        QTRY_COMPARE_WITH_TIMEOUT(panel->shown(), PreviewPanel::Shown::Spreadsheet, 10000);
+        QCOMPARE(panel->sheetNames(), (QStringList{QStringLiteral("Enero"), QStringLiteral("Febrero")}));
+        QCOMPARE(panel->text(), QStringLiteral("Luz\t350"));
+        panel->showSheet(1);
+        QCOMPARE(panel->text(), QStringLiteral("\t\tAgua"));
+#endif
 
         // Al recorrer deprisa, solo cuenta el último.
         selectNames(pane, {QStringLiteral("mar.png")});
