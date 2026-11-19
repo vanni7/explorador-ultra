@@ -1302,6 +1302,79 @@ private slots:
         QSettings().setValue(QStringLiteral("view/mode"), QStringLiteral("detalles"));   // para las demás pruebas
     }
 
+    void dualPaneSwitchesCopiesAndIsRestored()
+    {
+        QTemporaryDir data;
+        QTemporaryDir directory;
+        const QString left = QDir::cleanPath(directory.path()) + QStringLiteral("/izquierda");
+        const QString right = QDir::cleanPath(directory.path()) + QStringLiteral("/derecha");
+        QVERIFY(QDir().mkpath(left));
+        QVERIFY(QDir().mkpath(right));
+        writeFile(left + QStringLiteral("/a.txt"), 10);
+        {
+            MainWindow window(m_scheduler, openJournal(data));
+            BrowserPane *pane = window.openTab(left);
+            QVERIFY(waitReady(pane));
+            window.show();
+            QVERIFY(QTest::qWaitForWindowExposed(&window));
+            QVERIFY(!window.isDualPane());
+            QCOMPARE(window.otherPane(), nullptr);
+            // Los atajos de ventana necesitan que esté activa (con xcb sin gestor de ventanas, no lo está sola).
+            window.activateWindow();
+            QVERIFY(QTest::qWaitForWindowActive(&window));
+
+            // F3 divide: el otro panel empieza en la misma carpeta y el teclado sigue aquí.
+            pane->fileView()->setFocus();
+            QTest::keyClick(pane->fileView(), Qt::Key_F3);
+            QVERIFY(window.isDualPane());
+            QCOMPARE(window.currentPane(), pane);
+            BrowserPane *other = window.otherPane();
+            QVERIFY(other != nullptr && other != pane);
+            QCOMPARE(other->currentPath(), left);
+            other->navigateTo(right);
+            QVERIFY(waitReady(other));
+
+            // Mayús+F5 copia lo seleccionado a la carpeta del otro panel.
+            selectNames(pane, {QStringLiteral("a.txt")});
+            QTest::keyClick(pane->fileView(), Qt::Key_F5, Qt::ShiftModifier);
+            QTRY_VERIFY(QFile::exists(right + QStringLiteral("/a.txt")));
+            QVERIFY(QFile::exists(left + QStringLiteral("/a.txt")));
+            QTRY_VERIFY(!window.fileActions()->isBusy());
+
+            // F6 pasa al otro panel: lo demás de la ventana lo sigue.
+            QTest::keyClick(pane->fileView(), Qt::Key_F6);
+            QCOMPARE(window.currentPane(), other);
+            QCOMPARE(window.otherPane(), pane);
+            QTRY_VERIFY(other->fileView()->hasFocus());
+            QCOMPARE(window.allPanes().size(), 2);
+
+            // Una pestaña más a la derecha; al cerrar se guarda todo.
+            window.openTab(left);
+            QCOMPARE(window.tabCount(), 2);   // las del panel activo
+            QCOMPARE(window.allPanes().size(), 3);
+            QVERIFY(window.close());
+        }
+        {
+            MainWindow restored(m_scheduler, openJournal(data));
+            restored.restoreSession();
+            QVERIFY(restored.isDualPane());
+            QCOMPARE(restored.allPanes().size(), 3);
+            // Activo el derecho (como al cerrar), con su pestaña elegida.
+            QCOMPARE(restored.currentPane()->currentPath(), left);
+            QCOMPARE(restored.tabCount(), 2);
+            QCOMPARE(restored.otherPane()->currentPath(), left);
+
+            // Cerrar las del panel derecho deja un solo panel.
+            restored.closeTab(1);
+            restored.closeTab(0);
+            QVERIFY(!restored.isDualPane());
+            QCOMPARE(restored.allPanes().size(), 1);
+            QCOMPARE(restored.currentPane()->currentPath(), left);
+            restored.show();
+            QVERIFY(restored.close());   // sesión de un panel, para las demás pruebas
+        }
+    }
+
     void nameColumnKeepsAUsableWidth()
     {
         QTemporaryDir directory;

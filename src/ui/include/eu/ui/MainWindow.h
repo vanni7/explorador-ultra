@@ -55,9 +55,21 @@ public:
                         QWidget *parent = nullptr);
     ~MainWindow() override;
 
-    /// Abre una pestaña nueva en `path` y la deja activa.
+    /// Abre una pestaña nueva en `path` (en el panel activo) y la deja activa.
     BrowserPane *openTab(const QString &path);
+    /// La pestaña a la vista del panel activo.
     BrowserPane *currentPane() const;
+    /// Doble panel (SPEC §5.3): el centro dividido en dos grupos de pestañas
+    /// independientes, cada uno con su ruta, vista e historial. El activo es
+    /// el que tiene el foco (F6 pasa al otro); lo demás de la ventana (ruta,
+    /// árbol, buscador, vista previa) sigue al activo.
+    void setDualPane(bool on);
+    bool isDualPane() const { return m_rightTabs != nullptr; }
+    void switchPane();
+    /// La pestaña a la vista del otro panel; nullptr sin doble panel.
+    BrowserPane *otherPane() const;
+    /// Todas las pestañas de los dos paneles.
+    QList<BrowserPane *> allPanes() const;
     Sidebar *sidebar() const { return m_sidebar; }
     /// Buscador de la barra superior.
     QLineEdit *searchEdit() const { return m_searchEdit; }
@@ -200,6 +212,16 @@ private:
     void updateNavigationActions();
     void updateStatus();
     void updateTabTitle(BrowserPane *pane);
+    QTabWidget *makeTabGroup();
+    /// Un grupo de pestañas con su franja de «panel activo» encima.
+    QWidget *boxFor(QTabWidget *group, QWidget **mark);
+    QTabWidget *groupOf(const BrowserPane *pane) const;
+    BrowserPane *openTabIn(QTabWidget *group, const QString &path, bool activate);
+    void closeTabIn(QTabWidget *group, int index);
+    void setActiveGroup(QTabWidget *group);
+    void updatePaneMarks();
+    /// Copia o mueve lo seleccionado a la carpeta del otro panel.
+    void sendSelectionToOtherPane(bool move);
     void saveSession();
     void navigateCurrentTo(const QString &path);
     void runSearch();
@@ -295,6 +317,17 @@ private:
     QAction *m_detailsAction = nullptr;
     QAction *m_thumbnailsAction = nullptr;
     QAction *m_columnsAction = nullptr;
+    QAction *m_dualPaneAction = nullptr;
+    QAction *m_switchPaneAction = nullptr;
+    QAction *m_copyToOtherAction = nullptr;
+    QAction *m_moveToOtherAction = nullptr;
+    QTabWidget *m_leftTabs = nullptr;
+    QTabWidget *m_rightTabs = nullptr;   ///< Solo con doble panel.
+    QWidget *m_leftMark = nullptr;
+    QWidget *m_rightMark = nullptr;
+    QWidget *m_rightBox = nullptr;
+    QSplitter *m_centerSplitter = nullptr;
+    QList<QAction *> m_paneActions;      ///< Atajos que solo actúan en la zona de archivos.
     QHash<int, QAction *> m_thumbnailSizeActions;   ///< Por tamaño en píxeles.
     int m_thumbnailSize = 160;
     void syncViewActions();

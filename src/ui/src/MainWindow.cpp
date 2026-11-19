@@ -44,6 +44,7 @@
 #include <QListWidget>
 #include <QLocale>
 #include <QMenu>
+#include <QPainter>
 #include <QMenuBar>
 #include <QMessageBox>
 #include <QMimeData>
@@ -71,6 +72,28 @@ namespace {
 QIcon themedIcon(const QString &name, QStyle::StandardPixmap fallback)
 {
     return QIcon::fromTheme(name, QApplication::style()->standardIcon(fallback));
+}
+
+/// Dos paneles lado a lado, para cuando el tema de iconos no trae uno.
+QIcon dualPaneIcon()
+{
+    QIcon icon;
+    for (const int side : {16, 22, 32, 48}) {
+        QPixmap pixmap(side, side);
+        pixmap.fill(Qt::transparent);
+        QPainter painter(&pixmap);
+        painter.setRenderHint(QPainter::Antialiasing);
+        painter.setPen(QPen(QApplication::palette().color(QPalette::WindowText), std::max(1.0, side / 16.0)));
+        const qreal margin = side / 8.0;
+        const qreal gap = side / 10.0;
+        const qreal width = (side - 2 * margin - gap) / 2;
+        const qreal height = side - 3 * margin;
+        painter.drawRect(QRectF(margin, margin * 1.5, width, height));
+        painter.drawRect(QRectF(margin + width + gap, margin * 1.5, width, height));
+        painter.end();
+        icon.addPixmap(pixmap);
+    }
+    return icon;
 }
 
 } // namespace
@@ -132,16 +155,18 @@ MainWindow::MainWindow(tasks::Scheduler &scheduler, std::shared_ptr<journal::Jou
     setWindowTitle(core::applicationName());
     resize(1180, 720);
 
-    m_tabs = new QTabWidget(this);
-    m_tabs->setDocumentMode(true);
-    m_tabs->setTabsClosable(true);
-    m_tabs->setMovable(true);   // reordenar pestañas arrastrando
+    // El centro: uno o dos grupos de pestañas (doble panel). m_tabs es el activo.
+    m_leftTabs = makeTabGroup();
+    m_tabs = m_leftTabs;
+    m_centerSplitter = new QSplitter(Qt::Horizontal, this);
+    m_centerSplitter->setChildrenCollapsible(false);
+    m_centerSplitter->addWidget(boxFor(m_leftTabs, &m_leftMark));
 
     m_sidebar = new Sidebar(m_scheduler, m_volumeMonitor, this);
 
     m_splitter = new QSplitter(Qt::Horizontal, this);
     m_splitter->addWidget(m_sidebar);
-    m_splitter->addWidget(m_tabs);
+    m_splitter->addWidget(m_centerSplitter);
     // Panel derecho: metadatos y vista previa de lo que tiene el cursor.
     m_previewPanel = new PreviewPanel(m_scheduler, this);
     m_previewPanel->setMinimumWidth(180);
@@ -174,8 +199,17 @@ MainWindow::MainWindow(tasks::Scheduler &scheduler, std::shared_ptr<journal::Jou
     connect(m_actions, &FileActions::interruptedOperationsFound, this, &MainWindow::onInterruptedOperationsFound);
     connect(QGuiApplication::clipboard(), &QClipboard::dataChanged, this, &MainWindow::updateEditActions);
 
-    connect(m_tabs, &QTabWidget::currentChanged, this, &MainWindow::onCurrentTabChanged);
-    connect(m_tabs, &QTabWidget::tabCloseRequested, this, &MainWindow::closeTab);
+    // El panel activo es el que tiene el foco.
+    connect(qApp, &QApplication::focusChanged, this, [this](QWidget *, QWidget *now) {
+        if (now == nullptr || !isDualPane()) {
+            return;
+        }
+        if (m_rightTabs->isAncestorOf(now)) {
+            setActiveGroup(m_rightTabs);
+        } else if (m_leftTabs->isAncestorOf(now)) {
+            setActiveGroup(m_leftTabs);
+        }
+    });
     // Elegir un lugar en el árbol no le quita el teclado: las flechas siguen
     // moviéndose por el árbol, no por la lista de archivos.
     connect(m_sidebar, &Sidebar::placeActivated, this, [this](const QString &path) {
@@ -272,8 +306,8 @@ void MainWindow::createActions()
     m_showHiddenAction->setCheckable(true);
     m_showHiddenAction->setShortcut(QKeySequence(Qt::CTRL | Qt::Key_H));
     connect(m_showHiddenAction, &QAction::toggled, this, [this](bool show) {
-        for (int i = 0; i < m_tabs->count(); ++i) {
-            static_cast<BrowserPane *>(m_tabs->widget(i))->setShowHidden(show);
+        for (BrowserPane *pane : allPanes()) {
+            pane->setShowHidden(show);
         }
     });
 
@@ -284,8 +318,8 @@ void MainWindow::createActions()
         if (m_trashDialog != nullptr) {
             m_trashDialog->setSizeUnits(units);
         }
-        for (int i = 0; i < m_tabs->count(); ++i) {
-            static_cast<BrowserPane *>(m_tabs->widget(i))->setSizeUnits(units);
+        for (BrowserPane *pane : allPanes()) {
+            pane->setSizeUnits(units);
         }
         m_previewPanel->setSizeUnits(units);
         updateStatus();
@@ -295,8 +329,8 @@ void MainWindow::createActions()
     m_folderSizesAction->setCheckable(true);
     m_folderSizesAction->setToolTip(tr("Suma en segundo plano lo que ocupa cada carpeta; se detiene al cambiar de carpeta"));
     connect(m_folderSizesAction, &QAction::toggled, this, [this](bool enabled) {
-        for (int i = 0; i < m_tabs->count(); ++i) {
-            static_cast<BrowserPane *>(m_tabs->widget(i))->setFolderSizesEnabled(enabled);
+        for (BrowserPane *pane : allPanes()) {
+            pane->setFolderSizesEnabled(enabled);
         }
     });
 
@@ -330,8 +364,8 @@ void MainWindow::createActions()
                                            ? tr("Botón ▶ sobre los videos y audios, o barra espaciadora")
                                            : tr("Esta compilación no incluye Qt Multimedia"));
     connect(m_inlinePlaybackAction, &QAction::toggled, this, [this](bool enabled) {
-        for (int i = 0; i < m_tabs->count(); ++i) {
-            static_cast<BrowserPane *>(m_tabs->widget(i))->setInlinePlaybackEnabled(enabled);
+        for (BrowserPane *pane : allPanes()) {
+            pane->setInlinePlaybackEnabled(enabled);
         }
     });
 
@@ -362,6 +396,25 @@ void MainWindow::createActions()
     connect(m_thumbnailsAction, &QAction::triggered, this, [this] { setViewMode(BrowserPane::ViewMode::Thumbnails); });
     connect(m_columnsAction, &QAction::triggered, this, [this] { setViewMode(BrowserPane::ViewMode::Columns); });
 
+    // Doble panel (SPEC §5.3), con los atajos de Dolphin (F3) y de los
+    // exploradores de dos paneles (F6 para cambiar; Mayús+F5/F6 copian y mueven
+    // al otro panel, porque F5 es Actualizar).
+    m_dualPaneAction = new QAction(QIcon::fromTheme(QStringLiteral("view-split-left-right"), dualPaneIcon()),
+                                   tr("Doble panel"), this);
+    m_dualPaneAction->setCheckable(true);
+    m_dualPaneAction->setShortcut(QKeySequence(Qt::Key_F3));
+    m_dualPaneAction->setToolTip(tr("Divide el centro en dos exploradores independientes (F3); F6 pasa de uno a otro"));
+    connect(m_dualPaneAction, &QAction::toggled, this, &MainWindow::setDualPane);
+    m_switchPaneAction = new QAction(tr("Cambiar de panel"), this);
+    m_switchPaneAction->setShortcut(QKeySequence(Qt::Key_F6));
+    connect(m_switchPaneAction, &QAction::triggered, this, &MainWindow::switchPane);
+    m_copyToOtherAction = new QAction(tr("Copiar al otro panel"), this);
+    m_copyToOtherAction->setShortcut(QKeySequence(Qt::SHIFT | Qt::Key_F5));
+    connect(m_copyToOtherAction, &QAction::triggered, this, [this] { sendSelectionToOtherPane(false); });
+    m_moveToOtherAction = new QAction(tr("Mover al otro panel"), this);
+    m_moveToOtherAction->setShortcut(QKeySequence(Qt::SHIFT | Qt::Key_F6));
+    connect(m_moveToOtherAction, &QAction::triggered, this, [this] { sendSelectionToOtherPane(true); });
+
     m_editPathAction = new QAction(tr("Escribir una ruta"), this);
     m_editPathAction->setShortcuts({QKeySequence(Qt::CTRL | Qt::Key_L), QKeySequence(Qt::ALT | Qt::Key_D)});
 
@@ -381,6 +434,9 @@ void MainWindow::createActions()
     viewMenu->addAction(m_detailsAction);
     viewMenu->addAction(m_thumbnailsAction);
     viewMenu->addAction(m_columnsAction);
+    viewMenu->addSeparator();
+    viewMenu->addAction(m_dualPaneAction);
+    viewMenu->addAction(m_switchPaneAction);
     QMenu *sizeMenu = viewMenu->addMenu(tr("Tamaño de las miniaturas"));
     auto *sizes = new QActionGroup(sizeMenu);
     for (const auto &[size, name] : {std::pair{96, tr("Pequeñas")}, std::pair{160, tr("Medianas")},
@@ -511,7 +567,11 @@ void MainWindow::createEditActions()
                                   m_trashAction, m_deleteAction, m_undoAction, m_selectAllAction};
     for (QAction *action : scoped) {
         action->setShortcutContext(Qt::WidgetWithChildrenShortcut);
-        m_tabs->addAction(action);
+        m_paneActions.append(action);
+        m_leftTabs->addAction(action);
+        if (m_rightTabs != nullptr) {
+            m_rightTabs->addAction(action);
+        }
     }
 
     QMenu *fileMenu = menuBar()->actions().constFirst()->menu();
@@ -527,6 +587,9 @@ void MainWindow::createEditActions()
     editMenu->addAction(m_cutAction);
     editMenu->addAction(m_copyAction);
     editMenu->addAction(m_pasteAction);
+    editMenu->addSeparator();
+    editMenu->addAction(m_copyToOtherAction);
+    editMenu->addAction(m_moveToOtherAction);
     editMenu->addSeparator();
     editMenu->addAction(m_selectAllAction);
     editMenu->addSeparator();
@@ -668,6 +731,10 @@ void MainWindow::updateEditActions()
     m_copyAction->setEnabled(selected > 0 && !inArchive);
     m_cutAction->setEnabled(canRemove && selected > 0);
     m_pasteAction->setEnabled(canModify && canPaste);
+    const BrowserPane *other = otherPane();
+    const bool otherIsFolder = other != nullptr && other->showsFolder() && !other->showsArchive();
+    m_copyToOtherAction->setEnabled(otherIsFolder && selected > 0 && !inArchive);
+    m_moveToOtherAction->setEnabled(otherIsFolder && selected > 0 && canModify);
     // F2 con varios seleccionados abre el renombrado masivo.
     m_renameAction->setEnabled(canModify && selected >= 1);
     m_bulkRenameAction->setEnabled(canModify);
@@ -971,10 +1038,8 @@ void MainWindow::setTag(const QStringList &paths, qint64 tagId, bool on)
 
 void MainWindow::refreshTagsInPanes()
 {
-    for (int i = 0; i < m_tabs->count(); ++i) {
-        if (auto *pane = qobject_cast<BrowserPane *>(m_tabs->widget(i))) {
-            pane->model()->refreshTags();
-        }
+    for (BrowserPane *pane : allPanes()) {
+        pane->model()->refreshTags();
     }
 }
 
@@ -1470,8 +1535,7 @@ void MainWindow::onActionFinished(const ActionResult &result)
         }
     }
     const bool editName = result.id == m_renameAfterCreateId && outcome.ok();
-    for (int i = 0; i < m_tabs->count(); ++i) {
-        auto *pane = static_cast<BrowserPane *>(m_tabs->widget(i));
+    for (BrowserPane *pane : allPanes()) {
         if (!createdNames.isEmpty() && pane->currentPath() == directory) {
             pane->selectWhenAvailable(createdNames, editName && pane == currentPane());
         } else {
@@ -1716,13 +1780,19 @@ void MainWindow::createToolBar()
     toolBar->addAction(m_detailsAction);
     toolBar->addAction(m_thumbnailsAction);
     toolBar->addAction(m_columnsAction);
+    toolBar->addAction(m_dualPaneAction);
     toolBar->addAction(m_newTabAction);
     toolBar->addAction(m_showTrashAction);
 }
 
 BrowserPane *MainWindow::openTab(const QString &path)
 {
-    auto *pane = new BrowserPane(m_scheduler, m_watcher, m_tabs);
+    return openTabIn(m_tabs, path, true);
+}
+
+BrowserPane *MainWindow::openTabIn(QTabWidget *group, const QString &path, bool activate)
+{
+    auto *pane = new BrowserPane(m_scheduler, m_watcher, group);
     pane->setShowHidden(m_showHiddenAction->isChecked());
     pane->setFolderSizesEnabled(m_folderSizesAction->isChecked());
     pane->setSizeUnits(m_binaryUnitsAction->isChecked() ? core::SizeUnits::Binary
@@ -1752,6 +1822,8 @@ BrowserPane *MainWindow::openTab(const QString &path)
             m_sidebar->setCurrentPath(pane->currentPath());
             syncSearchBox();
             updateEditActions();
+        } else if (pane == otherPane()) {
+            updateEditActions();   // «Copiar al otro panel» depende de dónde está el otro
         }
     });
     connect(pane, &BrowserPane::historyChanged, this, &MainWindow::updateNavigationActions);
@@ -1788,33 +1860,226 @@ BrowserPane *MainWindow::openTab(const QString &path)
         statusBar()->showMessage(tr("No se pudo abrir %1").arg(QDir::toNativeSeparators(failedPath)), 6000);
     });
 
-    const int index = m_tabs->addTab(pane, QString());
+    const int index = group->addTab(pane, QString());
     pane->navigateTo(path);
-    m_tabs->setCurrentIndex(index);
-    pane->focusContent();
+    group->setCurrentIndex(index);
+    if (activate) {
+        setActiveGroup(group);
+        pane->focusContent();
+    }
     return pane;
 }
 
 void MainWindow::closeTab(int index)
 {
-    if (index < 0) {
+    closeTabIn(m_tabs, index);
+}
+
+void MainWindow::closeTabIn(QTabWidget *group, int index)
+{
+    if (group == nullptr || index < 0 || index >= group->count()) {
         return;
     }
     // La ✕ de una pestaña con resultados de búsqueda sale primero de la
     // búsqueda (vuelve a la carpeta donde se buscó); otra ✕ cierra la pestaña.
     // Así salir de una búsqueda nunca cierra la ventana sin querer.
-    if (auto *searching = qobject_cast<BrowserPane *>(m_tabs->widget(index)); searching && searching->showsSearch()) {
+    if (auto *searching = qobject_cast<BrowserPane *>(group->widget(index)); searching && searching->showsSearch()) {
         searching->goUp();
         return;
     }
-    // Siempre queda al menos una pestaña: cerrar la última cierra la ventana.
-    if (m_tabs->count() == 1) {
-        close();
+    if (group->count() == 1) {
+        if (group == m_rightTabs) {
+            setDualPane(false);   // la última del panel derecho cierra el doble panel
+            return;
+        }
+        if (!isDualPane()) {
+            // Siempre queda al menos una pestaña: cerrar la última cierra la ventana.
+            close();
+            return;
+        }
+        // La última del izquierdo con doble panel: las del derecho pasan a la
+        // izquierda y queda un solo panel.
+        QWidget *closing = group->widget(index);
+        while (m_rightTabs->count() > 0) {
+            auto *moved = static_cast<BrowserPane *>(m_rightTabs->widget(0));
+            m_rightTabs->removeTab(0);
+            m_leftTabs->addTab(moved, QString());
+            updateTabTitle(moved);
+        }
+        m_leftTabs->removeTab(m_leftTabs->indexOf(closing));
+        closing->deleteLater();
+        setDualPane(false);
         return;
     }
-    QWidget *pane = m_tabs->widget(index);
-    m_tabs->removeTab(index);
+    QWidget *pane = group->widget(index);
+    group->removeTab(index);
     pane->deleteLater();
+}
+
+QTabWidget *MainWindow::makeTabGroup()
+{
+    auto *group = new QTabWidget(this);
+    group->setDocumentMode(true);
+    group->setTabsClosable(true);
+    group->setMovable(true);   // reordenar pestañas arrastrando
+    for (QAction *action : std::as_const(m_paneActions)) {
+        group->addAction(action);
+    }
+    connect(group, &QTabWidget::currentChanged, this, [this, group] {
+        if (group == m_tabs) {
+            onCurrentTabChanged();
+        }
+    });
+    connect(group, &QTabWidget::tabBarClicked, this, [this, group] { setActiveGroup(group); });
+    connect(group, &QTabWidget::tabCloseRequested, this, [this, group](int index) { closeTabIn(group, index); });
+    return group;
+}
+
+QWidget *MainWindow::boxFor(QTabWidget *group, QWidget **mark)
+{
+    auto *box = new QWidget(this);
+    auto *layout = new QVBoxLayout(box);
+    layout->setContentsMargins(0, 0, 0, 0);
+    layout->setSpacing(0);
+    *mark = new QWidget(box);
+    (*mark)->setFixedHeight(3);
+    (*mark)->setAutoFillBackground(true);
+    (*mark)->hide();   // solo con doble panel
+    layout->addWidget(*mark);
+    layout->addWidget(group, 1);
+    return box;
+}
+
+QTabWidget *MainWindow::groupOf(const BrowserPane *pane) const
+{
+    if (m_rightTabs != nullptr && m_rightTabs->indexOf(const_cast<BrowserPane *>(pane)) >= 0) {
+        return m_rightTabs;
+    }
+    return m_leftTabs;
+}
+
+QList<BrowserPane *> MainWindow::allPanes() const
+{
+    QList<BrowserPane *> panes;
+    for (QTabWidget *group : {m_leftTabs, m_rightTabs}) {
+        if (group == nullptr) {
+            continue;
+        }
+        for (int i = 0; i < group->count(); ++i) {
+            if (auto *pane = qobject_cast<BrowserPane *>(group->widget(i))) {
+                panes.append(pane);
+            }
+        }
+    }
+    return panes;
+}
+
+void MainWindow::setActiveGroup(QTabWidget *group)
+{
+    if (group == nullptr || group == m_tabs) {
+        return;
+    }
+    m_tabs = group;
+    updatePaneMarks();
+    onCurrentTabChanged();
+}
+
+void MainWindow::updatePaneMarks()
+{
+    // Una franja del color de la selección encima del panel activo.
+    const bool dual = isDualPane();
+    for (QWidget *mark : {m_leftMark, m_rightMark}) {
+        if (mark == nullptr) {
+            continue;
+        }
+        mark->setVisible(dual);
+        const bool active = (mark == m_leftMark && m_tabs == m_leftTabs) || (mark == m_rightMark && m_tabs == m_rightTabs);
+        QPalette palette = mark->palette();
+        palette.setColor(QPalette::Window, active ? palette.color(QPalette::Highlight) : palette.color(QPalette::Mid));
+        mark->setPalette(palette);
+    }
+}
+
+void MainWindow::setDualPane(bool on)
+{
+    if (on == isDualPane()) {
+        if (m_dualPaneAction != nullptr) {
+            m_dualPaneAction->setChecked(on);
+        }
+        return;
+    }
+    if (on) {
+        m_rightTabs = makeTabGroup();
+        m_rightBox = boxFor(m_rightTabs, &m_rightMark);
+        m_centerSplitter->addWidget(m_rightBox);
+        const int half = std::max(m_centerSplitter->width(), 400) / 2;
+        m_centerSplitter->setSizes({half, half});
+        // El panel nuevo empieza en la misma carpeta; el teclado sigue en el actual.
+        const BrowserPane *pane = currentPane();
+        const QString path = pane == nullptr ? QDir::homePath()
+            : isSearchLocation(pane->currentPath()) ? searchRootOf(pane->currentPath())
+                                                    : pane->currentPath();
+        openTabIn(m_rightTabs, path, false);
+    } else {
+        if (m_tabs == m_rightTabs) {
+            setActiveGroup(m_leftTabs);
+            if (BrowserPane *pane = currentPane()) {
+                pane->focusContent();
+            }
+        }
+        QTabWidget *closing = m_rightTabs;
+        m_rightTabs = nullptr;   // ya no cuenta: sus avisos se ignoran mientras se cierra
+        while (closing->count() > 0) {
+            QWidget *pane = closing->widget(0);
+            closing->removeTab(0);
+            pane->deleteLater();
+        }
+        m_rightBox->deleteLater();
+        m_rightBox = nullptr;
+        m_rightMark = nullptr;
+    }
+    if (m_dualPaneAction != nullptr) {
+        m_dualPaneAction->setChecked(on);
+    }
+    updatePaneMarks();
+    updateEditActions();
+}
+
+void MainWindow::switchPane()
+{
+    if (!isDualPane()) {
+        return;
+    }
+    setActiveGroup(m_tabs == m_leftTabs ? m_rightTabs : m_leftTabs);
+    if (BrowserPane *pane = currentPane()) {
+        pane->focusContent();
+    }
+}
+
+BrowserPane *MainWindow::otherPane() const
+{
+    if (!isDualPane()) {
+        return nullptr;
+    }
+    QTabWidget *other = m_tabs == m_leftTabs ? m_rightTabs : m_leftTabs;
+    return static_cast<BrowserPane *>(other->currentWidget());
+}
+
+void MainWindow::sendSelectionToOtherPane(bool move)
+{
+    BrowserPane *pane = currentPane();
+    BrowserPane *other = otherPane();
+    if (pane == nullptr || other == nullptr) {
+        return;
+    }
+    if (!other->showsFolder() || other->showsArchive()) {
+        statusBar()->showMessage(tr("El otro panel no muestra una carpeta donde dejar los archivos"), 6000);
+        return;
+    }
+    const QStringList paths = pane->selectedPaths();
+    if (!paths.isEmpty()) {
+        transfer(paths, other->currentPath(), move);
+    }
 }
 
 void MainWindow::duplicateCurrentTab()
@@ -2246,8 +2511,8 @@ void MainWindow::setViewMode(BrowserPane::ViewMode mode)
 void MainWindow::setThumbnailSize(int size)
 {
     m_thumbnailSize = size;
-    for (int i = 0; i < m_tabs->count(); ++i) {
-        static_cast<BrowserPane *>(m_tabs->widget(i))->setThumbnailSize(size);
+    for (BrowserPane *pane : allPanes()) {
+        pane->setThumbnailSize(size);
     }
     syncViewActions();
 }
@@ -2343,7 +2608,7 @@ void MainWindow::updateStatus()
 
 void MainWindow::updateTabTitle(BrowserPane *pane)
 {
-    const int index = m_tabs->indexOf(pane);
+    const int index = groupOf(pane)->indexOf(pane);
     if (index < 0) {
         return;
     }
@@ -2357,8 +2622,8 @@ void MainWindow::updateTabTitle(BrowserPane *pane)
     if (title.isEmpty()) {
         title = QDir::toNativeSeparators(path);   // raíces: "/" o "C:\"
     }
-    m_tabs->setTabText(index, title);
-    m_tabs->setTabToolTip(index, pane->showsVolumes() ? title
+    groupOf(pane)->setTabText(index, title);
+    groupOf(pane)->setTabToolTip(index, pane->showsVolumes() ? title
                                  : pane->showsSearch()
                                      ? tr("%1 en %2").arg(title, pane->searchWhere())
                                      : QDir::toNativeSeparators(path));
@@ -2382,6 +2647,27 @@ void MainWindow::restoreSession()
     } else {
         m_tabs->setCurrentIndex(qBound(0, settings.value(QStringLiteral("session/currentTab"), 0).toInt(),
                                        m_tabs->count() - 1));
+    }
+    // El doble panel, con sus pestañas y el panel que estaba activo.
+    const QStringList rightPaths = settings.value(QStringLiteral("session/rightTabs")).toStringList();
+    if (settings.value(QStringLiteral("session/dualPane"), false).toBool() && !rightPaths.isEmpty()) {
+        setDualPane(true);
+        // setDualPane abrió una pestaña en la carpeta actual: se sustituye por las guardadas.
+        QWidget *initial = m_rightTabs->widget(0);
+        for (const QString &path : rightPaths) {
+            openTabIn(m_rightTabs, path, false);
+        }
+        m_rightTabs->removeTab(m_rightTabs->indexOf(initial));
+        initial->deleteLater();
+        m_rightTabs->setCurrentIndex(qBound(0, settings.value(QStringLiteral("session/rightCurrentTab"), 0).toInt(),
+                                            m_rightTabs->count() - 1));
+        const QByteArray center = settings.value(QStringLiteral("window/center")).toByteArray();
+        if (!center.isEmpty()) {
+            m_centerSplitter->restoreState(center);
+        }
+        if (settings.value(QStringLiteral("session/rightActive"), false).toBool()) {
+            setActiveGroup(m_rightTabs);
+        }
     }
     updateStatus();
 }
@@ -2432,14 +2718,24 @@ void MainWindow::saveSession()
     settings.setValue(QStringLiteral("search/caseSensitive"), m_searchCaseAction->isChecked());
     settings.setValue(QStringLiteral("search/recent"), m_recentSearches);
 
-    QStringList paths;
-    for (int i = 0; i < m_tabs->count(); ++i) {
-        // Unos resultados no se guardan: al volver se abre la carpeta donde se buscó.
-        const QString path = static_cast<BrowserPane *>(m_tabs->widget(i))->currentPath();
-        paths.append(isSearchLocation(path) ? searchRootOf(path) : path);
+    // Unos resultados no se guardan: al volver se abre la carpeta donde se buscó.
+    const auto pathsOf = [](const QTabWidget *group) {
+        QStringList paths;
+        for (int i = 0; group != nullptr && i < group->count(); ++i) {
+            const QString path = static_cast<BrowserPane *>(group->widget(i))->currentPath();
+            paths.append(isSearchLocation(path) ? searchRootOf(path) : path);
+        }
+        return paths;
+    };
+    settings.setValue(QStringLiteral("session/tabs"), pathsOf(m_leftTabs));
+    settings.setValue(QStringLiteral("session/currentTab"), m_leftTabs->currentIndex());
+    settings.setValue(QStringLiteral("session/dualPane"), isDualPane());
+    settings.setValue(QStringLiteral("session/rightTabs"), pathsOf(m_rightTabs));
+    settings.setValue(QStringLiteral("session/rightCurrentTab"), isDualPane() ? m_rightTabs->currentIndex() : 0);
+    settings.setValue(QStringLiteral("session/rightActive"), isDualPane() && m_tabs == m_rightTabs);
+    if (isDualPane()) {
+        settings.setValue(QStringLiteral("window/center"), m_centerSplitter->saveState());
     }
-    settings.setValue(QStringLiteral("session/tabs"), paths);
-    settings.setValue(QStringLiteral("session/currentTab"), m_tabs->currentIndex());
 }
 
 void MainWindow::closeEvent(QCloseEvent *event)
