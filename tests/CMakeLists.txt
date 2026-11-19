@@ -23,6 +23,12 @@ function(eu_add_test name)
     # QTEST_FUNCTION_TIMEOUT: Qt corta a los 5 min cada función de prueba; la
     # de 100 000 archivos se acerca a eso en las máquinas lentas de la CI.
     set_tests_properties(${name} PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QTEST_FUNCTION_TIMEOUT=900000")
+    if(WIN32)
+        # En Windows la plataforma "offscreen" no encuentra fuentes (busca en
+        # Qt/lib/fonts): sin ellas no se dibuja texto, p. ej. en los PDF de prueba.
+        file(TO_CMAKE_PATH "$ENV{WINDIR}/Fonts" eu_windows_fonts)
+        set_property(TEST ${name} APPEND PROPERTY ENVIRONMENT "QT_QPA_FONTDIR=${eu_windows_fonts}")
+    endif()
     if(EU_SANITIZER MATCHES "thread")
         # Falsos avisos dentro de Qt, que no está instrumentado (ver tsan.supp).
         set_property(TEST ${name} APPEND PROPERTY ENVIRONMENT
