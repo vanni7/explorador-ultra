@@ -140,6 +140,18 @@ public:
     void setInlinePlayer(InlinePlayer *player);
     void setInlinePlaybackEnabled(bool enabled);
 
+    /// Pestaña fijada (SPEC §5.7): va delante y la ✕ no la cierra.
+    bool isPinned() const { return m_pinned; }
+    void setPinned(bool pinned) { m_pinned = pinned; }
+    /// Pestaña bloqueada (SPEC §5.7): su carpeta no cambia; ir a otro sitio
+    /// desde ella (entrar en una carpeta, subir, buscar…) pide abrir otra
+    /// pestaña (openInNewTabRequested).
+    bool isLocked() const { return m_locked; }
+    void setLocked(bool locked) { m_locked = locked; }
+    /// Anchos y orden de las columnas de la vista detallada (para la sesión).
+    QByteArray detailsHeaderState() const;
+    void restoreDetailsHeaderState(const QByteArray &state);
+
     bool canGoBack() const { return !m_backHistory.isEmpty(); }
     bool canGoForward() const { return !m_forwardHistory.isEmpty(); }
     /// Desde la raíz de una unidad se sube a la lista de unidades.
@@ -216,12 +228,17 @@ signals:
     void filesDropped(const QStringList &paths, const QString &destination, bool move);
     /// Cambió el elemento con el cursor o lo seleccionado.
     void currentItemChanged();
+    /// Pestaña bloqueada: quiere ir a `path` (con `nameToSelect` seleccionado) en otra pestaña.
+    void openInNewTabRequested(const QString &path, const QString &nameToSelect);
 
 protected:
     bool eventFilter(QObject *watched, QEvent *event) override;
 
 private:
     void changePath(const QString &path, const QString &nameToSelect);
+    /// Si la pestaña está bloqueada y `path` es otro sitio, pide abrirlo en
+    /// otra pestaña y devuelve true (quien llama no debe hacer nada más).
+    bool redirectIfLocked(const QString &path, const QString &nameToSelect);
     /// Lo que se pone a la vista para enseñar una carpeta (la vista, o el
     /// conjunto de columnas Miller).
     QWidget *filesPage() const;
@@ -259,6 +276,8 @@ private:
     MillerView *m_millerView = nullptr;
     ViewMode m_viewMode = ViewMode::Details;
     bool m_selectFirstWhenLoaded = false;   ///< Al entrar con → en las columnas: el primero.
+    bool m_pinned = false;
+    bool m_locked = false;
     QStackedLayout *m_stack = nullptr;
     QWidget *m_messagePage = nullptr;
     QLabel *m_messageLabel = nullptr;

@@ -500,7 +500,7 @@ BrowserPane::BrowserPane(tasks::Scheduler &scheduler, fs::DirectoryWatcher &watc
     connect(m_millerView, &MillerView::navigateRequested, this, [this](const QString &folder, const QString &name) {
         if (folder == currentPath()) {
             selectWhenAvailable({name});
-        } else {
+        } else if (!redirectIfLocked(folder, name)) {
             m_backHistory.append(currentPath());
             m_forwardHistory.clear();
             changePath(folder, name);
@@ -811,6 +811,9 @@ void BrowserPane::navigateTo(const QString &path)
         }
         return;
     }
+    if (redirectIfLocked(clean, {})) {
+        return;
+    }
     if (!currentPath().isEmpty()) {
         m_backHistory.append(currentPath());
     }
@@ -824,6 +827,9 @@ void BrowserPane::goBack()
         return;
     }
     const QString leaving = currentPath();
+    if (redirectIfLocked(m_backHistory.last(), {})) {
+        return;
+    }
     m_forwardHistory.append(leaving);
     // Al volver se deja seleccionada la carpeta de la que se viene, si es hija.
     const QString target = m_backHistory.takeLast();
@@ -841,6 +847,9 @@ void BrowserPane::goForward()
     if (!canGoForward()) {
         return;
     }
+    if (redirectIfLocked(m_forwardHistory.last(), {})) {
+        return;
+    }
     m_backHistory.append(currentPath());
     changePath(m_forwardHistory.takeLast(), {});
 }
@@ -851,32 +860,62 @@ void BrowserPane::goUp()
         return;
     }
     const QString leaving = currentPath();
-    m_backHistory.append(leaving);
-    m_forwardHistory.clear();
+    QString target;
+    QString select;
     if (showsSearch()) {
         // Por encima de unos resultados está la carpeta donde se buscó.
-        changePath(searchRootOf(leaving), {});
-        return;
-    }
-    if (showsArchive()) {
+        target = searchRootOf(leaving);
+    } else if (showsArchive()) {
         // De una carpeta de dentro a la de arriba; de la raíz del comprimido, a
         // la carpeta donde está, con el comprimido seleccionado.
         const QString archivePath = archivePathOf(leaving);
         const QString inner = archiveInnerOf(leaving);
         if (inner.isEmpty()) {
-            changePath(QFileInfo(archivePath).path(), QFileInfo(archivePath).fileName());
+            target = QFileInfo(archivePath).path();
+            select = QFileInfo(archivePath).fileName();
         } else {
             const qsizetype slash = inner.lastIndexOf(QLatin1Char('/'));
-            changePath(archiveLocation(archivePath, slash < 0 ? QString() : inner.left(slash)), inner.mid(slash + 1));
+            target = archiveLocation(archivePath, slash < 0 ? QString() : inner.left(slash));
+            select = inner.mid(slash + 1);
         }
+    } else {
+        const QString parent = parentPathOf(leaving);
+        if (parent.isEmpty()) {
+            // Por encima de la raíz de una unidad está la lista de unidades.
+            target = volumesLocation();
+            select = leaving;
+        } else {
+            target = parent;
+            select = QDir(leaving).dirName();
+        }
+    }
+    if (redirectIfLocked(target, select)) {
         return;
     }
-    const QString parent = parentPathOf(leaving);
-    if (parent.isEmpty()) {
-        // Por encima de la raíz de una unidad está la lista de unidades.
-        changePath(volumesLocation(), leaving);
-    } else {
-        changePath(parent, QDir(leaving).dirName());
+    m_backHistory.append(leaving);
+    m_forwardHistory.clear();
+    changePath(target, select);
+}
+
+bool BrowserPane::redirectIfLocked(const QString &path, const QString &nameToSelect)
+{
+    if (!m_locked || m_location.isEmpty() || path == m_location) {
+        return false;
+    }
+    emit openInNewTabRequested(path, nameToSelect);
+    return true;
+}
+
+QByteArray BrowserPane::detailsHeaderState() const
+{
+    return m_view->header()->saveState();
+}
+
+void BrowserPane::restoreDetailsHeaderState(const QByteArray &state)
+{
+    if (!state.isEmpty()) {
+        m_view->header()->restoreState(state);
+        fitNameColumn();
     }
 }
 
@@ -1136,10 +1175,13 @@ bool BrowserPane::eventFilter(QObject *watched, QEvent *event)
             const QModelIndex current = m_view->selectionModel()->currentIndex();
             if (current.isValid() && current.row() < m_model->rowCount()
                 && m_model->entryAt(current.row()).isDirectory) {
-                m_backHistory.append(currentPath());
-                m_forwardHistory.clear();
-                m_selectFirstWhenLoaded = true;
-                changePath(m_model->filePath(current.row()), {});
+                const QString folder = m_model->filePath(current.row());
+                if (!redirectIfLocked(folder, {})) {
+                    m_backHistory.append(currentPath());
+                    m_forwardHistory.clear();
+                    m_selectFirstWhenLoaded = true;
+                    changePath(folder, {});
+                }
             }
             return true;
         }
@@ -1444,6 +1486,9 @@ void BrowserPane::openContainingFolder()
         return;
     }
     const search::Hit hit = m_resultsModel->hitAt(rows.first().row());
+    if (redirectIfLocked(hit.directory, hit.entry.name)) {
+        return;
+    }
     m_backHistory.append(currentPath());
     m_forwardHistory.clear();
     changePath(hit.directory, hit.entry.name);

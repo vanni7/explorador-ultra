@@ -70,6 +70,12 @@ public:
     BrowserPane *otherPane() const;
     /// Todas las pestañas de los dos paneles.
     QList<BrowserPane *> allPanes() const;
+    /// Pestañas fijadas y bloqueadas (SPEC §5.7).
+    void setTabPinned(BrowserPane *pane, bool pinned);
+    void setTabLocked(BrowserPane *pane, bool locked);
+    /// Vuelve a abrir la última pestaña cerrada (Ctrl+Mayús+T).
+    void reopenClosedTab();
+    int closedTabCount() const { return int(m_closedTabs.size()); }
     Sidebar *sidebar() const { return m_sidebar; }
     /// Buscador de la barra superior.
     QLineEdit *searchEdit() const { return m_searchEdit; }
@@ -225,6 +231,15 @@ private:
     void updatePaneMarks();
     /// Copia o mueve lo seleccionado a la carpeta del otro panel.
     void sendSelectionToOtherPane(bool move);
+    struct ClosedTab
+    {
+        QString path;
+        BrowserPane::ViewMode mode = BrowserPane::ViewMode::Details;
+        bool locked = false;
+    };
+    void rememberClosed(BrowserPane *pane);
+    void showTabMenu(QTabWidget *group, const QPoint &position);
+    void syncTabActions();
     void saveSession();
     void navigateCurrentTo(const QString &path);
     void runSearch();
@@ -333,6 +348,11 @@ private:
     QWidget *m_rightBox = nullptr;
     QSplitter *m_centerSplitter = nullptr;
     QList<QAction *> m_paneActions;      ///< Atajos que solo actúan en la zona de archivos.
+    QList<ClosedTab> m_closedTabs;       ///< Las cerradas, la más reciente primero.
+    QAction *m_reopenTabAction = nullptr;
+    QAction *m_pinTabAction = nullptr;
+    QAction *m_lockTabAction = nullptr;
+    QByteArray m_detailsHeader;          ///< Anchos de columnas guardados en la sesión.
     QHash<int, QAction *> m_thumbnailSizeActions;   ///< Por tamaño en píxeles.
     int m_thumbnailSize = 160;
     void syncViewActions();

@@ -25,6 +25,8 @@
 #include "eu/ui/TrashDialog.h"
 #include "eu/ui/VolumesView.h"
 
+#include <functional>
+
 #include <QAction>
 #include <QActionGroup>
 #include <QApplication>
@@ -73,6 +75,70 @@ namespace {
 QIcon themedIcon(const QString &name, QStyle::StandardPixmap fallback)
 {
     return QIcon::fromTheme(name, QApplication::style()->standardIcon(fallback));
+}
+
+/// Un icono dibujado a varios tamaños, para cuando el tema de iconos no trae uno.
+QIcon drawnIcon(const std::function<void(QPainter &, qreal)> &draw)
+{
+    QIcon icon;
+    for (const int side : {16, 22, 32, 48}) {
+        QPixmap pixmap(side, side);
+        pixmap.fill(Qt::transparent);
+        QPainter painter(&pixmap);
+        painter.setRenderHint(QPainter::Antialiasing);
+        const QColor color = QApplication::palette().color(QPalette::WindowText);
+        painter.setPen(QPen(color, std::max(1.0, side / 14.0)));
+        draw(painter, qreal(side));
+        painter.end();
+        icon.addPixmap(pixmap);
+    }
+    return icon;
+}
+
+/// Chincheta: pestaña fijada.
+QIcon pinIcon()
+{
+    return QIcon::fromTheme(QStringLiteral("window-pin"), drawnIcon([](QPainter &painter, qreal side) {
+        const QColor color = painter.pen().color();
+        painter.setBrush(color);
+        painter.drawEllipse(QRectF(side * 0.3, side * 0.12, side * 0.4, side * 0.4));
+        painter.drawLine(QPointF(side * 0.5, side * 0.52), QPointF(side * 0.5, side * 0.9));
+    }));
+}
+
+/// Candado: pestaña bloqueada.
+QIcon lockIcon()
+{
+    return QIcon::fromTheme(QStringLiteral("object-locked"), drawnIcon([](QPainter &painter, qreal side) {
+        painter.setBrush(Qt::NoBrush);
+        painter.drawArc(QRectF(side * 0.3, side * 0.12, side * 0.4, side * 0.5), 0, 180 * 16);
+        painter.setBrush(painter.pen().color());
+        painter.drawRoundedRect(QRectF(side * 0.2, side * 0.42, side * 0.6, side * 0.45), side * 0.06, side * 0.06);
+    }));
+}
+
+QString viewModeName(BrowserPane::ViewMode mode)
+{
+    switch (mode) {
+    case BrowserPane::ViewMode::Thumbnails:
+        return QStringLiteral("miniaturas");
+    case BrowserPane::ViewMode::Columns:
+        return QStringLiteral("columnas");
+    case BrowserPane::ViewMode::Details:
+        break;
+    }
+    return QStringLiteral("detalles");
+}
+
+BrowserPane::ViewMode viewModeFromName(const QString &name)
+{
+    if (name == QLatin1String("miniaturas")) {
+        return BrowserPane::ViewMode::Thumbnails;
+    }
+    if (name == QLatin1String("columnas")) {
+        return BrowserPane::ViewMode::Columns;
+    }
+    return BrowserPane::ViewMode::Details;
 }
 
 /// Dos paneles lado a lado, para cuando el tema de iconos no trae uno.
@@ -291,6 +357,27 @@ void MainWindow::createActions()
     m_duplicateTabAction = new QAction(tr("Duplicar pestaña"), this);
     m_duplicateTabAction->setShortcut(QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_K));
     connect(m_duplicateTabAction, &QAction::triggered, this, &MainWindow::duplicateCurrentTab);
+    // Pestañas (SPEC §5.7): reabrir la última cerrada, fijar y bloquear.
+    m_reopenTabAction = new QAction(tr("Reabrir pestaña cerrada"), this);
+    m_reopenTabAction->setShortcut(QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_T));   // como en los navegadores
+    m_reopenTabAction->setEnabled(false);
+    connect(m_reopenTabAction, &QAction::triggered, this, &MainWindow::reopenClosedTab);
+    m_pinTabAction = new QAction(tr("Fijar pestaña"), this);
+    m_pinTabAction->setCheckable(true);
+    m_pinTabAction->setToolTip(tr("Va delante de las demás y la ✕ no la cierra"));
+    connect(m_pinTabAction, &QAction::triggered, this, [this](bool on) {
+        if (BrowserPane *pane = currentPane()) {
+            setTabPinned(pane, on);
+        }
+    });
+    m_lockTabAction = new QAction(tr("Bloquear pestaña"), this);
+    m_lockTabAction->setCheckable(true);
+    m_lockTabAction->setToolTip(tr("Su carpeta no cambia: ir a otro sitio desde ella abre otra pestaña"));
+    connect(m_lockTabAction, &QAction::triggered, this, [this](bool on) {
+        if (BrowserPane *pane = currentPane()) {
+            setTabLocked(pane, on);
+        }
+    });
 
     auto *nextTabAction = new QAction(tr("Pestaña siguiente"), this);
     nextTabAction->setShortcuts({QKeySequence(Qt::CTRL | Qt::Key_Tab), QKeySequence(Qt::CTRL | Qt::Key_PageDown)});
@@ -426,6 +513,9 @@ void MainWindow::createActions()
     QMenu *fileMenu = menuBar()->addMenu(tr("&Archivo"));
     fileMenu->addAction(m_newTabAction);
     fileMenu->addAction(m_duplicateTabAction);
+    fileMenu->addAction(m_reopenTabAction);
+    fileMenu->addAction(m_pinTabAction);
+    fileMenu->addAction(m_lockTabAction);
     fileMenu->addAction(m_closeTabAction);
     fileMenu->addSeparator();
     fileMenu->addAction(quitAction);
@@ -653,7 +743,7 @@ void MainWindow::createProgressWidgets()
     m_transfersDock->hide();
     QAction *toggle = m_transfersDock->toggleViewAction();
     toggle->setText(tr("Transferencias"));
-    toggle->setShortcut(QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_T));
+    toggle->setShortcut(QKeySequence(Qt::CTRL | Qt::Key_J));   // como «Descargas» en los navegadores
     for (QAction *menuAction : menuBar()->actions()) {
         if (menuAction->menu() != nullptr && menuAction->menu()->objectName() == QStringLiteral("menuVer")) {
             menuAction->menu()->addSeparator();
@@ -1864,6 +1954,14 @@ BrowserPane *MainWindow::openTabIn(QTabWidget *group, const QString &path, bool 
         }
     });
     connect(pane, &BrowserPane::historyChanged, this, &MainWindow::updateNavigationActions);
+    connect(pane, &BrowserPane::openInNewTabRequested, this,
+            [this, pane](const QString &target, const QString &nameToSelect) {
+        BrowserPane *opened = openTabIn(groupOf(pane), target, true);
+        opened->setViewMode(pane->viewMode());
+        if (!nameToSelect.isEmpty()) {
+            opened->selectWhenAvailable({nameToSelect});
+        }
+    });
     connect(pane, &BrowserPane::currentItemChanged, this, [this, pane] {
         if (pane == currentPane()) {
             updatePreview();
@@ -1897,6 +1995,8 @@ BrowserPane *MainWindow::openTabIn(QTabWidget *group, const QString &path, bool 
         statusBar()->showMessage(tr("No se pudo abrir %1").arg(QDir::toNativeSeparators(failedPath)), 6000);
     });
 
+    // Los anchos de las columnas, como la pestaña actual (o como se guardaron).
+    pane->restoreDetailsHeaderState(currentPane() != nullptr ? currentPane()->detailsHeaderState() : m_detailsHeader);
     const int index = group->addTab(pane, QString());
     pane->navigateTo(path);
     group->setCurrentIndex(index);
@@ -1917,11 +2017,16 @@ void MainWindow::closeTabIn(QTabWidget *group, int index)
     if (group == nullptr || index < 0 || index >= group->count()) {
         return;
     }
+    auto *closingPane = qobject_cast<BrowserPane *>(group->widget(index));
+    if (closingPane != nullptr && closingPane->isPinned()) {
+        statusBar()->showMessage(tr("La pestaña está fijada: desfíjala para cerrarla (clic derecho en la pestaña)."), 6000);
+        return;
+    }
     // La ✕ de una pestaña con resultados de búsqueda sale primero de la
     // búsqueda (vuelve a la carpeta donde se buscó); otra ✕ cierra la pestaña.
     // Así salir de una búsqueda nunca cierra la ventana sin querer.
-    if (auto *searching = qobject_cast<BrowserPane *>(group->widget(index)); searching && searching->showsSearch()) {
-        searching->goUp();
+    if (closingPane != nullptr && closingPane->showsSearch() && !closingPane->isLocked()) {
+        closingPane->goUp();
         return;
     }
     if (group->count() == 1) {
@@ -1937,6 +2042,7 @@ void MainWindow::closeTabIn(QTabWidget *group, int index)
         // La última del izquierdo con doble panel: las del derecho pasan a la
         // izquierda y queda un solo panel.
         QWidget *closing = group->widget(index);
+        rememberClosed(static_cast<BrowserPane *>(closing));
         while (m_rightTabs->count() > 0) {
             auto *moved = static_cast<BrowserPane *>(m_rightTabs->widget(0));
             m_rightTabs->removeTab(0);
@@ -1949,8 +2055,100 @@ void MainWindow::closeTabIn(QTabWidget *group, int index)
         return;
     }
     QWidget *pane = group->widget(index);
+    rememberClosed(static_cast<BrowserPane *>(pane));
     group->removeTab(index);
     pane->deleteLater();
+}
+
+void MainWindow::rememberClosed(BrowserPane *pane)
+{
+    if (pane == nullptr) {
+        return;
+    }
+    const QString path = pane->currentPath();
+    m_closedTabs.prepend({isSearchLocation(path) ? searchRootOf(path) : path, pane->viewMode(), pane->isLocked()});
+    while (m_closedTabs.size() > 25) {
+        m_closedTabs.removeLast();
+    }
+    m_reopenTabAction->setEnabled(true);
+}
+
+void MainWindow::reopenClosedTab()
+{
+    if (m_closedTabs.isEmpty()) {
+        return;
+    }
+    const ClosedTab closed = m_closedTabs.takeFirst();
+    BrowserPane *pane = openTabIn(m_tabs, closed.path, true);
+    pane->setViewMode(closed.mode);
+    if (closed.locked) {
+        setTabLocked(pane, true);
+    }
+    m_reopenTabAction->setEnabled(!m_closedTabs.isEmpty());
+}
+
+void MainWindow::setTabPinned(BrowserPane *pane, bool pinned)
+{
+    QTabWidget *group = groupOf(pane);
+    pane->setPinned(pinned);
+    // Las fijadas van delante, en el orden en que se fijaron.
+    int othersPinned = 0;
+    for (int i = 0; i < group->count(); ++i) {
+        const auto *other = static_cast<BrowserPane *>(group->widget(i));
+        othersPinned += other != pane && other->isPinned() ? 1 : 0;
+    }
+    const int from = group->indexOf(pane);
+    if (from != othersPinned) {
+        group->tabBar()->moveTab(from, othersPinned);
+    }
+    updateTabTitle(pane);
+    syncTabActions();
+}
+
+void MainWindow::setTabLocked(BrowserPane *pane, bool locked)
+{
+    pane->setLocked(locked);
+    updateTabTitle(pane);
+    syncTabActions();
+}
+
+void MainWindow::syncTabActions()
+{
+    const BrowserPane *pane = currentPane();
+    m_pinTabAction->setChecked(pane != nullptr && pane->isPinned());
+    m_lockTabAction->setChecked(pane != nullptr && pane->isLocked());
+}
+
+void MainWindow::showTabMenu(QTabWidget *group, const QPoint &position)
+{
+    const int index = group->tabBar()->tabAt(position);
+    if (index < 0) {
+        return;
+    }
+    auto *pane = static_cast<BrowserPane *>(group->widget(index));
+    QMenu menu(this);
+    menu.addAction(tr("Duplicar pestaña"), this, [this, group, pane] {
+        BrowserPane *copy = openTabIn(group, pane->currentPath(), true);
+        copy->setViewMode(pane->viewMode());
+    });
+    menu.addAction(pane->isPinned() ? tr("Desfijar pestaña") : tr("Fijar pestaña"), this,
+                   [this, pane] { setTabPinned(pane, !pane->isPinned()); });
+    menu.addAction(pane->isLocked() ? tr("Desbloquear pestaña") : tr("Bloquear pestaña"), this,
+                   [this, pane] { setTabLocked(pane, !pane->isLocked()); });
+    menu.addSeparator();
+    QAction *close = menu.addAction(tr("Cerrar pestaña"), this,
+                                    [this, group, pane] { closeTabIn(group, group->indexOf(pane)); });
+    close->setEnabled(!pane->isPinned());
+    menu.addAction(tr("Cerrar las demás"), this, [this, group, pane] {
+        for (int i = group->count() - 1; i >= 0; --i) {
+            const auto *other = static_cast<BrowserPane *>(group->widget(i));
+            if (other != pane && !other->isPinned()) {
+                closeTabIn(group, i);
+            }
+        }
+    });
+    menu.addAction(m_reopenTabAction);
+    menu.exec(group->tabBar()->mapToGlobal(position));
 }
 
 QTabWidget *MainWindow::makeTabGroup()
@@ -1969,6 +2167,9 @@ QTabWidget *MainWindow::makeTabGroup()
     });
     connect(group, &QTabWidget::tabBarClicked, this, [this, group] { setActiveGroup(group); });
     connect(group, &QTabWidget::tabCloseRequested, this, [this, group](int index) { closeTabIn(group, index); });
+    group->tabBar()->setContextMenuPolicy(Qt::CustomContextMenu);
+    connect(group->tabBar(), &QWidget::customContextMenuRequested, this,
+            [this, group](const QPoint &position) { showTabMenu(group, position); });
     return group;
 }
 
@@ -2068,6 +2269,7 @@ void MainWindow::setDualPane(bool on)
         m_rightTabs = nullptr;   // ya no cuenta: sus avisos se ignoran mientras se cierra
         while (closing->count() > 0) {
             QWidget *pane = closing->widget(0);
+            rememberClosed(static_cast<BrowserPane *>(pane));
             closing->removeTab(0);
             pane->deleteLater();
         }
@@ -2615,6 +2817,7 @@ void MainWindow::updatePreview()
 void MainWindow::onCurrentTabChanged()
 {
     syncViewActions();
+    syncTabActions();
     updatePreview();
     if (BrowserPane *pane = currentPane()) {
         m_pathBar->setPath(pane->currentPath());
@@ -2664,6 +2867,20 @@ void MainWindow::updateTabTitle(BrowserPane *pane)
                                  : pane->showsSearch()
                                      ? tr("%1 en %2").arg(title, pane->searchWhere())
                                      : QDir::toNativeSeparators(path));
+    QTabWidget *group = groupOf(pane);
+    group->setTabIcon(index, pane->isLocked() ? lockIcon() : pane->isPinned() ? pinIcon() : QIcon());
+    if (pane->isPinned() || pane->isLocked()) {
+        group->setTabToolTip(index, group->tabToolTip(index) + QLatin1Char('\n')
+                                        + (pane->isLocked() ? tr("Bloqueada: ir a otro sitio abre otra pestaña")
+                                                            : tr("Fijada")));
+    }
+    // A las fijadas no se les ve la ✕.
+    QTabBar *bar = group->tabBar();
+    const auto side = static_cast<QTabBar::ButtonPosition>(
+        bar->style()->styleHint(QStyle::SH_TabBar_CloseButtonPosition, nullptr, bar));
+    if (QWidget *closeButton = bar->tabButton(index, side)) {
+        closeButton->setVisible(!pane->isPinned());
+    }
     if (pane == currentPane()) {
         setWindowTitle(QStringLiteral("%1 — %2").arg(title, core::applicationName()));
     }
@@ -2673,12 +2890,30 @@ void MainWindow::restoreSession()
 {
     loadPreferences();
     QSettings settings;
+    m_detailsHeader = settings.value(QStringLiteral("view/detailsHeader")).toByteArray();
+    // Cada pestaña con su vista y si estaba fijada o bloqueada.
+    const auto restoreTabs = [this, &settings](QTabWidget *group, const QStringList &paths, const QString &prefix,
+                                               bool activate) {
+        const QStringList views = settings.value(prefix + QStringLiteral("Views")).toStringList();
+        const QStringList pinned = settings.value(prefix + QStringLiteral("Pinned")).toStringList();
+        const QStringList locked = settings.value(prefix + QStringLiteral("Locked")).toStringList();
+        for (qsizetype i = 0; i < paths.size(); ++i) {
+            // Si la carpeta ya no existe, la pestaña lo indica y ofrece
+            // reintentar; no se bloquea el arranque (SPEC §5.7).
+            BrowserPane *pane = openTabIn(group, paths.at(i), activate);
+            if (i < views.size()) {
+                pane->setViewMode(viewModeFromName(views.at(i)));
+            }
+            if (pinned.value(i) == QLatin1String("1")) {
+                setTabPinned(pane, true);
+            }
+            if (locked.value(i) == QLatin1String("1")) {
+                setTabLocked(pane, true);
+            }
+        }
+    };
     const QStringList paths = settings.value(QStringLiteral("session/tabs")).toStringList();
-    for (const QString &path : paths) {
-        // Si la carpeta ya no existe, la pestaña lo indica y ofrece reintentar;
-        // no se bloquea el arranque (SPEC §5.7).
-        openTab(path);
-    }
+    restoreTabs(m_leftTabs, paths, QStringLiteral("session/tab"), true);
     if (m_tabs->count() == 0) {
         openTab(QDir::homePath());
     } else {
@@ -2691,9 +2926,7 @@ void MainWindow::restoreSession()
         setDualPane(true);
         // setDualPane abrió una pestaña en la carpeta actual: se sustituye por las guardadas.
         QWidget *initial = m_rightTabs->widget(0);
-        for (const QString &path : rightPaths) {
-            openTabIn(m_rightTabs, path, false);
-        }
+        restoreTabs(m_rightTabs, rightPaths, QStringLiteral("session/rightTab"), false);
         m_rightTabs->removeTab(m_rightTabs->indexOf(initial));
         initial->deleteLater();
         m_rightTabs->setCurrentIndex(qBound(0, settings.value(QStringLiteral("session/rightCurrentTab"), 0).toInt(),
@@ -2764,6 +2997,26 @@ void MainWindow::saveSession()
         }
         return paths;
     };
+    // Por pestaña: vista, fijada y bloqueada (listas paralelas a las rutas).
+    const auto attributesOf = [&settings](const QTabWidget *group, const QString &prefix) {
+        QStringList views;
+        QStringList pinned;
+        QStringList locked;
+        for (int i = 0; group != nullptr && i < group->count(); ++i) {
+            const auto *pane = static_cast<const BrowserPane *>(group->widget(i));
+            views.append(viewModeName(pane->viewMode()));
+            pinned.append(pane->isPinned() ? QStringLiteral("1") : QStringLiteral("0"));
+            locked.append(pane->isLocked() ? QStringLiteral("1") : QStringLiteral("0"));
+        }
+        settings.setValue(prefix + QStringLiteral("Views"), views);
+        settings.setValue(prefix + QStringLiteral("Pinned"), pinned);
+        settings.setValue(prefix + QStringLiteral("Locked"), locked);
+    };
+    attributesOf(m_leftTabs, QStringLiteral("session/tab"));
+    attributesOf(m_rightTabs, QStringLiteral("session/rightTab"));
+    if (const BrowserPane *pane = currentPane()) {
+        settings.setValue(QStringLiteral("view/detailsHeader"), pane->detailsHeaderState());
+    }
     settings.setValue(QStringLiteral("session/tabs"), pathsOf(m_leftTabs));
     settings.setValue(QStringLiteral("session/currentTab"), m_leftTabs->currentIndex());
     settings.setValue(QStringLiteral("session/dualPane"), isDualPane());

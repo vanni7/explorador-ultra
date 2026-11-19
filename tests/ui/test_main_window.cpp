@@ -1442,6 +1442,76 @@ private slots:
         window.setDualPane(false);
     }
 
+    void tabsPinLockReopenAndFullSession()
+    {
+        QTemporaryDir data;
+        QTemporaryDir directory;
+        const QString root = QDir::cleanPath(directory.path());
+        for (const QString &name : {QStringLiteral("a/dentro"), QStringLiteral("b"), QStringLiteral("c")}) {
+            QVERIFY(QDir(root).mkpath(name));
+        }
+        {
+            MainWindow window(m_scheduler, openJournal(data));
+            BrowserPane *a = window.openTab(root + QStringLiteral("/a"));
+            BrowserPane *b = window.openTab(root + QStringLiteral("/b"));
+            BrowserPane *c = window.openTab(root + QStringLiteral("/c"));
+            QVERIFY(waitReady(a) && waitReady(b) && waitReady(c));
+            window.show();
+
+            // Fijar: va delante y la ✕ no la cierra.
+            window.setTabPinned(c, true);
+            QCOMPARE(window.allPanes().first(), c);
+            window.closeTab(0);
+            QCOMPARE(window.tabCount(), 3);
+
+            // Bloquear: ir a otro sitio desde ella abre otra pestaña.
+            window.setTabLocked(a, true);
+            a->navigateTo(root + QStringLiteral("/a/dentro"));
+            QCOMPARE(a->currentPath(), root + QStringLiteral("/a"));
+            QCOMPARE(window.tabCount(), 4);
+            QCOMPARE(window.currentPane()->currentPath(), root + QStringLiteral("/a/dentro"));
+            a->goUp();
+            QCOMPARE(a->currentPath(), root + QStringLiteral("/a"));
+            QCOMPARE(window.tabCount(), 5);
+            QCOMPARE(window.currentPane()->currentPath(), root);
+            QVERIFY(waitReady(window.currentPane()));
+            QTRY_COMPARE(window.currentPane()->selectedPaths(), (QStringList{root + QStringLiteral("/a")}));
+
+            // Cerrar y reabrir: vuelve con su carpeta.
+            const int before = window.tabCount();
+            window.closeTab(window.tabCount() - 1);
+            QCOMPARE(window.tabCount(), before - 1);
+            QCOMPARE(window.closedTabCount(), 1);
+            window.reopenClosedTab();
+            QCOMPARE(window.tabCount(), before);
+            QCOMPARE(window.currentPane()->currentPath(), root);
+            QCOMPARE(window.closedTabCount(), 0);
+
+            // Cada pestaña con su vista; al cerrar se guarda todo.
+            b->setViewMode(BrowserPane::ViewMode::Columns);
+            QVERIFY(window.close());
+        }
+        MainWindow restored(m_scheduler, openJournal(data));
+        restored.restoreSession();
+        const QList<BrowserPane *> panes = restored.allPanes();
+        QCOMPARE(panes.size(), 5);
+        QCOMPARE(panes.at(0)->currentPath(), root + QStringLiteral("/c"));
+        QVERIFY(panes.at(0)->isPinned());
+        QCOMPARE(panes.at(1)->currentPath(), root + QStringLiteral("/a"));
+        QVERIFY(panes.at(1)->isLocked());
+        QCOMPARE(panes.at(2)->currentPath(), root + QStringLiteral("/b"));
+        QCOMPARE(panes.at(2)->viewMode(), BrowserPane::ViewMode::Columns);
+        QVERIFY(!panes.at(2)->isPinned() && !panes.at(2)->isLocked());
+        // Para las demás pruebas: una sesión sencilla.
+        for (BrowserPane *pane : panes) {
+            pane->setPinned(false);
+            pane->setLocked(false);
+            pane->setViewMode(BrowserPane::ViewMode::Details);
+        }
+        restored.show();
+        QVERIFY(restored.close());
+    }
+
     void nameColumnKeepsAUsableWidth()
     {
         QTemporaryDir directory;
