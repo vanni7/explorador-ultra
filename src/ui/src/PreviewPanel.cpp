@@ -124,9 +124,11 @@ public:
         const QStringList &row = m_sheet.cells.at(index.row());
         const QString text = index.column() < row.size() ? row.at(index.column()) : QString();
         if (role == Qt::DisplayRole) {
-            return text;
+            QString line = text;
+            line.replace(QLatin1Char('\n'), QLatin1Char(' '));   // en la celda, en una línea
+            return line;
         }
-        if (role == Qt::ToolTipRole && text.size() > 30) {
+        if (role == Qt::ToolTipRole && (text.size() > 20 || text.contains(QLatin1Char('\n')))) {
             return text;
         }
         if (role == Qt::TextAlignmentRole) {
@@ -307,6 +309,7 @@ void PreviewPanel::rebuildFields(const QList<QPair<QString, QList<QPair<QString,
         m_fields->removeRow(0);
     }
     if (!m_hasItem) {
+        fitFields();
         return;
     }
     const auto addRow = [this](const QString &label, const QString &value) {
@@ -317,7 +320,11 @@ void PreviewPanel::rebuildFields(const QList<QPair<QString, QList<QPair<QString,
         valueLabel->setWordWrap(true);
         valueLabel->setTextInteractionFlags(Qt::TextSelectableByMouse);
         valueLabel->setObjectName(label);   // para encontrarlo (pruebas, accesibilidad)
-        m_fields->addRow(label + QLatin1Char(':'), valueLabel);
+        auto *name = new QLabel(label + QLatin1Char(':'));
+        m_fields->addRow(name, valueLabel);
+        // Visibles ya (si no, Qt las muestra después y no cuentan al medir la zona).
+        name->show();
+        valueLabel->show();
     };
     const auto addHeading = [this](const QString &text) {
         auto *heading = new QLabel(text);
@@ -325,6 +332,7 @@ void PreviewPanel::rebuildFields(const QList<QPair<QString, QList<QPair<QString,
         font.setBold(true);
         heading->setFont(font);
         m_fields->addRow(heading);
+        heading->show();
     };
     const fs::Entry &entry = m_item.entry;
     if (m_item.selectedCount > 1) {
@@ -360,6 +368,7 @@ void PreviewPanel::rebuildFields(const QList<QPair<QString, QList<QPair<QString,
             addRow(label, value);
         }
     }
+    fitFields();
 }
 
 void PreviewPanel::startLoading()
@@ -556,7 +565,7 @@ void PreviewPanel::showSheet(int index)
     // Columnas a la medida de lo que llevan, sin que una muy larga se coma el panel.
     m_sheetTable->resizeColumnsToContents();
     for (int column = 0; column < sheet.columns; ++column) {
-        m_sheetTable->setColumnWidth(column, std::clamp(m_sheetTable->columnWidth(column), 40, 260));
+        m_sheetTable->setColumnWidth(column, std::clamp(m_sheetTable->columnWidth(column), 40, 160));
     }
     QStringList notes;
     if (sheet.cells.isEmpty()) {
@@ -604,9 +613,22 @@ void PreviewPanel::updatePicture()
     m_pictureLabel->setPixmap(pixmap);
 }
 
+void PreviewPanel::fitFields()
+{
+    // Los datos ocupan lo que necesitan (como mucho la mitad): el resto, para la vista previa.
+    // Con el ancho de ahora (los valores largos ocupan varias líneas); si aún
+    // no se puede saber, lo que pide el contenido sin ajustar.
+    const int width = m_fieldsArea->viewport()->width();
+    int content = m_fieldsHost->hasHeightForWidth() && width > 50 ? m_fieldsHost->heightForWidth(width) : -1;
+    content = std::max(content, m_fieldsHost->sizeHint().height());
+    const int wanted = content + 2 * m_fieldsArea->frameWidth() + 2;
+    m_fieldsArea->setMaximumHeight(std::max(80, std::min(wanted, height() / 2)));
+}
+
 void PreviewPanel::resizeEvent(QResizeEvent *event)
 {
     QWidget::resizeEvent(event);
+    fitFields();
     updatePicture();
 }
 

@@ -252,7 +252,8 @@ private slots:
              "<c r=\"C2\" s=\"2\"><v>0.25</v></c><c r=\"D2\" s=\"3\"><v>0.5</v></c>"
              "<c r=\"E2\" t=\"b\"><v>1</v></c><c r=\"F2\" t=\"str\"><f>A1</f><v>Concepto</v></c></row>"
              "<row r=\"3\" s=\"1\" customFormat=\"1\"/>"
-             "<row r=\"9\"><c r=\"B9\" s=\"4\"><v>45000.75</v></c><c r=\"A9\" t=\"e\"><v>#DIV/0!</v></c></row>"
+             "<row r=\"9\"><c r=\"B9\" s=\"4\"><v>45000.75</v></c><c r=\"A9\" t=\"e\"><v>#DIV/0!</v></c>"
+             "<c r=\"C9\"><f>A2*2</f></c></row>"
              "</sheetData></worksheet>"}}));
         preview = documentPreview(file(QStringLiteral("cuentas.xlsx")), {});
         QVERIFY2(preview.ok(), qPrintable(preview.ok() ? QString() : preview.error().message));
@@ -270,7 +271,9 @@ private slots:
                  (QStringList{QStringLiteral("1234.5"), QStringLiteral("15/03/2023"), QStringLiteral("25%"),
                               QStringLiteral("12:00"), QStringLiteral("VERDADERO"), QStringLiteral("Concepto")}));
         QCOMPARE(summary.numeric.at(1), QByteArray("111100"));
-        QCOMPARE(summary.cells.at(2), (QStringList{QStringLiteral("#DIV/0!"), QStringLiteral("15/03/2023 18:00")}));
+        // Una fórmula sin resultado guardado se muestra como fórmula.
+        QCOMPARE(summary.cells.at(2), (QStringList{QStringLiteral("#DIV/0!"), QStringLiteral("15/03/2023 18:00"),
+                                                   QStringLiteral("=A2*2")}));
         QCOMPARE(sheets.at(1).cells.at(0).at(0), QStringLiteral("Hoja de datos"));
         QCOMPARE(spreadsheetColumnName(1), QStringLiteral("A"));
         QCOMPARE(spreadsheetColumnName(28), QStringLiteral("AB"));

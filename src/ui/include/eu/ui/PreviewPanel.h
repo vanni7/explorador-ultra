@@ -77,6 +77,7 @@ private:
     void onLoaded(quint64 generation, const Loaded &loaded);
     void rebuildFields(const QList<QPair<QString, QList<QPair<QString, QString>>>> &extra);
     void updatePicture();
+    void fitFields();
     void showDocument(const content::DocumentPreview &document);
 
     tasks::Scheduler &m_scheduler;

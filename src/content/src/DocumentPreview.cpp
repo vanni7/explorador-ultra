@@ -1141,6 +1141,7 @@ SheetPreview readExcelSheet(const QByteArray &xml, const QStringList &shared, co
     int style = 0;
     QString value;
     QString inlineText;
+    QString formula;
     bool inCell = false;
     int events = 0;
     while (!reader.atEnd()) {
@@ -1170,13 +1171,15 @@ SheetPreview readExcelSheet(const QByteArray &xml, const QStringList &shared, co
                 style = attributes.value(u"s"_s).toInt();
                 value.clear();
                 inlineText.clear();
+                formula.clear();
                 inCell = true;
             } else if (inCell && name == "v"_L1) {
                 value = reader.readElementText(QXmlStreamReader::SkipChildElements);
             } else if (inCell && name == "is"_L1) {
                 inlineText = richText(reader);
             } else if (inCell && name == "f"_L1) {
-                reader.skipCurrentElement();   // la fórmula no; su resultado está en <v>
+                // Se muestra el resultado guardado (<v>); la fórmula, solo si no lo hay.
+                formula = reader.readElementText(QXmlStreamReader::SkipChildElements);
             }
             continue;
         }
@@ -1203,6 +1206,11 @@ SheetPreview readExcelSheet(const QByteArray &xml, const QStringList &shared, co
             text = ok ? numberText(parsed, style >= 0 && style < kinds.size() ? kinds.at(style) : NumberKind::Plain,
                                    date1904)
                       : value;
+        }
+        if (text.isEmpty() && value.isEmpty() && !formula.isEmpty()) {
+            // Guardada por un programa que no la calculó (p. ej. una biblioteca
+            // que genera hojas): se muestra la fórmula, como al editarla.
+            text = u'=' + formula;
         }
         if (text.isEmpty()) {
             continue;
