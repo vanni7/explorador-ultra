@@ -16,6 +16,7 @@
 #include "eu/ui/SyncDialog.h"
 #include "eu/ui/Appearance.h"
 #include "eu/ui/PreferencesDialog.h"
+#include "eu/ui/Printing.h"
 #include "eu/ui/Shortcuts.h"
 #include "eu/ui/TagsDialog.h"
 #include "eu/ui/OrganizeDialog.h"
@@ -604,6 +605,10 @@ void MainWindow::createEditActions()
     m_similarAction->setToolTip(tr("Fotos casi iguales (recomprimidas, reducidas, retocadas), lado a lado para "
                                    "elegir cuáles quitar"));
     connect(m_similarAction, &QAction::triggered, this, &MainWindow::showSimilarImages);
+    m_printAction = new QAction(themedIcon(QStringLiteral("document-print"), QStyle::SP_FileIcon), tr("Imprimir…"), this);
+    m_printAction->setShortcut(QKeySequence::Print);
+    m_printAction->setToolTip(tr("Imprime la imagen, el PDF, el texto o el documento seleccionado, con vista previa"));
+    connect(m_printAction, &QAction::triggered, this, &MainWindow::printCurrent);
     m_preferencesAction = new QAction(themedIcon(QStringLiteral("configure"), QStyle::SP_FileDialogDetailedView),
                                       tr("Preferencias…"), this);
     m_preferencesAction->setShortcuts({QKeySequence(Qt::CTRL | Qt::Key_Comma)});
@@ -681,6 +686,10 @@ void MainWindow::createEditActions()
     }
 
     QMenu *fileMenu = menuBar()->actions().constFirst()->menu();
+    // Imprimir, justo antes de «Salir» (la última).
+    QAction *quitEntry = fileMenu->actions().constLast();
+    fileMenu->insertAction(quitEntry, m_printAction);
+    fileMenu->insertSeparator(quitEntry);
     QAction *firstFileAction = fileMenu->actions().constFirst();
     fileMenu->insertAction(firstFileAction, m_newFolderAction);
     fileMenu->insertAction(firstFileAction, m_newFileAction);
@@ -1129,6 +1138,34 @@ void MainWindow::showPreferences()
         return;
     }
     dialog.exec();
+}
+
+void MainWindow::printCurrent()
+{
+    BrowserPane *pane = currentPane();
+    if (pane == nullptr) {
+        return;
+    }
+    const BrowserPane::CurrentItem item = pane->currentItem();
+    if (!item.valid || item.entry.isDirectory) {
+        statusBar()->showMessage(tr("Selecciona el archivo que quieres imprimir."), 5000);
+        return;
+    }
+    QString path = item.path;
+    if (isArchiveLocation(path)) {
+        // Lo de dentro de un comprimido se saca primero a una carpeta temporal.
+        const core::Result<QString> extracted = archive::extractEntryToTemp(archivePathOf(path), archiveInnerOf(path), {});
+        if (!extracted.ok()) {
+            statusBar()->showMessage(extracted.error().message, 6000);
+            return;
+        }
+        path = extracted.value();
+    }
+    if (m_printDriver) {
+        m_printDriver(path, int(printKindFor(path)));
+        return;
+    }
+    printWithPreview(path, this);
 }
 
 void MainWindow::showSync()

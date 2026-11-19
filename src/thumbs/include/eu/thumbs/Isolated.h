@@ -35,6 +35,11 @@ core::Result<QString> extractTextIsolated(const QString &path, const tasks::Canc
 /// propósito no cierran la aplicación.
 core::Result<content::DocumentPreview> documentPreviewIsolated(const QString &path, const tasks::CancelToken &cancel);
 
+/// renderPdfPage en el proceso auxiliar (para imprimir un PDF sin que uno
+/// dañado pueda cerrar la aplicación).
+core::Result<QImage> renderPdfPageIsolated(const QString &path, int page, const QSize &size, int *pageCount,
+                                           const tasks::CancelToken &cancel);
+
 /// true si está el auxiliar (si no, renderThumbnailIsolated no aísla).
 bool hasThumbnailHelper();
 

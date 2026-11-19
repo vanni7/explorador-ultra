@@ -21,7 +21,7 @@ set(EU_SANITIZER "" CACHE STRING "Sanitizer a activar: address, undefined, threa
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_SOURCE_DIR}/cmake")
 include(EuCompilerOptions)
 
-find_package(Qt6 6.8 REQUIRED COMPONENTS Core Gui Widgets Svg Sql LinguistTools)
+find_package(Qt6 6.8 REQUIRED COMPONENTS Core Gui Widgets Svg Sql PrintSupport LinguistTools)
 qt_standard_project_setup()
 include(EuOptionalDeps)
 # Qt Multimedia es opcional (reproducir video y audio en las miniaturas).

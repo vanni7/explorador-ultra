@@ -7,6 +7,7 @@
 #include "eu/ui/SyncDialog.h"
 #include "eu/ui/Appearance.h"
 #include "eu/ui/PreferencesDialog.h"
+#include "eu/ui/Printing.h"
 #include "eu/ui/Shortcuts.h"
 #include "eu/ui/BulkRenameDialog.h"
 #include "eu/ui/DuplicatesDialog.h"
@@ -38,6 +39,9 @@
 #include <QItemSelectionModel>
 #include <QLabel>
 #include <QSettings>
+#include <QImageReader>
+#include <QPdfWriter>
+#include <QPrinter>
 #include <QStyle>
 #include <QSignalSpy>
 #include <QStandardPaths>
@@ -1594,6 +1598,105 @@ private slots:
         window.showPreferences();
         QVERIFY(driven);
         QCOMPARE(copy->shortcut(), QKeySequence(QKeySequence::Copy));
+    }
+
+    void printingImagesPdfTextAndDocuments()
+    {
+        QTemporaryDir data;
+        QTemporaryDir directory;
+        const auto pagesOf = [](const QString &pdf) {
+            return QImageReader::supportedImageFormats().contains("pdf") ? QImageReader(pdf, "pdf").imageCount() : -1;
+        };
+        const auto printTo = [&](const QString &path, PrintKind kind, int from, int to) {
+            const QString out = directory.filePath(QFileInfo(path).fileName() + QStringLiteral(".impreso.pdf"));
+            QPrinter printer(QPrinter::HighResolution);
+            printer.setOutputFormat(QPrinter::PdfFormat);
+            printer.setOutputFileName(out);
+            if (from > 0) {
+                printer.setFromTo(from, to);
+            }
+            QString error;
+            const bool ok = printFile(path, kind, &printer, &error);
+            return ok && QFileInfo(out).size() > 0 ? out : QStringLiteral("ERROR: ") + error;
+        };
+
+        // Texto largo: varias páginas, en el orden del archivo.
+        QString lines;
+        for (int i = 1; i <= 400; ++i) {
+            lines += QStringLiteral("Línea %1 del texto de prueba\n").arg(i);
+        }
+        const QString text = directory.filePath(QStringLiteral("largo.txt"));
+        {
+            QFile file(text);
+            QVERIFY(file.open(QIODevice::WriteOnly));
+            file.write(lines.toUtf8());
+        }
+        QCOMPARE(printKindFor(text), PrintKind::Text);
+        QString printed = printTo(text, PrintKind::Text, 0, 0);
+        QVERIFY2(!printed.startsWith(QStringLiteral("ERROR")), qPrintable(printed));
+        if (pagesOf(printed) >= 0) {
+            QVERIFY(pagesOf(printed) > 1);
+        }
+
+        // Imagen: una página.
+        QImage image(640, 480, QImage::Format_RGB32);
+        image.fill(Qt::darkCyan);
+        const QString photo = directory.filePath(QStringLiteral("foto.png"));
+        QVERIFY(image.save(photo));
+        QCOMPARE(printKindFor(photo), PrintKind::Image);
+        printed = printTo(photo, PrintKind::Image, 0, 0);
+        QVERIFY2(!printed.startsWith(QStringLiteral("ERROR")), qPrintable(printed));
+
+        // PDF de tres páginas: solo la 2 y la 3.
+        const QString pdf = directory.filePath(QStringLiteral("tres.pdf"));
+        {
+            QPdfWriter writer(pdf);
+            QPainter painter(&writer);
+            for (int page = 1; page <= 3; ++page) {
+                if (page > 1) {
+                    writer.newPage();
+                }
+                painter.drawText(QPointF(200, 200), QStringLiteral("Página %1").arg(page));
+            }
+        }
+        if (printKindFor(pdf) == PrintKind::Pdf) {
+            printed = printTo(pdf, PrintKind::Pdf, 2, 3);
+            QVERIFY2(!printed.startsWith(QStringLiteral("ERROR")), qPrintable(printed));
+            QCOMPARE(pagesOf(printed), 2);
+        }
+
+#ifdef EU_HAVE_LIBARCHIVE
+        // Un Word, como su vista previa.
+        const QString word = directory.filePath(QStringLiteral("carta.docx"));
+        QVERIFY(eu::testsupport::writeZip(word, {{QStringLiteral("word/document.xml"),
+                                                  "<?xml version=\"1.0\"?><w:document xmlns:w=\"w\"><w:body><w:p><w:r>"
+                                                  "<w:t>Hola</w:t></w:r></w:p></w:body></w:document>"}}));
+        QCOMPARE(printKindFor(word), PrintKind::Document);
+        printed = printTo(word, PrintKind::Document, 0, 0);
+        QVERIFY2(!printed.startsWith(QStringLiteral("ERROR")), qPrintable(printed));
+#endif
+
+        // Lo que no se sabe imprimir; los programas, con aviso y sin abrirlos.
+        writeFile(directory.filePath(QStringLiteral("instalar.exe")), 10);
+        writeFile(directory.filePath(QStringLiteral("datos.bin")), 10);
+        QCOMPARE(printKindFor(directory.filePath(QStringLiteral("instalar.exe"))), PrintKind::None);
+        QVERIFY(isPotentiallyDangerous(directory.filePath(QStringLiteral("instalar.exe"))));
+        QVERIFY(!isPotentiallyDangerous(photo));
+
+        // Ctrl+P en la ventana imprime lo que tiene el cursor.
+        MainWindow window(m_scheduler, openJournal(data));
+        BrowserPane *pane = window.openTab(directory.path());
+        QVERIFY(waitReady(pane));
+        QString asked;
+        int askedKind = -1;
+        window.setPrintDriverForTesting([&](const QString &path, int kind) {
+            asked = path;
+            askedKind = kind;
+        });
+        selectNames(pane, {QStringLiteral("foto.png")});
+        window.printCurrent();
+        QCOMPARE(asked, photo);
+        QCOMPARE(askedKind, int(PrintKind::Image));
     }
 
     void nameColumnKeepsAUsableWidth()

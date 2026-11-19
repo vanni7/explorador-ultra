@@ -387,6 +387,43 @@ core::Result<QImage> renderFolder(const ThumbnailRequest &request, const tasks::
 
 } // namespace
 
+core::Result<QImage> renderPdfPage(const QString &path, int page, const QSize &size, int *pageCount)
+{
+    if (!hasPdfPlugin()) {
+        return core::Error{core::ErrorCode::NotSupported, tr("Esta compilación no lee PDF"), path, 0};
+    }
+    QImageReader reader(path, "pdf");
+    const int count = reader.imageCount();
+    if (pageCount != nullptr) {
+        *pageCount = count;
+    }
+    if (count <= 0) {
+        return core::Error{core::ErrorCode::Corrupted, tr("No se pudo abrir el PDF"), path, 0};
+    }
+    if (page < 0) {
+        return QImage();
+    }
+    if (page >= count || !reader.jumpToImage(page)) {
+        return core::Error{core::ErrorCode::NotFound, tr("El PDF no tiene esa página"), path, 0};
+    }
+    const QSize natural = reader.size();
+    if (natural.isValid() && size.isValid() && !size.isEmpty()) {
+        reader.setScaledSize(natural.scaled(size, Qt::KeepAspectRatio));
+    }
+    const QImage image = reader.read();
+    if (image.isNull()) {
+        return core::Error{core::ErrorCode::Corrupted, tr("No se pudo pintar la página: %1").arg(reader.errorString()),
+                           path, 0};
+    }
+    // Papel blanco debajo: una página sin fondo propio no es transparente.
+    QImage paper(image.size(), QImage::Format_RGB32);
+    paper.fill(Qt::white);
+    QPainter painter(&paper);
+    painter.drawImage(0, 0, image);
+    painter.end();
+    return paper;
+}
+
 core::Result<QImage> renderThumbnail(const ThumbnailRequest &request, const tasks::CancelToken &cancel)
 {
     if (cancel.isCancelled()) {

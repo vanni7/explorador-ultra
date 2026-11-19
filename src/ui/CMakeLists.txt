@@ -21,6 +21,7 @@ add_library(eu_ui STATIC
     src/PathBar.cpp
     src/PreferencesDialog.cpp
     src/PreviewPanel.cpp
+    src/Printing.cpp
     src/SearchResultsModel.cpp
     src/Shortcuts.cpp
     src/Sidebar.cpp
@@ -49,6 +50,7 @@ add_library(eu_ui STATIC
     include/eu/ui/PathBar.h
     include/eu/ui/PreferencesDialog.h
     include/eu/ui/PreviewPanel.h
+    include/eu/ui/Printing.h
     include/eu/ui/SearchResultsModel.h
     include/eu/ui/Shortcuts.h
     include/eu/ui/Sidebar.h
@@ -60,7 +62,7 @@ add_library(eu_ui STATIC
 add_library(eu::ui ALIAS eu_ui)
 
 target_include_directories(eu_ui PUBLIC include)
-target_link_libraries(eu_ui PUBLIC eu::core eu::tasks eu::fs eu::search eu::index eu::thumbs eu::meta eu::archive eu::rename eu::organize eu::sync eu::dupes eu::similar eu::tags eu::journal eu::ops_engine Qt6::Widgets)
+target_link_libraries(eu_ui PUBLIC eu::core eu::tasks eu::fs eu::search eu::index eu::thumbs eu::meta eu::archive eu::rename eu::organize eu::sync eu::dupes eu::similar eu::tags eu::journal eu::ops_engine Qt6::Widgets Qt6::PrintSupport)
 eu_target_defaults(eu_ui)
 
 # Reproducción dentro de las miniaturas (opcional: sin Qt Multimedia no hay

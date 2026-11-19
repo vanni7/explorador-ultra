@@ -135,6 +135,41 @@ public:
         return text;
     }
 
+    core::Result<QImage> pdfPage(const QString &path, int page, const QSize &size, int *pageCount,
+                                 const tasks::CancelToken &cancel)
+    {
+        if (!ensureRunning()) {
+            return renderPdfPage(path, page, size, pageCount);
+        }
+        const QString out = m_scratch->filePath(QStringLiteral("pagina.png"));
+        QFile::remove(out);
+        const core::Result<QJsonObject> reply =
+            ask({{QStringLiteral("op"), QStringLiteral("pdfpage")}, {QStringLiteral("path"), path},
+                 {QStringLiteral("page"), page}, {QStringLiteral("width"), size.width()},
+                 {QStringLiteral("height"), size.height()}, {QStringLiteral("out"), out}},
+                path, cancel);
+        if (!reply.ok()) {
+            return reply.error();
+        }
+        if (pageCount != nullptr) {
+            *pageCount = reply.value().value(QStringLiteral("pages")).toInt();
+        }
+        if (!reply.value().value(QStringLiteral("ok")).toBool()) {
+            return core::Error{core::ErrorCode(reply.value().value(QStringLiteral("code")).toInt(int(core::ErrorCode::Unknown))),
+                               reply.value().value(QStringLiteral("message")).toString(), path, 0};
+        }
+        if (page < 0) {
+            return QImage();
+        }
+        QImageReader reader(out, "png");
+        const QImage image = reader.read();
+        QFile::remove(out);
+        if (image.isNull()) {
+            return core::Error{core::ErrorCode::IoError, tr("No se pudo leer la página pintada"), path, 0};
+        }
+        return image;
+    }
+
     core::Result<content::DocumentPreview> document(const QString &path, const tasks::CancelToken &cancel)
     {
         if (!ensureRunning()) {
@@ -275,6 +310,15 @@ core::Result<content::DocumentPreview> documentPreviewIsolated(const QString &pa
         return core::Error{core::ErrorCode::Cancelled, tr("Cancelado"), path, 0};
     }
     return helperForThisThread().document(path, cancel);
+}
+
+core::Result<QImage> renderPdfPageIsolated(const QString &path, int page, const QSize &size, int *pageCount,
+                                           const tasks::CancelToken &cancel)
+{
+    if (cancel.isCancelled()) {
+        return core::Error{core::ErrorCode::Cancelled, tr("Cancelado"), path, 0};
+    }
+    return helperForThisThread().pdfPage(path, page, size, pageCount, cancel);
 }
 
 QList<meta::Section> readMetadataIsolated(const QString &path, const tasks::CancelToken &cancel)

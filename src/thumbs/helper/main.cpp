@@ -125,6 +125,32 @@ int main(int argc, char *argv[])
             reply({{QStringLiteral("ok"), true}});
             continue;
         }
+        if (request.value(QStringLiteral("op")).toString() == QLatin1String("pdfpage")) {
+            // Página de PDF: {"op":"pdfpage","path":…,"page":n,"width":w,"height":h,"out":…}
+            // -> {"ok":true,"pages":N} y la página en PNG en "out" (page < 0: solo contar).
+            int pages = 0;
+            const int page = request.value(QStringLiteral("page")).toInt();
+            const eu::core::Result<QImage> image = eu::thumbs::renderPdfPage(
+                path, page,
+                QSize(request.value(QStringLiteral("width")).toInt(), request.value(QStringLiteral("height")).toInt()),
+                &pages);
+            if (!image.ok()) {
+                reply({{QStringLiteral("ok"), false}, {QStringLiteral("pages"), pages},
+                       {QStringLiteral("code"), int(image.error().code)}, {QStringLiteral("message"), image.error().message}});
+                continue;
+            }
+            if (page >= 0) {
+                QSaveFile file(request.value(QStringLiteral("out")).toString());
+                if (!file.open(QIODevice::WriteOnly) || !image.value().save(&file, "png", 100) || !file.commit()) {
+                    reply({{QStringLiteral("ok"), false}, {QStringLiteral("pages"), pages},
+                           {QStringLiteral("code"), int(eu::core::ErrorCode::IoError)},
+                           {QStringLiteral("message"), QStringLiteral("No se pudo escribir la página")}});
+                    continue;
+                }
+            }
+            reply({{QStringLiteral("ok"), true}, {QStringLiteral("pages"), pages}});
+            continue;
+        }
         if (request.value(QStringLiteral("op")).toString() == QLatin1String("meta")) {
             // Metadatos: {"op":"meta","path":"…"} -> {"ok":true,"sections":[{"title":…,"fields":[[l,v],…]}]}
             QJsonArray sections;

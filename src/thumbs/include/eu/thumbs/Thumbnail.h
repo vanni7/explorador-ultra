@@ -56,4 +56,9 @@ ThumbnailSource thumbnailSourceFor(const ThumbnailRequest &request);
 /// imágenes de tamaño absurdo se rechazan antes de decodificarlas).
 core::Result<QImage> renderThumbnail(const ThumbnailRequest &request, const tasks::CancelToken &cancel);
 
+/// Una página de un PDF (0 = la primera) pintada para que quepa en `size`,
+/// sobre papel blanco; en `pageCount` deja cuántas tiene. Con `page` < 0 solo
+/// cuenta las páginas (y devuelve una imagen vacía). Para imprimir.
+core::Result<QImage> renderPdfPage(const QString &path, int page, const QSize &size, int *pageCount);
+
 } // namespace eu::thumbs
