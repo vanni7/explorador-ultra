@@ -7,6 +7,7 @@ versión la carpeta del repositorio incluye el compilador en el nombre
 
 Uso:  fetch_qt_windows.py <carpeta_destino> [versión, por defecto 6.12.0]
 Deja Qt en <carpeta_destino>/<versión>/msvc2022_64. Requiere la orden 7z.
+Qt PDF no está en el repositorio "desktop" sino en "extensions"; se baja de allí.
 """
 import hashlib
 import subprocess
@@ -15,10 +16,10 @@ import urllib.request
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
-# qtpdf vive en otro repositorio ("extensions"); se añadirá en la Fase 3.
 MODULES = ["qtimageformats", "qtmultimedia", "qtshadertools"]
+EXTENSIONS = ["qtpdf"]
 ARCH = "win64_msvc2022_64"
-MIRROR = "https://download.qt.io/online/qtsdkrepository/windows_x86/desktop"
+REPOSITORY = "https://download.qt.io/online/qtsdkrepository/windows_x86"
 
 
 def fetch(url: str) -> bytes:
@@ -30,18 +31,37 @@ def main() -> int:
     destination = Path(sys.argv[1]).resolve()
     version = sys.argv[2] if len(sys.argv) > 2 else "6.12.0"
     compact = version.replace(".", "")                      # 6.12.0 -> 6120
-    base = f"{MIRROR}/qt6_{compact}/qt6_{compact}_msvc2022_64"
 
-    wanted = {f"qt.qt6.{compact}.{ARCH}"}
-    wanted |= {f"qt.qt6.{compact}.addons.{module}.{ARCH}" for module in MODULES}
+    # (carpeta del repositorio, paquetes que se quieren de ella)
+    sources = [(f"{REPOSITORY}/desktop/qt6_{compact}/qt6_{compact}_msvc2022_64",
+                {f"qt.qt6.{compact}.{ARCH}"}
+                | {f"qt.qt6.{compact}.addons.{module}.{ARCH}" for module in MODULES})]
+    sources += [(f"{REPOSITORY}/extensions/{module}/{compact}/msvc2022_64", {f"extensions.{module}.{compact}.{ARCH}"})
+                for module in EXTENSIONS]
 
-    updates = ET.fromstring(fetch(f"{base}/Updates.xml"))
     downloads = destination / "descargas"
     downloads.mkdir(parents=True, exist_ok=True)
     target = destination / version / "msvc2022_64"
     target.mkdir(parents=True, exist_ok=True)
 
+    wanted = set()
     found = set()
+    for base, names in sources:
+        wanted |= names
+        status = install(base, names, downloads, target, found)
+        if status != 0:
+            return status
+
+    missing = wanted - found
+    if missing:
+        print("ERROR: paquetes no encontrados:", ", ".join(sorted(missing)))
+        return 1
+    print(f"Qt {version} para Windows listo en {target}")
+    return 0
+
+
+def install(base: str, wanted: set, downloads: Path, target: Path, found: set) -> int:
+    updates = ET.fromstring(fetch(f"{base}/Updates.xml"))
     for package in updates.iter("PackageUpdate"):
         name = package.findtext("Name")
         if name not in wanted:
@@ -62,12 +82,6 @@ def main() -> int:
                     return 1
                 local.write_bytes(data)
             subprocess.run(["7z", "x", "-y", "-bso0", "-bsp0", f"-o{target}", str(local)], check=True)
-
-    missing = wanted - found
-    if missing:
-        print("ERROR: paquetes no encontrados:", ", ".join(sorted(missing)))
-        return 1
-    print(f"Qt {version} para Windows listo en {target}")
     return 0
 
 

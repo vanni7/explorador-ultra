@@ -9,7 +9,7 @@ target_link_libraries(eu_content PUBLIC eu::core eu::tasks Qt6::Core)
 eu_target_defaults(eu_content)
 
 if(EU_LIBARCHIVE_FOUND)
-    target_link_libraries(eu_content PRIVATE PkgConfig::EU_LIBARCHIVE)
+    target_link_libraries(eu_content PRIVATE EU::libarchive)
     target_compile_definitions(eu_content PRIVATE EU_HAVE_LIBARCHIVE)
 endif()
 # Qt PDF (opcional) para el texto de los PDF.

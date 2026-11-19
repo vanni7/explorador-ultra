@@ -79,9 +79,27 @@ jobs:
           echo "QT_ROOT_DIR=$qt" >> "$GITHUB_ENV"
           echo "$(cygpath -w "$qt/bin")" >> "$GITHUB_PATH"
 
+      # libarchive en Windows: con vcpkg, como en la VM (tools/windows/instalar-vcpkg.cmd).
+      # Lo ya compilado se guarda en la caché y no se repite.
+      - name: Caché de vcpkg (Windows)
+        if: runner.os == 'Windows'
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/vcpkg-cache
+          key: vcpkg-windows-${{ hashFiles('tools/windows/instalar-vcpkg.cmd', 'tools/windows/vcpkg-triplets/*') }}
+
+      - name: Bibliotecas de vcpkg (Windows)
+        if: runner.os == 'Windows'
+        shell: cmd
+        run: |
+          if not exist "%RUNNER_TEMP%\vcpkg-cache" mkdir "%RUNNER_TEMP%\vcpkg-cache"
+          set VCPKG_DEFAULT_BINARY_CACHE=%RUNNER_TEMP%\vcpkg-cache
+          call tools\windows\instalar-vcpkg.cmd "%RUNNER_TEMP%\vcpkg" || exit /b 1
+          echo EU_CMAKE_ARGS=-DCMAKE_TOOLCHAIN_FILE=%RUNNER_TEMP:\=/%/vcpkg/scripts/buildsystems/vcpkg.cmake -DVCPKG_TARGET_TRIPLET=x64-windows-release>> "%GITHUB_ENV%"
+
       - name: Configurar
         shell: bash
-        run: EU_QT_DIR="$QT_ROOT_DIR" cmake --preset ${{ matrix.preset }}
+        run: EU_QT_DIR="$QT_ROOT_DIR" cmake --preset ${{ matrix.preset }} $EU_CMAKE_ARGS
 
       - name: Compilar
         run: cmake --build --preset ${{ matrix.preset }}

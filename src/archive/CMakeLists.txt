@@ -11,6 +11,6 @@ target_link_libraries(eu_archive PUBLIC eu::core eu::tasks Qt6::Core)
 eu_target_defaults(eu_archive)
 
 if(EU_LIBARCHIVE_FOUND)
-    target_link_libraries(eu_archive PUBLIC PkgConfig::EU_LIBARCHIVE)
+    target_link_libraries(eu_archive PUBLIC EU::libarchive)
     target_compile_definitions(eu_archive PUBLIC EU_HAVE_LIBARCHIVE)
 endif()

@@ -26,7 +26,7 @@ if(EU_FFMPEG_FOUND)
 endif()
 if(EU_LIBARCHIVE_FOUND)
     # Público: las pruebas lo usan para fabricar documentos de prueba.
-    target_link_libraries(eu_thumbs PUBLIC PkgConfig::EU_LIBARCHIVE)
+    target_link_libraries(eu_thumbs PUBLIC EU::libarchive)
     target_compile_definitions(eu_thumbs PUBLIC EU_HAVE_LIBARCHIVE)
 endif()
 if(EU_LIBRAW_FOUND)
