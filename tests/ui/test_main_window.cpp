@@ -4,6 +4,7 @@
 #include "eu/ui/Locations.h"
 #include "eu/ui/MainWindow.h"
 #include "eu/ui/MillerView.h"
+#include "eu/ui/SyncDialog.h"
 #include "eu/ui/BulkRenameDialog.h"
 #include "eu/ui/DuplicatesDialog.h"
 #include "eu/ui/SimilarImagesDialog.h"
@@ -32,6 +33,7 @@
 #include <QMimeData>
 #include <QProcess>
 #include <QItemSelectionModel>
+#include <QLabel>
 #include <QSettings>
 #include <QSignalSpy>
 #include <QStandardPaths>
@@ -1373,6 +1375,71 @@ private slots:
             restored.show();
             QVERIFY(restored.close());   // sesión de un panel, para las demás pruebas
         }
+    }
+
+    void syncDialogComparesSimulatesAndSyncs()
+    {
+        QTemporaryDir data;
+        QTemporaryDir directory;
+        const QString left = QDir::cleanPath(directory.path()) + QStringLiteral("/origen");
+        const QString right = QDir::cleanPath(directory.path()) + QStringLiteral("/copia");
+        QVERIFY(QDir().mkpath(left + QStringLiteral("/fotos")));
+        QVERIFY(QDir().mkpath(right));
+        writeFile(left + QStringLiteral("/nuevo.txt"), 10);
+        writeFile(left + QStringLiteral("/fotos/a.jpg"), 20);
+        writeFile(right + QStringLiteral("/sobra.txt"), 5);
+
+        MainWindow window(m_scheduler, openJournal(data));
+        BrowserPane *pane = window.openTab(left);
+        QVERIFY(waitReady(pane));
+        window.setDualPane(true);
+        window.otherPane()->navigateTo(right);
+        QVERIFY(waitReady(window.otherPane()));
+
+        bool driven = false;
+        window.setSyncDriverForTesting([&](SyncDialog &dialog) {
+            driven = true;
+            // Con doble panel, compara las carpetas de los dos paneles.
+            dialog.startCompare();
+            QTRY_VERIFY(!dialog.isBusy());
+            QCOMPARE(dialog.comparison().left, left);
+            QCOMPARE(dialog.comparison().right, right);
+            QCOMPARE(dialog.view()->model()->rowCount(), 3);   // nuevo.txt, fotos y sobra.txt
+            QVERIFY(dialog.summary()->text().contains(QStringLiteral("2 solo a la izquierda")));
+
+            // Sin simular no se sincroniza nada.
+            dialog.setConfirmForTesting([] { return true; });
+            dialog.synchronize();
+            QVERIFY(!dialog.isBusy());
+            QVERIFY(!QFile::exists(right + QStringLiteral("/nuevo.txt")));
+
+            dialog.simulate();
+            QVERIFY(dialog.planIsCurrent());
+            QCOMPARE(dialog.plan().count(sync::ActionKind::CopyToRight), 2);
+            QCOMPARE(dialog.plan().deletionsNotPropagated, 1);
+            // Cambiar una opción obliga a simular otra vez.
+            dialog.setPropagateDeletions(true);
+            QVERIFY(!dialog.planIsCurrent());
+            dialog.simulate();
+            QCOMPARE(dialog.plan().count(sync::ActionKind::TrashRight), 1);
+
+            QSignalSpy synced(&dialog, &SyncDialog::syncFinished);
+            dialog.synchronize();
+            QTRY_COMPARE(synced.count(), 1);
+            QTRY_VERIFY(!dialog.isBusy());   // y vuelve a comparar
+            QVERIFY(QFile::exists(right + QStringLiteral("/nuevo.txt")));
+            QVERIFY(QFile::exists(right + QStringLiteral("/fotos/a.jpg")));
+            if (!QFile::exists(right + QStringLiteral("/sobra.txt"))) {
+                QVERIFY(dialog.comparison().sameTrees());
+            }
+            // Queda el estado del par para la próxima vez en los dos sentidos.
+            QVERIFY(QFile::exists(sync::stateFile(QStandardPaths::writableLocation(QStandardPaths::AppDataLocation),
+                                                  left, right)));
+        });
+        window.showSync();
+        QVERIFY(driven);
+        QTRY_VERIFY(!window.fileActions()->isBusy());
+        window.setDualPane(false);
     }
 
     void nameColumnKeepsAUsableWidth()

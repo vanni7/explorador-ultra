@@ -13,6 +13,7 @@
 #include "eu/ui/BulkRenameDialog.h"
 #include "eu/ui/DuplicatesDialog.h"
 #include "eu/ui/SimilarImagesDialog.h"
+#include "eu/ui/SyncDialog.h"
 #include "eu/ui/TagsDialog.h"
 #include "eu/ui/OrganizeDialog.h"
 #include "eu/ui/ContentIndexDialog.h"
@@ -508,6 +509,10 @@ void MainWindow::createEditActions()
     m_similarAction->setToolTip(tr("Fotos casi iguales (recomprimidas, reducidas, retocadas), lado a lado para "
                                    "elegir cuáles quitar"));
     connect(m_similarAction, &QAction::triggered, this, &MainWindow::showSimilarImages);
+    m_syncAction = new QAction(tr("Comparar y sincronizar carpetas…"), this);
+    m_syncAction->setToolTip(tr("Ver qué cambia entre dos carpetas y copiar en uno o en los dos sentidos; con el "
+                                "doble panel, compara las carpetas de los dos paneles"));
+    connect(m_syncAction, &QAction::triggered, this, &MainWindow::showSync);
     m_tagsAction = new QAction(tr("Etiquetas…"), this);
     m_tagsAction->setToolTip(tr("Crear, renombrar y colorear etiquetas; revisar las que perdieron su archivo"));
     connect(m_tagsAction, &QAction::triggered, this, &MainWindow::showTags);
@@ -602,6 +607,8 @@ void MainWindow::createEditActions()
     toolsMenu->addSeparator();
     toolsMenu->addAction(m_duplicatesAction);
     toolsMenu->addAction(m_similarAction);
+    toolsMenu->addSeparator();
+    toolsMenu->addAction(m_syncAction);
     toolsMenu->addSeparator();
     toolsMenu->addAction(m_tagsAction);
     editMenu->addAction(m_trashAction);
@@ -997,6 +1004,30 @@ void MainWindow::showOrganize()
                              int(moves.size()));
 }
 
+void MainWindow::showSync()
+{
+    // Con doble panel, las carpetas de los dos; si no, la actual y la que se elija.
+    const auto folderOf = [](const BrowserPane *pane) {
+        return pane != nullptr && pane->showsFolder() && !pane->showsArchive() ? pane->currentPath() : QString();
+    };
+    QString left = folderOf(currentPane());
+    QString right;
+    if (isDualPane()) {
+        left = folderOf(static_cast<BrowserPane *>(m_leftTabs->currentWidget()));
+        right = folderOf(static_cast<BrowserPane *>(m_rightTabs->currentWidget()));
+    }
+    SyncDialog dialog(m_scheduler, m_actions, left, right,
+                      QStandardPaths::writableLocation(QStandardPaths::AppDataLocation), this);
+    if (m_syncDriver) {
+        m_syncDriver(dialog);
+        return;
+    }
+    if (!left.isEmpty() && !right.isEmpty()) {
+        dialog.startCompare();
+    }
+    dialog.exec();
+}
+
 void MainWindow::showDuplicates()
 {
     BrowserPane *pane = currentPane();
@@ -1047,6 +1078,7 @@ void MainWindow::followTags(const ActionResult &result)
 {
     static const QSet<ActionKind> moving{ActionKind::Move,         ActionKind::Rename,  ActionKind::BulkRename,
                                          ActionKind::Organize,     ActionKind::Trash,   ActionKind::RestoreTrash,
+                                         ActionKind::Sync,
                                          ActionKind::Undo,         ActionKind::Revert};
     if (!m_tagStore || !m_journal || result.outcome.operationId == 0 || !moving.contains(result.kind)) {
         return;
@@ -1648,6 +1680,11 @@ void MainWindow::onActionFinished(const ActionResult &result)
             break;
         case ActionKind::Organize:
             message = tr("Se organizaron %n archivo(s).", nullptr, int(outcome.resultPaths.size()));
+            message += QLatin1Char(' ')
+                + tr("Se deshace todo junto con Deshacer (%1).").arg(m_undoAction->shortcut().toString(QKeySequence::NativeText));
+            break;
+        case ActionKind::Sync:
+            message = tr("Sincronización terminada: %n elemento(s) copiado(s).", nullptr, int(outcome.resultPaths.size()));
             message += QLatin1Char(' ')
                 + tr("Se deshace todo junto con Deshacer (%1).").arg(m_undoAction->shortcut().toString(QKeySequence::NativeText));
             break;

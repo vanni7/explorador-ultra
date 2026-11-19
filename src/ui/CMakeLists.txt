@@ -21,6 +21,7 @@ add_library(eu_ui STATIC
     src/PreviewPanel.cpp
     src/SearchResultsModel.cpp
     src/Sidebar.cpp
+    src/SyncDialog.cpp
     src/TrashDialog.cpp
     src/ThumbnailView.cpp
     src/TypeCatalog.cpp
@@ -45,6 +46,7 @@ add_library(eu_ui STATIC
     include/eu/ui/PreviewPanel.h
     include/eu/ui/SearchResultsModel.h
     include/eu/ui/Sidebar.h
+    include/eu/ui/SyncDialog.h
     include/eu/ui/TrashDialog.h
     include/eu/ui/ThumbnailView.h
     include/eu/ui/TypeCatalog.h

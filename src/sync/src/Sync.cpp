@@ -1,6 +1,7 @@
 // Explorador Ultra — SPDX-License-Identifier: GPL-3.0-or-later
 #include "eu/sync/Sync.h"
 
+#include "eu/core/NaturalCompare.h"
 #include "eu/fs/DirectoryLister.h"
 #include "eu/ops/FileOps.h"
 
@@ -163,7 +164,9 @@ struct Walk
                 names.append(it.key());
             }
         }
-        std::sort(names.begin(), names.end());
+        // En el orden de las listas: natural y sin distinguir mayúsculas.
+        std::sort(names.begin(), names.end(),
+                  [](const QString &a, const QString &b) { return core::naturalCompare(a, b) < 0; });
         bool differs = false;
         for (const QString &name : std::as_const(names)) {
             if (stop()) {

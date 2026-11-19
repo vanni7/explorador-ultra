@@ -294,6 +294,18 @@ quint64 FileActions::organize(const QList<QPair<QString, QString>> &moves, const
     }, {directory});
 }
 
+quint64 FileActions::synchronize(const QList<QPair<QString, QString>> &copies, const QStringList &toTrash,
+                                 const QString &description, bool verify, const QStringList &roots)
+{
+    ops::CopyOptions copyOptions;
+    copyOptions.verify = verify;
+    return start(ActionKind::Sync, roots.value(1), tasks::Category::Transfer,
+                 [copies, toTrash, description, copyOptions](const Context &context, ActionResult &result) {
+        result.outcome = ops::Engine(context.journal)
+                             .synchronize(copies, toTrash, description, copyOptions, context.cancel, context.progress);
+    }, roots);
+}
+
 quint64 FileActions::rename(const QString &path, const QString &newName)
 {
     // La carpeta se calcula sobre el texto de la ruta: sin tocar el disco.

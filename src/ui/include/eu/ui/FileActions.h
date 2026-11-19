@@ -36,6 +36,7 @@ enum class ActionKind {
     Compress,       ///< Crear un comprimido.
     BulkRename,     ///< Renombrar varios a la vez.
     Organize,       ///< Organizar una carpeta en subcarpetas.
+    Sync,           ///< Sincronizar dos carpetas.
 };
 
 /// Lo que pasó con una acción, ya de vuelta en el hilo de interfaz.
@@ -124,6 +125,10 @@ public:
     /// Organizador: mueve cada archivo a su destino creando antes las carpetas. Una operación.
     quint64 organize(const QList<QPair<QString, QString>> &moves, const QStringList &foldersToCreate,
                      const QString &directory);
+    /// Sincronización de dos carpetas (SPEC §16): copias a rutas exactas
+    /// (reemplazando a la papelera) y envíos a la papelera. Una operación.
+    quint64 synchronize(const QList<QPair<QString, QString>> &copies, const QStringList &toTrash,
+                        const QString &description, bool verify, const QStringList &roots);
     quint64 copy(const QStringList &sources, const QString &destinationDirectory, const ops::TransferOptions &policy);
     quint64 move(const QStringList &sources, const QString &destinationDirectory, const ops::TransferOptions &policy);
     /// Extrae de `archivePath` lo que hay en `innerPaths` (vacío: todo) en una

@@ -94,6 +94,8 @@ public:
     void showOrganize();
     /// Abre "Buscar duplicados" sobre la carpeta a la vista.
     void showDuplicates();
+    /// Comparar y sincronizar (SPEC §16); con doble panel, las carpetas de los dos.
+    void showSync();
     /// Abre "Imágenes parecidas" sobre la carpeta a la vista.
     void showSimilarImages();
     /// Ventana de etiquetas: administrar y revisar huérfanas.
@@ -105,6 +107,7 @@ public:
     {
         m_similarDriver = std::move(driver);
     }
+    void setSyncDriverForTesting(std::function<void(class SyncDialog &)> driver) { m_syncDriver = std::move(driver); }
     void setDuplicatesDriverForTesting(std::function<bool(class DuplicatesDialog &)> driver)
     {
         m_duplicatesDriver = std::move(driver);
@@ -282,6 +285,7 @@ private:
     QAction *m_duplicatesAction = nullptr;
     QAction *m_similarAction = nullptr;
     QAction *m_tagsAction = nullptr;
+    QAction *m_syncAction = nullptr;
     std::shared_ptr<tags::TagStore> m_tagStore;
     std::shared_ptr<journal::Journal> m_journal;
     /// Las etiquetas siguen a lo que movió, renombró o deshizo una operación.
@@ -291,6 +295,7 @@ private:
     /// La unidad de `folder` y las raíces de todas.
     QPair<QString, QStringList> volumesFor(const QString &folder);
     std::function<bool(class DuplicatesDialog &)> m_duplicatesDriver;
+    std::function<void(class SyncDialog &)> m_syncDriver;
     std::function<bool(class OrganizeDialog &)> m_organizeDriver;
     QTimer m_progressDelay;   ///< El indicador solo aparece si la acción no es instantánea.
 
