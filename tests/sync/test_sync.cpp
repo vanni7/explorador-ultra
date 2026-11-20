@@ -11,6 +11,10 @@
 #include <QTemporaryDir>
 #include <QTest>
 
+#ifdef Q_OS_WIN
+#include <windows.h>
+#endif
+
 using namespace eu;
 using namespace eu::sync;
 
@@ -94,6 +98,12 @@ private:
         writeFile(m_left + QStringLiteral("/choque"), "soy archivo", base);
         QVERIFY(QDir().mkpath(m_right + QStringLiteral("/choque")));
         writeFile(m_left + QStringLiteral("/.oculto"), "no se mira", base);
+#ifdef Q_OS_WIN
+        // En Windows lo oculto es un atributo, no el punto delante del nombre.
+        SetFileAttributesW(reinterpret_cast<const wchar_t *>(
+                               QDir::toNativeSeparators(m_left + QStringLiteral("/.oculto")).utf16()),
+                           FILE_ATTRIBUTE_HIDDEN);
+#endif
     }
 
 private slots:

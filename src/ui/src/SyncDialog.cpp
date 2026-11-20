@@ -622,8 +622,9 @@ void SyncDialog::onActionFinished(const ActionResult &result)
         return;
     }
     m_runningSync = 0;
-    // Se vuelve a comparar para enseñar cómo quedó y guardar el estado del par.
-    m_saveStateAfterCompare = result.outcome.ok();
+    // Se vuelve a comparar para enseñar cómo quedó y guardar el estado del par
+    // (también si algo falló: el estado solo anota lo que quedó idéntico).
+    m_saveStateAfterCompare = !result.outcome.cancelled || !result.outcome.resultPaths.isEmpty();
     startCompare();
     emit syncFinished();
 }
