@@ -45,6 +45,8 @@ OrganizeDialog::OrganizeDialog(tasks::Scheduler &scheduler, QString folder, QWid
         m_preset->addItem(name, organize::rulesToJson(rules));
     }
     m_recursive = new QCheckBox(tr("Incluir lo de las subcarpetas"), this);
+    m_recursive->setToolTip(tr("Las subcarpetas que queden vacías al sacar sus archivos se quitan "
+                               "(Deshacer las vuelve a crear)"));
     auto *top = new QHBoxLayout;
     top->addWidget(new QLabel(tr("Reglas:"), this));
     top->addWidget(m_preset, 1);

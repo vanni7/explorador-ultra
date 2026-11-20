@@ -87,6 +87,7 @@ struct Outcome
     QStringList skipped;       ///< Elementos omitidos por colisión de nombre (incluye los idénticos).
     QStringList identical;     ///< De ellos, los omitidos por ser idénticos al destino.
     QStringList replaced;      ///< Destinos reemplazados (lo que había está en la papelera).
+    QStringList removedFolders; ///< Carpetas que quedaron vacías por la operación y se quitaron (organizar).
     int verified = 0;          ///< Archivos copiados y comprobados con su hash.
     /// Copiar y mover: lo que no se terminó (error o cancelación), con el
     /// destino exacto que se eligió, para reintentarlo con Engine::retry.
@@ -138,9 +139,13 @@ public:
     /// carpetas que se piden, como una sola operación del historial: deshacer
     /// devuelve todo y quita las carpetas creadas que queden vacías (el
     /// organizador, SPEC §12). Nunca sobrescribe.
+    /// Con `emptiedFoldersRoot`, al terminar quita (de la más honda a la menos)
+    /// las carpetas de dentro de ella que quedaron vacías porque se movió lo
+    /// que tenían; la propia raíz y las carpetas que ya estaban vacías no se
+    /// tocan, y deshacer las vuelve a crear.
     Outcome applyMoves(const QList<QPair<QString, QString>> &moves, const QStringList &foldersToCreate,
                        const QString &description, const tasks::CancelToken &cancel,
-                       const ProgressCallback &progress = {});
+                       const ProgressCallback &progress = {}, const QString &emptiedFoldersRoot = {});
 
     /// Sincronización de carpetas (SPEC §16) como una sola operación del
     /// historial: copia cada origen (archivo o carpeta) a su destino exacto

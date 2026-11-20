@@ -801,7 +801,7 @@ Outcome Engine::retry(const QList<QPair<QString, QString>> &items, bool moving, 
 
 Outcome Engine::applyMoves(const QList<QPair<QString, QString>> &moves, const QStringList &foldersToCreate,
                            const QString &description, const tasks::CancelToken &cancel,
-                           const ProgressCallback &progress)
+                           const ProgressCallback &progress, const QString &emptiedFoldersRoot)
 {
     Run run(*m_journal, cancel, progress);
     for (const auto &move : moves) {
@@ -837,6 +837,34 @@ Outcome Engine::applyMoves(const QList<QPair<QString, QString>> &moves, const QS
             ++run.progress.itemsDone;
         } else {
             run.outcome.unfinished.append({source, free});
+        }
+    }
+    if (!emptiedFoldersRoot.isEmpty() && !run.cancelled()) {
+        // Las carpetas de donde salió algo y las de encima, hasta la raíz (sin
+        // ella). Solo esas: una carpeta que ya estaba vacía no es cosa nuestra.
+        const QString root = QDir::cleanPath(emptiedFoldersRoot);
+        const QString prefix = root.endsWith(QLatin1Char('/')) ? root : root + QLatin1Char('/');
+        QSet<QString> candidates;
+        for (const auto &move : moves) {
+            for (QString folder = QFileInfo(move.first).absolutePath(); folder.startsWith(prefix);
+                 folder = QFileInfo(folder).absolutePath()) {
+                candidates.insert(folder);
+            }
+        }
+        // La más honda primero: así la que solo tenía esa subcarpeta también queda vacía.
+        QStringList ordered(candidates.cbegin(), candidates.cend());
+        std::sort(ordered.begin(), ordered.end(), [](const QString &a, const QString &b) {
+            return a.count(QLatin1Char('/')) > b.count(QLatin1Char('/'));
+        });
+        for (const QString &folder : std::as_const(ordered)) {
+            const QFileInfo info(folder);
+            if (!info.isDir() || info.isSymLink()
+                || !QDir(folder).isEmpty(QDir::AllEntries | QDir::NoDotAndDotDot | QDir::Hidden | QDir::System)) {
+                continue;
+            }
+            if (run.step(journal::StepKind::RemoveDirectory, folder, {}, {}, [&] { return removeEmptyDirectory(folder); })) {
+                run.outcome.removedFolders.append(folder);
+            }
         }
     }
     run.finish();

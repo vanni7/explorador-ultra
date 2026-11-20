@@ -177,6 +177,43 @@ private slots:
         QVERIFY(QFileInfo(root + QStringLiteral("/Documentos")).isDir());
     }
 
+    void foldersLeftEmptyAreRemovedAndUndoBringsThemBack()
+    {
+        QTemporaryDir data;
+        QTemporaryDir directory;
+        const QString root = QDir::cleanPath(directory.path());
+        touch(root + QStringLiteral("/viaje/playa.jpg"));
+        touch(root + QStringLiteral("/viaje/día 2/cena.jpg"));             // solo fotos: quedará vacía
+        touch(root + QStringLiteral("/mezcla/foto.jpg"));
+        touch(root + QStringLiteral("/mezcla/raro.xyz"));                  // sin regla: se queda
+        QVERIFY(QDir(root).mkpath(QStringLiteral("ya vacía")));            // ya estaba vacía: no se toca
+        Options options;
+        options.rules = defaultRules();
+        options.recursive = true;
+        const Plan plan = simulate(root, options, {});
+        QList<QPair<QString, QString>> moves;
+        for (const Move &move : plan.moves) {
+            moves.append({move.source, move.target});
+        }
+        auto journal = journal::Journal::open(data.filePath(QStringLiteral("h.db"))).value();
+        ops::Engine engine(journal);
+        const ops::Outcome outcome =
+            engine.applyMoves(moves, plan.foldersToCreate, QStringLiteral("Organizar"), {}, {}, root);
+        QVERIFY(outcome.ok());
+        QVERIFY(!QFileInfo::exists(root + QStringLiteral("/viaje")));
+        QVERIFY(!QFileInfo::exists(root + QStringLiteral("/viaje/día 2")));
+        QCOMPARE(outcome.removedFolders.size(), 2);
+        QVERIFY(QFileInfo(root + QStringLiteral("/mezcla")).isDir());
+        QVERIFY(QFileInfo(root + QStringLiteral("/ya vacía")).isDir());
+        QVERIFY(QFileInfo::exists(root + QStringLiteral("/Imágenes/JPG/cena.jpg")));
+        // Deshacer las vuelve a crear con sus fotos dentro.
+        QVERIFY(engine.undo(outcome.operationId, {}).ok());
+        QVERIFY(QFileInfo::exists(root + QStringLiteral("/viaje/playa.jpg")));
+        QVERIFY(QFileInfo::exists(root + QStringLiteral("/viaje/día 2/cena.jpg")));
+        QVERIFY(QFileInfo::exists(root + QStringLiteral("/mezcla/foto.jpg")));
+        QVERIFY(!QFileInfo::exists(root + QStringLiteral("/Imágenes")));
+    }
+
     void rulesRoundTripAsJson()
     {
         const QList<Rule> rules = defaultRules();

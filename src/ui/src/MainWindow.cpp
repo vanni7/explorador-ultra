@@ -986,6 +986,22 @@ void MainWindow::showContextMenu(BrowserPane *pane, const QPoint &globalPosition
         menu.addAction(m_selectAllAction);
         menu.addAction(m_refreshAction);
     }
+    // Cómo se ve la carpeta, también desde aquí.
+    menu.addSeparator();
+    QMenu *views = menu.addMenu(tr("Vista"));
+    views->addAction(m_detailsAction);
+    views->addAction(m_thumbnailsAction);
+    views->addAction(m_columnsAction);
+    if (!m_thumbnailSizeActions.isEmpty()) {
+        QMenu *sizes = views->addMenu(tr("Tamaño de las miniaturas"));
+        QList<int> pixels = m_thumbnailSizeActions.keys();
+        std::sort(pixels.begin(), pixels.end());
+        for (const int size : std::as_const(pixels)) {
+            sizes->addAction(m_thumbnailSizeActions.value(size));
+        }
+    }
+    views->addSeparator();
+    views->addAction(m_dualPaneAction);
     menu.exec(globalPosition);
 }
 
@@ -1747,7 +1763,8 @@ void MainWindow::onActionFinished(const ActionResult &result)
     // creado (al organizar aparecen "Documentos" y "Documentos/PDF").
     if (!directory.isEmpty()) {
         QStringList changed{directory};
-        for (const QString &path : outcome.resultPaths) {
+        // También donde estaban las carpetas que se quitaron por quedar vacías.
+        for (const QString &path : outcome.resultPaths + outcome.removedFolders) {
             for (QString folder = parentPathOf(path); changed.size() < 200 && folder.size() > directory.size()
                                                       && folder.startsWith(directory) && !changed.contains(folder);
                  folder = parentPathOf(folder)) {
@@ -1844,6 +1861,10 @@ void MainWindow::onActionFinished(const ActionResult &result)
             break;
         case ActionKind::Organize:
             message = tr("Se organizaron %n archivo(s).", nullptr, int(outcome.resultPaths.size()));
+            if (!outcome.removedFolders.isEmpty()) {
+                message += QLatin1Char(' ')
+                    + tr("Se quitaron %n carpeta(s) que quedaron vacías.", nullptr, int(outcome.removedFolders.size()));
+            }
             message += QLatin1Char(' ')
                 + tr("Se deshace todo junto con Deshacer (%1).").arg(m_undoAction->shortcut().toString(QKeySequence::NativeText));
             break;

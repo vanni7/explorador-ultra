@@ -288,9 +288,10 @@ quint64 FileActions::organize(const QList<QPair<QString, QString>> &moves, const
     const QString description = tr("Organizar «%1» (%n archivo(s))", nullptr, int(moves.size()))
                                     .arg(QDir(directory).dirName());
     return start(ActionKind::Organize, directory, tasks::Category::Transfer,
-                 [moves, foldersToCreate, description](const Context &context, ActionResult &result) {
+                 [moves, foldersToCreate, description, directory](const Context &context, ActionResult &result) {
         result.outcome = ops::Engine(context.journal)
-                             .applyMoves(moves, foldersToCreate, description, context.cancel, context.progress);
+                             .applyMoves(moves, foldersToCreate, description, context.cancel, context.progress,
+                                         directory);   // las subcarpetas que se vacíen se quitan
     }, {directory});
 }
 

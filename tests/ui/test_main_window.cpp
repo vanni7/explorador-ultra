@@ -39,6 +39,8 @@
 #include <QItemSelectionModel>
 #include <QLabel>
 #include <QSettings>
+#include <QTimer>
+#include <QMenu>
 #include <QImageReader>
 #include <QPdfWriter>
 #include <QPrinter>
@@ -614,6 +616,9 @@ private slots:
         writeFile(directory.filePath(QStringLiteral("informe.pdf")), 10);
         writeFile(directory.filePath(QStringLiteral("foto.jpg")), 10);
         writeFile(directory.filePath(QStringLiteral("raro.xyz")), 10);
+        // Una subcarpeta con solo fotos: al sacarlas queda vacía y se quita.
+        QVERIFY(QDir(directory.path()).mkpath(QStringLiteral("viaje")));
+        writeFile(directory.filePath(QStringLiteral("viaje/playa.jpg")), 10);
         MainWindow window(m_scheduler, openJournal(data));
         window.show();
         BrowserPane *pane = window.openTab(directory.path());
@@ -643,11 +648,61 @@ private slots:
         QVERIFY(waitIdle(window));
         QVERIFY(QFileInfo::exists(directory.filePath(QStringLiteral("Imágenes/JPG/foto.jpg"))));
         QVERIFY(QFileInfo::exists(directory.filePath(QStringLiteral("raro.xyz"))));
+        QVERIFY(QFileInfo::exists(directory.filePath(QStringLiteral("Imágenes/JPG/playa.jpg"))));
+        QVERIFY(!QFileInfo::exists(directory.filePath(QStringLiteral("viaje"))));
         window.undo();
         QTRY_VERIFY_WITH_TIMEOUT(QFileInfo::exists(directory.filePath(QStringLiteral("informe.pdf"))), 10000);
         QVERIFY(waitIdle(window));
         QVERIFY(QFileInfo::exists(directory.filePath(QStringLiteral("foto.jpg"))));
+        QVERIFY(QFileInfo::exists(directory.filePath(QStringLiteral("viaje/playa.jpg"))));
         QVERIFY(!QFileInfo::exists(directory.filePath(QStringLiteral("Documentos"))));
+    }
+
+    void contextMenuChangesTheView()
+    {
+        QTemporaryDir data;
+        QTemporaryDir directory;
+        writeFile(directory.filePath(QStringLiteral("a.txt")), 10);
+        MainWindow window(m_scheduler, openJournal(data));
+        window.show();
+        BrowserPane *pane = window.openTab(directory.path());
+        QVERIFY(waitReady(pane));
+        QCOMPARE(pane->viewMode(), BrowserPane::ViewMode::Details);
+        // Con y sin algo seleccionado, el menú trae «Vista» con las tres vistas.
+        for (const bool withSelection : {true, false}) {
+            if (withSelection) {
+                selectNames(pane, {QStringLiteral("a.txt")});
+            } else {
+                pane->view()->clearSelection();
+            }
+            QStringList views;
+            QTimer::singleShot(100, &window, [&views] {
+                auto *menu = qobject_cast<QMenu *>(QApplication::activePopupWidget());
+                if (menu == nullptr) {
+                    return;
+                }
+                for (QAction *action : menu->actions()) {
+                    if (action->menu() != nullptr && action->text() == QStringLiteral("Vista")) {
+                        for (QAction *inner : action->menu()->actions()) {
+                            views.append(inner->text());
+                        }
+                        // Elegir «Columnas» desde el menú.
+                        for (QAction *inner : action->menu()->actions()) {
+                            if (inner->text() == QStringLiteral("Columnas")) {
+                                inner->trigger();
+                            }
+                        }
+                    }
+                }
+                menu->close();
+            });
+            emit pane->contextMenuRequested(pane->view()->viewport()->mapToGlobal(QPoint(10, 10)));
+            QVERIFY2(views.contains(QStringLiteral("Detalles")) && views.contains(QStringLiteral("Miniaturas"))
+                         && views.contains(QStringLiteral("Columnas")),
+                     qPrintable(views.join(QStringLiteral(", "))));
+            QCOMPARE(pane->viewMode(), BrowserPane::ViewMode::Columns);
+            window.setViewMode(BrowserPane::ViewMode::Details);
+        }
     }
 
     void duplicatesAreMarkedConfirmedAndTrashed()
