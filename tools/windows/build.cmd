@@ -9,7 +9,8 @@ rem Bibliotecas de vcpkg (libarchive), si se instalaron con instalar-vcpkg.cmd.
 set EU_CMAKE_ARGS=
 if exist C:\vcpkg\scripts\buildsystems\vcpkg.cmake set EU_CMAKE_ARGS=-DCMAKE_TOOLCHAIN_FILE=C:/vcpkg/scripts/buildsystems/vcpkg.cmake -DVCPKG_TARGET_TRIPLET=x64-windows-release
 
-robocopy \\vboxsvr\proyecto C:\eu\src /MIR /XD build .git /NFL /NDL /NJH /NJS
+rem La copia marca lo copiado con la hora actual (ver el porqué en el guion).
+powershell -NoProfile -ExecutionPolicy Bypass -File \\vboxsvr\proyecto\tools\windows\copiar-fuentes.ps1 || exit /b 1
 cd /d C:\eu\src || exit /b 1
 rem El toolchain de vcpkg solo cuenta al configurar desde cero.
 if not defined EU_CMAKE_ARGS goto configurar

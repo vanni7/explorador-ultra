@@ -7,7 +7,16 @@ rem    cmd /k \\vboxsvr\proyecto\tools\windows\actualizar.cmd
 title Actualizar Explorador Ultra
 echo Cerrando Explorador Ultra para compilar la version nueva...
 taskkill /im explorador-ultra.exe >nul 2>&1
-timeout /t 4 /nobreak >nul
+rem Se le da tiempo a cerrar por las buenas (guarda la sesion); si a los 15 s
+rem sigue abierta, se cierra a la fuerza: si no, el enlazador no puede
+rem reemplazar el .exe y la compilacion falla.
+for /l %%i in (1,1,15) do (
+    tasklist /fi "imagename eq explorador-ultra.exe" | find /i "explorador-ultra.exe" >nul || goto cerrada
+    timeout /t 1 /nobreak >nul
+)
+taskkill /f /im explorador-ultra.exe >nul 2>&1
+timeout /t 2 /nobreak >nul
+:cerrada
 call \\vboxsvr\proyecto\tools\windows\build.cmd
 if errorlevel 1 goto fallo
 start "" \\vboxsvr\proyecto\tools\windows\abrir-explorador.cmd
