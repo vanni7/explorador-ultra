@@ -14,6 +14,7 @@
 #include <QLocale>
 #include <QMap>
 #include <QRegularExpression>
+#include <QStringDecoder>
 #include <QTime>
 #include <QXmlStreamReader>
 
@@ -38,7 +39,7 @@ QString tr(const char *text, const char *disambiguation = nullptr, int n = -1)
     return QCoreApplication::translate("eu::content", text, disambiguation, n);
 }
 
-enum class Kind { None, Word, Excel, OpenText, OpenSheet };
+enum class Kind { None, Word, Excel, OpenText, OpenSheet, Delimited };
 
 Kind kindOf(const QString &fileName)
 {
@@ -54,6 +55,9 @@ Kind kindOf(const QString &fileName)
     }
     if (suffix == "ods"_L1 || suffix == "ots"_L1) {
         return Kind::OpenSheet;
+    }
+    if (suffix == "csv"_L1 || suffix == "tsv"_L1 || suffix == "tab"_L1) {
+        return Kind::Delimited;
     }
     return Kind::None;
 }
@@ -1354,15 +1358,172 @@ QList<SheetPreview> readOpenSheets(const QByteArray &contentXml, const PreviewLi
 
 #endif // EU_HAVE_LIBARCHIVE
 
+// ------------------------------------------------- texto con separador (CSV)
+
+/// El separador de un CSV: el que más aparece fuera de comillas en las
+/// primeras líneas (coma, punto y coma —el de Excel en español—, tabulador o
+/// barra). Los .tsv van con tabulador.
+QChar guessDelimiter(QStringView text, const QString &suffix)
+{
+    if (suffix == "tsv"_L1 || suffix == "tab"_L1) {
+        return u'\t';
+    }
+    const QChar candidates[] = {u',', u';', u'\t', u'|'};
+    int counts[] = {0, 0, 0, 0};
+    bool quoted = false;
+    int lines = 0;
+    for (qsizetype i = 0; i < text.size() && lines < 30; ++i) {
+        const QChar c = text.at(i);
+        if (c == u'"') {
+            quoted = !quoted;
+        } else if (!quoted && c == u'\n') {
+            ++lines;
+        } else if (!quoted) {
+            for (int k = 0; k < 4; ++k) {
+                counts[k] += c == candidates[k] ? 1 : 0;
+            }
+        }
+    }
+    int best = 0;
+    for (int k = 1; k < 4; ++k) {
+        if (counts[k] > counts[best]) {
+            best = k;
+        }
+    }
+    return candidates[best];
+}
+
+/// Un valor que parece un número (o un importe o un porcentaje): va a la derecha.
+bool looksNumeric(const QString &value)
+{
+    static const QRegularExpression number(u"^[-+]?\\s*[$€£]?\\s*\\d[\\d.,\\s]*%?$"_s);
+    const QString trimmed = value.trimmed();
+    return !trimmed.isEmpty() && trimmed.size() < 40 && number.match(trimmed).hasMatch();
+}
+
+SheetPreview readDelimited(const QString &text, QChar delimiter, const PreviewLimits &limits,
+                           const tasks::CancelToken &cancel)
+{
+    SheetPreview sheet;
+    QStringList fields;
+    QString field;
+    bool quoted = false;
+    int record = 0;
+    // Cierra un registro; devuelve false si ya no caben más filas.
+    const auto endRecord = [&] {
+        fields.append(field);
+        field.clear();
+        ++record;
+        const bool empty = fields.size() == 1 && fields.first().isEmpty();
+        if (!empty) {
+            if (sheet.rowNumbers.size() >= limits.maxRows) {
+                sheet.moreRows = true;
+                fields.clear();
+                return false;
+            }
+            if (fields.size() > limits.maxColumns) {
+                sheet.moreColumns = true;
+                fields = fields.mid(0, limits.maxColumns);
+            }
+            QByteArray flags;
+            for (const QString &value : std::as_const(fields)) {
+                flags.append(looksNumeric(value) ? '1' : '0');
+            }
+            sheet.rowNumbers.append(record);
+            sheet.cells.append(fields);
+            sheet.numeric.append(flags);
+            sheet.columns = std::max(sheet.columns, int(fields.size()));
+        }
+        fields.clear();
+        return true;
+    };
+    const qsizetype size = text.size();
+    for (qsizetype i = 0; i < size; ++i) {
+        if ((i & 0xFFFF) == 0 && cancel.isCancelled()) {
+            break;
+        }
+        const QChar c = text.at(i);
+        if (quoted) {
+            if (c == u'"') {
+                if (i + 1 < size && text.at(i + 1) == u'"') {
+                    field += u'"';   // "" dentro de comillas es una comilla
+                    ++i;
+                } else {
+                    quoted = false;
+                }
+            } else {
+                field += c;
+            }
+        } else if (c == u'"' && field.isEmpty()) {
+            quoted = true;
+        } else if (c == delimiter) {
+            fields.append(field);
+            field.clear();
+        } else if (c == u'\r' || c == u'\n') {
+            if (c == u'\r' && i + 1 < size && text.at(i + 1) == u'\n') {
+                ++i;
+            }
+            if (!endRecord()) {
+                return sheet;
+            }
+        } else {
+            field += c;
+        }
+    }
+    if (!field.isEmpty() || !fields.isEmpty()) {
+        endRecord();
+    }
+    return sheet;
+}
+
+core::Result<DocumentPreview> delimitedPreview(const QString &path, const PreviewLimits &limits,
+                                               const tasks::CancelToken &cancel)
+{
+    QFile file(path);
+    if (!file.open(QIODevice::ReadOnly)) {
+        return core::Error{core::ErrorCode::PermissionDenied, file.errorString(), path, 0};
+    }
+    QByteArray bytes = file.read(limits.maxSheetBytes);
+    const bool cut = file.size() > bytes.size();
+    if (cut) {
+        bytes.truncate(bytes.lastIndexOf('\n') + 1);   // sin la última línea a medias
+    }
+    // UTF-8 (con o sin BOM), UTF-16 con BOM o, si no es UTF-8, Latin-1 (los de Excel antiguos).
+    QString text;
+    if (const auto encoding = QStringConverter::encodingForData(bytes)) {
+        QStringDecoder decoder(*encoding);
+        text = decoder.decode(bytes);
+    } else {
+        QStringDecoder utf8(QStringDecoder::Utf8);
+        text = utf8.decode(bytes);
+        if (utf8.hasError()) {
+            text = QString::fromLatin1(bytes);
+        }
+    }
+    if (text.startsWith(QChar(0xFEFF))) {
+        text.remove(0, 1);
+    }
+    SheetPreview sheet = readDelimited(text, guessDelimiter(text, QFileInfo(path).suffix().toLower()), limits, cancel);
+    if (cancel.isCancelled()) {
+        return core::Error{core::ErrorCode::Cancelled, tr("Cancelado"), path, 0};
+    }
+    sheet.name = QFileInfo(path).fileName();
+    sheet.moreRows = sheet.moreRows || (cut && !sheet.rowNumbers.isEmpty());
+    DocumentPreview preview;
+    preview.sheets.append(sheet);
+    preview.truncated = sheet.moreRows || sheet.moreColumns;
+    return preview;
+}
+
 } // namespace
 
 bool hasDocumentPreview(const QString &fileName)
 {
+    const Kind kind = kindOf(fileName);
 #ifdef EU_HAVE_LIBARCHIVE
-    return kindOf(fileName) != Kind::None;
+    return kind != Kind::None;
 #else
-    Q_UNUSED(fileName);
-    return false;
+    return kind == Kind::Delimited;   // los demás son ZIP
 #endif
 }
 
@@ -1380,12 +1541,17 @@ QString spreadsheetColumnName(int column)
 core::Result<DocumentPreview> documentPreview(const QString &path, const tasks::CancelToken &cancel,
                                               const PreviewLimits &limits)
 {
+    const Kind kind = kindOf(path);
+    if (kind == Kind::Delimited) {
+        const QFileInfo info(path);
+        if (!info.isFile()) {
+            return core::Error{core::ErrorCode::NotFound, tr("No es un archivo"), path, 0};
+        }
+        return delimitedPreview(path, limits, cancel);
+    }
 #ifndef EU_HAVE_LIBARCHIVE
-    Q_UNUSED(cancel);
-    Q_UNUSED(limits);
     return core::Error{core::ErrorCode::NotSupported, tr("Esta compilación no lee documentos de oficina"), path, 0};
 #else
-    const Kind kind = kindOf(path);
     if (kind == Kind::None) {
         return core::Error{core::ErrorCode::NotSupported, tr("No se sabe mostrar este tipo de documento"), path, 0};
     }
@@ -1489,6 +1655,7 @@ core::Result<DocumentPreview> documentPreview(const QString &path, const tasks::
         break;
     }
     case Kind::None:
+    case Kind::Delimited:
         break;
     }
     if (cancel.isCancelled()) {

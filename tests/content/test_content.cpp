@@ -350,6 +350,59 @@ private slots:
 #endif
     }
 
+    void csvAsSpreadsheet()
+    {
+        QVERIFY(hasDocumentPreview(QStringLiteral("datos.CSV")));
+        QVERIFY(hasDocumentPreview(QStringLiteral("datos.tsv")));
+        // Como lo guarda Excel en español: punto y coma, Latin-1, comillas.
+        writeBytes(file(QStringLiteral("gastos.csv")),
+                   QByteArray("Concepto;Importe;Nota\r\n"
+                              "Caf\xe9;12,50;\"con leche; sin az\xfa" "car\"\r\n"
+                              "\r\n"
+                              "Luz;1.234,00 \x80;\"dos\r\nl\xedneas y \"\"comillas\"\"\"\r\n"
+                              "Total;15%;\r\n"));
+        auto preview = documentPreview(file(QStringLiteral("gastos.csv")), {});
+        QVERIFY2(preview.ok(), qPrintable(preview.ok() ? QString() : preview.error().message));
+        QVERIFY(preview.value().isSpreadsheet());
+        const SheetPreview &sheet = preview.value().sheets.first();
+        QCOMPARE(sheet.name, QStringLiteral("gastos.csv"));
+        QCOMPARE(sheet.columns, 3);
+        QCOMPARE(sheet.rowNumbers, (QList<int>{1, 2, 4, 5}));   // la línea vacía no sale
+        QCOMPARE(sheet.cells.at(1), (QStringList{QStringLiteral("Café"), QStringLiteral("12,50"),
+                                                 QStringLiteral("con leche; sin azúcar")}));
+        QCOMPARE(sheet.cells.at(2).at(2), QStringLiteral("dos\r\nlíneas y \"comillas\""));
+        QCOMPARE(sheet.numeric.at(1), QByteArray("010"));
+        QCOMPARE(sheet.numeric.at(3), QByteArray("010"));   // 15 % también
+        QVERIFY(!preview.value().truncated);
+
+        // UTF-8 con BOM, coma; y un TSV.
+        writeBytes(file(QStringLiteral("lista.csv")), QByteArray("\xef\xbb\xbfnombre,edad\nAna,30\nJos\xc3\xa9,41\n"));
+        preview = documentPreview(file(QStringLiteral("lista.csv")), {});
+        QVERIFY(preview.ok());
+        QCOMPARE(preview.value().sheets.first().cells.at(0), (QStringList{QStringLiteral("nombre"), QStringLiteral("edad")}));
+        QCOMPARE(preview.value().sheets.first().cells.at(2), (QStringList{QStringLiteral("José"), QStringLiteral("41")}));
+        writeBytes(file(QStringLiteral("tabla.tsv")), QByteArray("a,b\tc\n1\t2\n"));
+        preview = documentPreview(file(QStringLiteral("tabla.tsv")), {});
+        QVERIFY(preview.ok());
+        QCOMPARE(preview.value().sheets.first().cells.at(0), (QStringList{QStringLiteral("a,b"), QStringLiteral("c")}));
+
+        // Topes: filas y columnas.
+        QByteArray big;
+        for (int row = 0; row < 30; ++row) {
+            big += "1,2,3,4,5\n";
+        }
+        writeBytes(file(QStringLiteral("grande.csv")), big);
+        PreviewLimits small;
+        small.maxRows = 10;
+        small.maxColumns = 3;
+        preview = documentPreview(file(QStringLiteral("grande.csv")), {}, small);
+        QVERIFY(preview.ok());
+        QCOMPARE(preview.value().sheets.first().rowNumbers.size(), 10);
+        QCOMPARE(preview.value().sheets.first().columns, 3);
+        QVERIFY(preview.value().sheets.first().moreRows && preview.value().sheets.first().moreColumns);
+        QVERIFY(preview.value().truncated);
+    }
+
     void pdfText()
     {
         if (textSourceFor(QStringLiteral("x.pdf")) != TextSource::Pdf) {

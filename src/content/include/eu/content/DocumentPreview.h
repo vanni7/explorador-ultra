@@ -37,7 +37,7 @@ struct DocumentPreview
     /// Las imágenes del documento, ya decodificadas y reducidas en el proceso
     /// auxiliar (PNG o JPEG propios). El HTML las nombra «eu-imagen:N».
     QList<QByteArray> images;
-    /// Excel y OpenDocument de cálculo: las hojas visibles.
+    /// Excel y OpenDocument de cálculo: las hojas visibles; un CSV, una hoja con el nombre del archivo.
     QList<SheetPreview> sheets;
     int moreSheets = 0;           ///< Hojas visibles que no se muestran por el tope.
     bool truncated = false;       ///< Se cortó algo por los topes (texto, filas, columnas u hojas).
@@ -68,7 +68,7 @@ struct PreviewLimits
     int maxColumns = 40;
 };
 
-/// true si se sabe mostrar este tipo así (DOCX, XLSX, ODT, ODS…) en esta compilación.
+/// true si se sabe mostrar este tipo así (DOCX, XLSX, ODT, ODS…, y CSV/TSV como hoja) en esta compilación.
 bool hasDocumentPreview(const QString &fileName);
 
 /// Lee el documento y lo prepara para verlo. Nunca ejecuta nada del
