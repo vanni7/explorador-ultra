@@ -12,6 +12,11 @@ set_target_properties(explorador-ultra PROPERTIES
     MACOSX_BUNDLE_GUI_IDENTIFIER "io.github.explorador-ultra"
     MACOSX_BUNDLE_BUNDLE_VERSION "${PROJECT_VERSION}"
     MACOSX_BUNDLE_SHORT_VERSION_STRING "${PROJECT_VERSION}")
+if(UNIX AND NOT APPLE)
+    # Con los símbolos exportados, el registro de fallos de Linux puede dar el
+    # nombre de cada función de la pila (en macOS ya salen; en Windows, del .pdb).
+    set_target_properties(explorador-ultra PROPERTIES ENABLE_EXPORTS ON)
+endif()
 
 # Traducciones (Qt Linguist). El texto del código ya está en español; el archivo
 # "es" aporta las formas de singular y plural ("1 elemento", "2 elementos").

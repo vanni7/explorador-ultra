@@ -2,6 +2,7 @@
 //
 // Punto de entrada: prepara el registro, el planificador de tareas y la ventana.
 
+#include "eu/core/CrashReport.h"
 #include "eu/core/Log.h"
 #include "eu/core/Version.h"
 #include "eu/journal/Journal.h"
@@ -98,6 +99,8 @@ int main(int argc, char *argv[])
     if (!eu::core::startFileLogging(logOptions)) {
         qWarning("No se pudo abrir el archivo de registro en %s", qPrintable(logOptions.directory));
     }
+    // Si el programa se cae, queda anotado dónde (registros/fallos.log).
+    eu::core::installCrashReport(logOptions.directory);
     qInfo("Explorador Ultra %s (Qt %s)", qPrintable(eu::core::versionString()), qVersion());
 
     int exitCode = 0;
