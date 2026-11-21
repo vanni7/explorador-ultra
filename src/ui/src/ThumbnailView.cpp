@@ -287,6 +287,10 @@ ThumbnailView::ThumbnailView(DirectoryModel *model, QWidget *parent) : QListView
     setAcceptDrops(true);
     setDragDropMode(QAbstractItemView::DragDrop);
     setDropIndicatorShown(false);
+    // setMovement(Static) le quita a la zona de las miniaturas el permiso de
+    // recibir lo que se suelta (Qt lo da por hecho: si no se recolocan, no
+    // se suelta nada). Sin él, soltar un archivo sobre una carpeta no hacía nada.
+    viewport()->setAcceptDrops(true);
     setAccessibleName(tr("Miniaturas de la carpeta"));
     setModel(model);
     setItemDelegate(new ThumbnailDelegate(this, model));
@@ -579,6 +583,14 @@ void ThumbnailView::setDropTarget(bool active, int row)
         m_dropRow = row;
         viewport()->update();
     }
+}
+
+void ThumbnailView::startDrag(Qt::DropActions supportedActions)
+{
+    // El arrastre corriente de las vistas, el mismo que en Detalles. El propio
+    // de QListView en modo icono está pensado para recolocar los elementos y,
+    // con la zona aceptando lo que se suelta, pinta copias por la cuadrícula.
+    QAbstractItemView::startDrag(supportedActions);
 }
 
 void ThumbnailView::dragEnterEvent(QDragEnterEvent *event)

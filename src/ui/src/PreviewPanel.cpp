@@ -322,11 +322,11 @@ void PreviewPanel::clearNow(const QString &message)
 void PreviewPanel::showItem(const PreviewItem &item)
 {
     m_clearDelay.stop();
-    // El mismo video o audio de nuevo (la carpeta se volvió a leer, cambió
-    // cuántos hay seleccionados): lo que suena sigue sonando.
-    if (m_media != nullptr && m_hasItem && !m_loading && m_preview->currentWidget() == m_media
-        && item.path == m_item.path && item.entry.size == m_item.entry.size
-        && item.entry.modifiedMs == m_item.entry.modifiedMs) {
+    // El mismo archivo, sin cambios (la carpeta se volvió a leer, cambió
+    // cuántos hay seleccionados o las unidades): no se vuelve a leer, así no
+    // parpadea y lo que suena sigue sonando. Solo se rehacen los datos.
+    if (m_hasItem && !m_loading && item.path == m_item.path && item.entry.size == m_item.entry.size
+        && item.entry.modifiedMs == m_item.entry.modifiedMs && item.entry.isDirectory == m_item.entry.isDirectory) {
         m_item = item;
         rebuildFields(m_sections);
         return;

@@ -2505,6 +2505,64 @@ private slots:
 #endif
     }
 
+    void thumbnailsAcceptFilesDroppedOnAFolder()
+    {
+        QTemporaryDir data;
+        QTemporaryDir directory;
+        QVERIFY(QDir(directory.path()).mkdir(QStringLiteral("carpeta")));
+        writeFile(directory.filePath(QStringLiteral("nota.txt")), 5);
+
+        MainWindow window(m_scheduler, openJournal(data));
+        window.resize(900, 600);
+        BrowserPane *pane = window.openTab(directory.path());
+        QVERIFY(waitReady(pane));
+        window.setViewMode(BrowserPane::ViewMode::Thumbnails);
+        window.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&window));
+        ThumbnailView *thumbnails = pane->thumbnailView();
+        PreviewPanel *panel = window.previewPanel();
+        selectNames(pane, {QStringLiteral("nota.txt")});
+        QTRY_COMPARE(panel->title(), QStringLiteral("nota.txt"));
+
+        // Qt entrega lo que se suelta al widget más hondo bajo el puntero que
+        // lo acepte; se busca igual aquí. Antes, la zona de las miniaturas no
+        // lo aceptaba y le llegaba a la vista, que lo descartaba sin más.
+        const QPoint onFolder =
+            thumbnails->visualRect(pane->model()->index(pane->model()->rowOfName(QStringLiteral("carpeta")), 0))
+                .center();
+        QWidget *target = window.childAt(thumbnails->viewport()->mapTo(&window, onFolder));
+        while (target != nullptr && !target->acceptDrops()) {
+            target = target->parentWidget();
+        }
+        QCOMPARE(target, thumbnails->viewport());
+
+        std::unique_ptr<QMimeData> mime(makeFileMimeData({directory.filePath(QStringLiteral("nota.txt"))}, false));
+        QDragEnterEvent enter(onFolder, Qt::CopyAction | Qt::MoveAction, mime.get(), Qt::LeftButton, Qt::NoModifier);
+        QApplication::sendEvent(target, &enter);
+        QDragMoveEvent move(onFolder, Qt::CopyAction | Qt::MoveAction, mime.get(), Qt::LeftButton, Qt::NoModifier);
+        QApplication::sendEvent(target, &move);
+        QVERIFY(move.isAccepted());
+        QCOMPARE(move.dropAction(), Qt::MoveAction);   // en la misma unidad, mover
+        QDropEvent drop(onFolder, Qt::CopyAction | Qt::MoveAction, mime.get(), Qt::LeftButton, Qt::NoModifier);
+        QApplication::sendEvent(target, &drop);
+        QVERIFY(drop.isAccepted());
+        QTRY_VERIFY_WITH_TIMEOUT(QFileInfo::exists(directory.filePath(QStringLiteral("carpeta/nota.txt"))), 10000);
+        QVERIFY(waitIdle(window));
+        QVERIFY(!QFileInfo::exists(directory.filePath(QStringLiteral("nota.txt"))));
+
+        // La vista previa no se queda con el archivo que ya no está ahí.
+        QTRY_COMPARE_WITH_TIMEOUT(panel->shown(), PreviewPanel::Shown::Nothing, 10000);
+
+        // Las columnas, que también son listas de Qt, aceptan igual lo que se suelta.
+        window.setViewMode(BrowserPane::ViewMode::Columns);
+        QVERIFY(waitReady(pane));
+        const QList<MillerColumn *> columns = pane->findChildren<MillerColumn *>();
+        QVERIFY(!columns.isEmpty());
+        for (const MillerColumn *column : columns) {
+            QVERIFY(column->viewport()->acceptDrops());
+        }
+    }
+
     void ctrlWheelMakesThumbnailsBiggerOrSmaller()
     {
         QTemporaryDir data;

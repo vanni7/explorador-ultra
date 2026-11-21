@@ -658,6 +658,10 @@ BrowserPane::BrowserPane(tasks::Scheduler &scheduler, fs::DirectoryWatcher &watc
     connect(m_view->selectionModel(), &QItemSelectionModel::selectionChanged, this, &BrowserPane::statusChanged);
     connect(m_model, &DirectoryModel::stateChanged, this, &BrowserPane::onModelStateChanged);
     connect(m_model, &DirectoryModel::contentReplaced, this, &BrowserPane::restoreSelection);
+    // Tras volver a leer la carpeta, lo seleccionado puede haber desaparecido
+    // (se movió o se borró) sin que la selección avise: la vista previa no
+    // debe quedarse con un archivo que ya no está.
+    connect(m_model, &DirectoryModel::contentReplaced, this, &BrowserPane::currentItemChanged);
     connect(m_model, &DirectoryModel::contentReplaced, this, &BrowserPane::updateFilterInfo);
     connect(m_model, &DirectoryModel::renameRequested, this, &BrowserPane::renameRequested);
     connect(m_model, &DirectoryModel::folderSizesChanged, this, &BrowserPane::statusChanged);
