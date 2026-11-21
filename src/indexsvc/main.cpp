@@ -730,7 +730,7 @@ void stopService(SC_HANDLE service)
 
 /// Avisa en la consola de qué paso falló (al lanzarlo la aplicación no se
 /// ve, pero sí en las pruebas y a mano) y devuelve el código de salida.
-int failure(int code, const char *step)
+int stepFailed(int code, const char *step)
 {
     std::fprintf(stderr, "eu-indexsvc: %s (error %lu)\n", step, GetLastError());
     return code;
@@ -761,14 +761,14 @@ int install()
     std::vector<wchar_t> self(32768);
     const DWORD selfLength = GetModuleFileNameW(nullptr, self.data(), DWORD(self.size()));
     if (selfLength == 0 || selfLength >= self.size()) {
-        return failure(exitCopyFailed, "no se sabe dónde está este programa");
+        return stepFailed(exitCopyFailed, "no se sabe dónde está este programa");
     }
     const std::wstring folder = installFolder();
     const std::wstring target = folder + L"\\eu-indexsvc.exe";
 
     SC_HANDLE manager = OpenSCManagerW(nullptr, nullptr, SC_MANAGER_CONNECT | SC_MANAGER_CREATE_SERVICE);
     if (manager == nullptr) {
-        return failure(exitServiceManager, "no se pudo abrir el administrador de servicios");
+        return stepFailed(exitServiceManager, "no se pudo abrir el administrador de servicios");
     }
     SC_HANDLE service = OpenServiceW(manager, usn::serviceName, SERVICE_ALL_ACCESS);
     if (service != nullptr) {
@@ -780,10 +780,10 @@ int install()
             CloseServiceHandle(service);
         }
         CloseServiceHandle(manager);
-        return failure(exitCopyFailed, "no se pudo crear la carpeta en Archivos de programa");
+        return stepFailed(exitCopyFailed, "no se pudo crear la carpeta en Archivos de programa");
     }
     if (_wcsicmp(self.data(), target.c_str()) != 0 && !copyProgram(self.data(), target)) {
-        const int code = failure(exitCopyFailed, "no se pudo copiar a Archivos de programa");
+        const int code = stepFailed(exitCopyFailed, "no se pudo copiar a Archivos de programa");
         if (service != nullptr) {
             CloseServiceHandle(service);
         }
@@ -801,7 +801,7 @@ int install()
                                  nullptr, nullptr);
     }
     if (service == nullptr) {
-        const int code = failure(exitServiceManager, "no se pudo registrar el servicio");
+        const int code = stepFailed(exitServiceManager, "no se pudo registrar el servicio");
         CloseServiceHandle(manager);
         return code;
     }
@@ -824,9 +824,9 @@ int install()
 
     int result = exitOk;
     if (!StartServiceW(service, 0, nullptr) && GetLastError() != ERROR_SERVICE_ALREADY_RUNNING) {
-        result = failure(exitStartFailed, "no se pudo arrancar");
+        result = stepFailed(exitStartFailed, "no se pudo arrancar");
     } else if (!waitForState(service, SERVICE_RUNNING, 60000)) {
-        result = failure(exitStartFailed, "arrancó pero no llegó a estar en marcha (ver el Visor de eventos)");
+        result = stepFailed(exitStartFailed, "arrancó pero no llegó a estar en marcha (ver el Visor de eventos)");
     }
     CloseServiceHandle(service);
     CloseServiceHandle(manager);
