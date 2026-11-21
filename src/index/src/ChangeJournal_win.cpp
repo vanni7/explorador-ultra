@@ -11,6 +11,7 @@
 #include <QFileInfo>
 #include <QStorageInfo>
 
+#include <algorithm>
 #include <string>
 #include <vector>
 

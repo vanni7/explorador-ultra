@@ -198,7 +198,7 @@ void IndexService::stopTask(Root &root)
 void IndexService::removeRoot(const QString &path)
 {
     const QString clean = QDir::cleanPath(path);
-    if (m_failures.remove(clean) > 0) {
+    if (m_failures.remove(clean)) {
         Index::remove(databasePathFor(clean));
         emit changed();
         return;

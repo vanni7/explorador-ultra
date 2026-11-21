@@ -118,7 +118,10 @@ private slots:
         QProcess server;
         server.start(serviceProgram(), {QStringLiteral("--consola"), QStringLiteral("--tuberia"), pipe});
         QVERIFY(server.waitForStarted());
-        QTRY_VERIFY_WITH_TIMEOUT(server.readAllStandardOutput().contains("listo")
+        // Se acumula: QTRY_VERIFY vuelve a evaluar la condición al final, y lo
+        // ya leído no se lee dos veces.
+        QByteArray output;
+        QTRY_VERIFY_WITH_TIMEOUT((output += server.readAllStandardOutput()).contains("listo")
                                      || server.state() == QProcess::NotRunning, 10000);
         QVERIFY2(server.state() == QProcess::Running, server.readAllStandardError().constData());
         qputenv(usn::pipeVariable, pipe.toLocal8Bit());

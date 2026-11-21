@@ -2198,6 +2198,12 @@ private slots:
         IndexDialog dialog(*service, [volume] { return QList<fs::Volume>{volume}; });
         QCOMPARE(dialog.list()->topLevelItemCount(), 1);
         QCOMPARE(dialog.list()->topLevelItem(0)->checkState(0), Qt::Unchecked);
+        // El servicio de NTFS solo se ofrece en Windows.
+#ifdef Q_OS_WIN
+        QVERIFY(!dialog.serviceBox()->isHidden());
+#else
+        QVERIFY(dialog.serviceBox()->isHidden());
+#endif
         QSignalSpy rootsChanged(&dialog, &IndexDialog::rootsChanged);
         dialog.setIndexed(root, true);
         QCOMPARE(rootsChanged.count(), 1);
