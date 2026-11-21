@@ -137,6 +137,7 @@ quint64 FileActions::start(ActionKind kind, const QString &directory, tasks::Cat
 void FileActions::launch(quint64 id, ActionKind kind, const QString &directory, tasks::Category category, Work work,
                          const QStringList &devicePaths)
 {
+    emit aboutToStart(kind);
     ActionResult initial;
     initial.id = id;
     initial.kind = kind;

@@ -232,6 +232,9 @@ signals:
     void currentItemChanged();
     /// Pestaña bloqueada: quiere ir a `path` (con `nameToSelect` seleccionado) en otra pestaña.
     void openInNewTabRequested(const QString &path, const QString &nameToSelect);
+    /// Ctrl + rueda sobre las miniaturas: `steps` pasos más grandes (o más
+    /// pequeñas, si es negativo). El tamaño es de la ventana, no de la pestaña.
+    void thumbnailZoomRequested(int steps);
 
 protected:
     bool eventFilter(QObject *watched, QEvent *event) override;

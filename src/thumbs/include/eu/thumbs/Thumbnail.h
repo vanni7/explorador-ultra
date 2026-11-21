@@ -44,6 +44,12 @@ ThumbnailSource thumbnailSourceFor(const QString &fileName);
 /// Igual, para una petición (que puede ser de una carpeta).
 ThumbnailSource thumbnailSourceFor(const ThumbnailRequest &request);
 
+/// Si el nombre es de un video o de un audio, por la extensión. A diferencia
+/// de thumbnailSourceFor(), no depende de que haya FFmpeg para las
+/// miniaturas: el reproductor de Qt abre estos archivos por su cuenta.
+enum class MediaKind { None, Video, Audio };
+MediaKind mediaKindFor(const QString &fileName);
+
 /// Genera la miniatura. Imágenes: enteras, con su proporción, sin agrandar
 /// lo que ya es pequeño y giradas según la orientación EXIF. PDF: la primera
 /// página. Texto: una página con sus primeras líneas. Carpetas: si los

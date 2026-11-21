@@ -7,6 +7,7 @@
 #include "eu/thumbs/Isolated.h"
 #include "eu/thumbs/Thumbnail.h"
 #include "eu/ui/Locations.h"
+#include "eu/ui/MediaPreview.h"
 
 #include <QAbstractTableModel>
 #include <QApplication>
@@ -166,6 +167,10 @@ struct PreviewPanel::Loaded
     bool hasDocument = false;
     content::DocumentPreview document;
     QString problem;
+    /// Un video o un audio: el archivo que se reproduce (el extraído, si
+    /// venía de un comprimido). La miniatura, si la hay, va en `picture`.
+    thumbs::MediaKind media = thumbs::MediaKind::None;
+    QString mediaPath;
 };
 
 PreviewPanel::PreviewPanel(tasks::Scheduler &scheduler, QWidget *parent) : QWidget(parent), m_scheduler(scheduler)
@@ -227,6 +232,11 @@ PreviewPanel::PreviewPanel(tasks::Scheduler &scheduler, QWidget *parent) : QWidg
     sheetLayout->addWidget(m_sheetTable, 1);
     sheetLayout->addWidget(m_sheetNote);
     connect(m_sheetTabs, &QTabBar::currentChanged, this, &PreviewPanel::showSheet);
+    if (MediaPreview::isAvailable()) {
+        m_media = new MediaPreview(m_preview);
+        connect(m_media, &MediaPreview::playbackStarted, this, &PreviewPanel::mediaStarted);
+        connect(m_media, &MediaPreview::volumeChanged, this, &PreviewPanel::mediaVolumeChanged);
+    }
     m_message = new QLabel(m_preview);
     m_message->setAlignment(Qt::AlignCenter);
     m_message->setWordWrap(true);
@@ -236,6 +246,9 @@ PreviewPanel::PreviewPanel(tasks::Scheduler &scheduler, QWidget *parent) : QWidg
     m_preview->addWidget(m_markdownView);
     m_preview->addWidget(m_documentView);
     m_preview->addWidget(m_sheetView);
+    if (m_media != nullptr) {
+        m_preview->addWidget(m_media);
+    }
     m_preview->addWidget(m_message);
 
     auto *layout = new QVBoxLayout(this);
@@ -247,7 +260,10 @@ PreviewPanel::PreviewPanel(tasks::Scheduler &scheduler, QWidget *parent) : QWidg
     m_delay.setSingleShot(true);
     m_delay.setInterval(120);
     connect(&m_delay, &QTimer::timeout, this, &PreviewPanel::startLoading);
-    clear();
+    m_clearDelay.setSingleShot(true);
+    m_clearDelay.setInterval(1500);
+    connect(&m_clearDelay, &QTimer::timeout, this, [this] { clearNow(m_pendingClearMessage); });
+    clearNow(QString());
 }
 
 PreviewPanel::~PreviewPanel()
@@ -269,15 +285,33 @@ void PreviewPanel::setSizeUnits(core::SizeUnits units)
 
 void PreviewPanel::clear(const QString &message)
 {
+    // Con algo sonando, la selección puede perderse solo un instante (la
+    // carpeta se vuelve a leer porque cambió algo en ella): se espera un poco
+    // antes de cortarlo, por si vuelve a quedar seleccionado lo mismo.
+    if (m_media != nullptr && m_hasItem && m_preview->currentWidget() == m_media && m_media->isPlaying()) {
+        m_pendingClearMessage = message;
+        if (!m_clearDelay.isActive()) {
+            m_clearDelay.start();
+        }
+        return;
+    }
+    clearNow(message);
+}
+
+void PreviewPanel::clearNow(const QString &message)
+{
+    m_clearDelay.stop();
     ++m_generation;
     if (m_task.isValid()) {
         m_task.cancel();
         m_task = tasks::TaskHandle();
     }
     m_delay.stop();
+    releaseMedia();
     m_hasItem = false;
     m_loading = false;
     m_picture = QImage();
+    m_sections.clear();
     m_title->clear();
     rebuildFields({});
     m_message->setText(message.isEmpty() ? tr("Selecciona un archivo para ver aquí sus datos y su contenido")
@@ -287,14 +321,26 @@ void PreviewPanel::clear(const QString &message)
 
 void PreviewPanel::showItem(const PreviewItem &item)
 {
+    m_clearDelay.stop();
+    // El mismo video o audio de nuevo (la carpeta se volvió a leer, cambió
+    // cuántos hay seleccionados): lo que suena sigue sonando.
+    if (m_media != nullptr && m_hasItem && !m_loading && m_preview->currentWidget() == m_media
+        && item.path == m_item.path && item.entry.size == m_item.entry.size
+        && item.entry.modifiedMs == m_item.entry.modifiedMs) {
+        m_item = item;
+        rebuildFields(m_sections);
+        return;
+    }
     ++m_generation;
     if (m_task.isValid()) {
         m_task.cancel();
         m_task = tasks::TaskHandle();
     }
+    releaseMedia();
     m_item = item;
     m_hasItem = true;
     m_picture = QImage();
+    m_sections.clear();
     m_title->setText(item.entry.name);
     rebuildFields({});   // lo común se ve ya; lo propio del tipo, cuando se lea
     m_message->setText(tr("Cargando…"));
@@ -428,6 +474,13 @@ void PreviewPanel::startLoading()
                     loaded.sections.append({section.title, fields});
                 }
             }
+            // Video y audio se reproducen aquí, con sonido; la miniatura, de portada.
+            if (!item.entry.isDirectory && MediaPreview::isAvailable()) {
+                loaded.media = thumbs::mediaKindFor(item.entry.name);
+                if (loaded.media != thumbs::MediaKind::None) {
+                    loaded.mediaPath = item.path;
+                }
+            }
             const auto post = [&self, generation](const Loaded &result) {
                 QMetaObject::invokeMethod(qApp, [self, generation, result] {
                     if (self) {
@@ -506,8 +559,14 @@ void PreviewPanel::onLoaded(quint64 generation, const Loaded &loaded)
     }
     m_loading = false;
     m_task = tasks::TaskHandle();
+    m_sections = loaded.sections;
     rebuildFields(loaded.sections);
-    if (loaded.hasDocument) {
+    if (loaded.media != thumbs::MediaKind::None && m_media != nullptr) {
+        m_picture = loaded.picture;
+        m_picture.setDevicePixelRatio(1.0);
+        m_media->setMedia(loaded.mediaPath, loaded.media == thumbs::MediaKind::Audio, m_picture);
+        m_preview->setCurrentWidget(m_media);
+    } else if (loaded.hasDocument) {
         showDocument(loaded.document);
     } else if (!loaded.picture.isNull()) {
         m_picture = loaded.picture;
@@ -640,6 +699,20 @@ bool PreviewPanel::eventFilter(QObject *watched, QEvent *event)
     return QWidget::eventFilter(watched, event);
 }
 
+void PreviewPanel::pauseMedia()
+{
+    if (m_media != nullptr) {
+        m_media->pause();
+    }
+}
+
+void PreviewPanel::releaseMedia()
+{
+    if (m_media != nullptr) {
+        m_media->release();
+    }
+}
+
 QString PreviewPanel::title() const
 {
     return m_title->text();
@@ -668,6 +741,9 @@ PreviewPanel::Shown PreviewPanel::shown() const
     }
     if (current == m_sheetView) {
         return Shown::Spreadsheet;
+    }
+    if (current == m_media && m_media != nullptr) {
+        return Shown::Media;
     }
     return m_hasItem ? Shown::Message : Shown::Nothing;
 }

@@ -18,6 +18,7 @@
 #include <QPainter>
 #include <QScrollBar>
 #include <QStyledItemDelegate>
+#include <QWheelEvent>
 
 #include <cmath>
 
@@ -377,17 +378,8 @@ bool ThumbnailView::isPlayableRow(int row) const
     if (m_player == nullptr || row < 0 || row >= m_model->rowCount() || m_model->entryAt(row).isDirectory) {
         return false;
     }
-    const thumbs::ThumbnailSource source = thumbs::thumbnailSourceFor(m_model->entryAt(row).name);
-    // Video y audio se reconocen por la extensión aunque no haya FFmpeg para
-    // las miniaturas: Qt Multimedia los reproduce por su cuenta.
-    if (source == thumbs::ThumbnailSource::Video || source == thumbs::ThumbnailSource::Audio) {
-        return true;
-    }
-    static const QStringList media{QStringLiteral("mp4"), QStringLiteral("mkv"), QStringLiteral("webm"),
-                                   QStringLiteral("avi"), QStringLiteral("mov"), QStringLiteral("m4v"),
-                                   QStringLiteral("mp3"), QStringLiteral("flac"), QStringLiteral("ogg"),
-                                   QStringLiteral("opus"), QStringLiteral("m4a"), QStringLiteral("wav")};
-    return media.contains(QFileInfo(m_model->entryAt(row).name).suffix().toLower());
+    // Todos los formatos de video y audio, haya o no FFmpeg para las miniaturas.
+    return thumbs::mediaKindFor(m_model->entryAt(row).name) != thumbs::MediaKind::None;
 }
 
 void ThumbnailView::togglePlayback(int row, bool fromKeyboard)
@@ -400,13 +392,8 @@ void ThumbnailView::togglePlayback(int row, bool fromKeyboard)
         m_player->stop();
         return;
     }
-    const QString suffix = QFileInfo(path).suffix().toLower();
-    const bool isAudio = thumbs::thumbnailSourceFor(path) == thumbs::ThumbnailSource::Audio
-        || QStringList{QStringLiteral("mp3"), QStringLiteral("flac"), QStringLiteral("ogg"), QStringLiteral("opus"),
-                       QStringLiteral("m4a"), QStringLiteral("wav")}
-               .contains(suffix);
     m_playbackFromKeyboard = fromKeyboard;
-    m_player->play(path, isAudio);
+    m_player->play(path, thumbs::mediaKindFor(path) == thumbs::MediaKind::Audio);
 }
 
 void ThumbnailView::stopPlayback()
@@ -464,6 +451,46 @@ void ThumbnailView::keyPressEvent(QKeyEvent *event)
         return;
     }
     QListView::keyPressEvent(event);
+}
+
+void ThumbnailView::wheelEvent(QWheelEvent *event)
+{
+    // Ctrl + rueda: miniaturas más grandes (rueda hacia delante) o más pequeñas.
+    // En macOS, Qt llama Control a ⌘; también vale la tecla Control de verdad.
+#ifdef Q_OS_MACOS
+    const Qt::KeyboardModifiers zoomModifiers = Qt::ControlModifier | Qt::MetaModifier;
+#else
+    const Qt::KeyboardModifiers zoomModifiers = Qt::ControlModifier;
+#endif
+    if (!(event->modifiers() & zoomModifiers) || !onZoom) {
+        m_zoomDelta = 0;
+        QListView::wheelEvent(event);
+        return;
+    }
+    event->accept();
+    // Un paso de la rueda son 120; un panel táctil manda trozos pequeños, que se suman.
+    m_zoomDelta += event->angleDelta().y();
+    const int steps = m_zoomDelta / 120;
+    if (steps == 0) {
+        return;
+    }
+    m_zoomDelta -= steps * 120;
+    // Lo que está bajo el puntero sigue bajo el puntero después.
+    const QPoint pointer = event->position().toPoint();
+    const QPersistentModelIndex anchor(indexAt(pointer));
+    double within = 0.0;
+    if (anchor.isValid()) {
+        const QRect before = visualRect(anchor);
+        within = double(pointer.y() - before.top()) / double(std::max(1, before.height()));
+    }
+    onZoom(steps);
+    if (anchor.isValid()) {
+        const QRect after = visualRect(anchor);
+        if (after.isValid()) {
+            verticalScrollBar()->setValue(verticalScrollBar()->value() + after.top()
+                                          + int(within * after.height()) - pointer.y());
+        }
+    }
 }
 
 bool ThumbnailView::viewportEvent(QEvent *event)

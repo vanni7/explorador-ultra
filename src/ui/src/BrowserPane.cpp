@@ -475,6 +475,7 @@ BrowserPane::BrowserPane(tasks::Scheduler &scheduler, fs::DirectoryWatcher &watc
     }
     m_thumbView->onDrop = fileView->onDrop;
     m_thumbView->onEditingStarted = [this] { m_editing = true; };
+    m_thumbView->onZoom = [this](int steps) { emit thumbnailZoomRequested(steps); };
     connect(m_thumbView->itemDelegate(), &QAbstractItemDelegate::closeEditor, this, &BrowserPane::onEditingFinished);
     m_thumbView->setContextMenuPolicy(Qt::CustomContextMenu);
     connect(m_thumbView, &QWidget::customContextMenuRequested, this, [this](const QPoint &position) {

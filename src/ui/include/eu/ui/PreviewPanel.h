@@ -21,6 +21,7 @@ class QTextBrowser;
 
 namespace eu::ui {
 
+class MediaPreview;
 class PreviewDocumentView;
 class PreviewSheetModel;
 
@@ -40,7 +41,8 @@ struct PreviewItem
 /// antes de que acabe, lo anterior se cancela y se descarta. Nunca ejecuta
 /// nada del archivo: Word y OpenDocument se ven con su formato (leídos en el
 /// proceso auxiliar), las hojas de cálculo como cuadrícula, otros documentos
-/// como imagen (o, si no se puede, su texto) y los textos como texto.
+/// como imagen (o, si no se puede, su texto) y los textos como texto. Video
+/// y audio se reproducen con sonido al pulsar ▶ (si hay Qt Multimedia).
 class PreviewPanel : public QWidget
 {
     Q_OBJECT
@@ -57,7 +59,7 @@ public:
     /// Para las pruebas: lo que se está mostrando.
     QString title() const;
     QString fieldValue(const QString &label) const;
-    enum class Shown { Nothing, Picture, Text, Markdown, Document, Spreadsheet, Message };
+    enum class Shown { Nothing, Picture, Text, Markdown, Document, Spreadsheet, Media, Message };
     Shown shown() const;
     bool isLoading() const { return m_loading; }
     QImage picture() const { return m_picture; }
@@ -67,6 +69,20 @@ public:
     QStringList sheetNames() const;
     void showSheet(int index);
 
+    /// El reproductor de video y audio (nulo sin Qt Multimedia).
+    MediaPreview *mediaPreview() const { return m_media; }
+    /// Pausa lo que suene aquí (empezó a sonar otro reproductor).
+    void pauseMedia();
+    /// Para y suelta el archivo que se reproduce (en Windows, para poder
+    /// moverlo, renombrarlo o borrarlo).
+    void releaseMedia();
+
+signals:
+    /// Empezó a sonar un video o un audio del panel.
+    void mediaStarted();
+    /// Cambió el volumen del reproductor (para guardarlo).
+    void mediaVolumeChanged();
+
 protected:
     void resizeEvent(QResizeEvent *event) override;
     bool eventFilter(QObject *watched, QEvent *event) override;
@@ -74,6 +90,7 @@ protected:
 private:
     struct Loaded;
     void startLoading();
+    void clearNow(const QString &message);
     void onLoaded(quint64 generation, const Loaded &loaded);
     void rebuildFields(const QList<QPair<QString, QList<QPair<QString, QString>>>> &extra);
     void updatePicture();
@@ -87,8 +104,12 @@ private:
     quint64 m_generation = 0;
     tasks::TaskHandle m_task;
     QTimer m_delay;   ///< Al recorrer la lista con las flechas, no se lee cada archivo.
+    QTimer m_clearDelay;   ///< Antes de cortar lo que suena porque se perdió la selección.
+    QString m_pendingClearMessage;
     bool m_loading = false;
     QImage m_picture;
+    /// Lo propio del tipo (EXIF, etiquetas…) del elemento a la vista.
+    QList<QPair<QString, QList<QPair<QString, QString>>>> m_sections;
 
     QLabel *m_title = nullptr;
     QScrollArea *m_fieldsArea = nullptr;
@@ -105,6 +126,7 @@ private:
     PreviewSheetModel *m_sheetModel = nullptr;
     QLabel *m_sheetNote = nullptr;
     content::DocumentPreview m_document;   ///< El documento a la vista (sus hojas, al cambiar de pestaña).
+    MediaPreview *m_media = nullptr;
     QLabel *m_message = nullptr;
 };
 

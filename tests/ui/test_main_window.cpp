@@ -18,6 +18,7 @@
 #include "eu/ui/IndexDialog.h"
 #include "eu/archive/Archive.h"
 #include "eu/ui/InlinePlayer.h"
+#include "eu/ui/MediaPreview.h"
 #include "../support/TestMedia.h"
 #include "eu/ui/PreviewPanel.h"
 #include "eu/ui/Sidebar.h"
@@ -54,7 +55,9 @@
 #include <QTreeWidget>
 #include <QTreeView>
 #include <QUrl>
+#include <QWheelEvent>
 
+#include <cstdlib>
 #include <memory>
 
 using namespace eu;
@@ -2500,6 +2503,188 @@ private slots:
         pane->navigateTo(data.path());
         QTRY_VERIFY(!player->isPlaying());
 #endif
+    }
+
+    void ctrlWheelMakesThumbnailsBiggerOrSmaller()
+    {
+        QTemporaryDir data;
+        QTemporaryDir directory;
+        for (int i = 0; i < 40; ++i) {
+            writeFile(directory.filePath(QStringLiteral("nota-%1.txt").arg(i, 2, 10, QLatin1Char('0'))), 10);
+        }
+        MainWindow window(m_scheduler, openJournal(data));
+        BrowserPane *pane = window.openTab(directory.path());
+        QVERIFY(waitReady(pane));
+        window.setViewMode(BrowserPane::ViewMode::Thumbnails);
+        window.setThumbnailSize(160);
+        window.resize(900, 600);
+        window.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&window));
+        ThumbnailView *thumbnails = pane->thumbnailView();
+        QWidget *viewport = thumbnails->viewport();
+        const auto wheel = [viewport](int delta, Qt::KeyboardModifiers modifiers) {
+            const QPointF where(viewport->width() / 2.0, viewport->height() / 2.0);
+            QWheelEvent event(where, viewport->mapToGlobal(where), QPoint(), QPoint(0, delta), Qt::NoButton,
+                              modifiers, Qt::NoScrollPhase, false);
+            QApplication::sendEvent(viewport, &event);
+        };
+
+        // Ctrl + rueda hacia delante: un paso más grandes; hacia atrás, más pequeñas.
+        wheel(120, Qt::ControlModifier);
+        QCOMPARE(thumbnails->thumbnailSize(), 192);
+        QCOMPARE(window.thumbnailSize(), 192);
+        wheel(-240, Qt::ControlModifier);
+        QCOMPARE(thumbnails->thumbnailSize(), 128);
+        // Un panel táctil manda trozos pequeños: cuentan al juntar un paso.
+        wheel(60, Qt::ControlModifier);
+        QCOMPARE(thumbnails->thumbnailSize(), 128);
+        wheel(60, Qt::ControlModifier);
+        QCOMPARE(thumbnails->thumbnailSize(), 160);
+        // Sin Ctrl, la rueda desplaza y no cambia el tamaño.
+        wheel(-120, Qt::NoModifier);
+        QCOMPARE(thumbnails->thumbnailSize(), 160);
+
+        // Hay un límite por cada lado.
+        for (int i = 0; i < 20; ++i) {
+            wheel(120, Qt::ControlModifier);
+        }
+        QCOMPARE(thumbnails->thumbnailSize(), 512);
+        for (int i = 0; i < 20; ++i) {
+            wheel(-120, Qt::ControlModifier);
+        }
+        QCOMPARE(thumbnails->thumbnailSize(), 48);
+
+        // También desde el menú y con Ctrl + más o menos; pasando por los tamaños
+        // del menú, que entonces queda marcado.
+        window.setThumbnailSize(96);
+        QAction *medium = nullptr;
+        QAction *larger = nullptr;
+        for (QAction *action : menuActions(window.menuBar())) {
+            if (action->text() == QStringLiteral("Medianas")) {
+                medium = action;
+            } else if (action->text() == QStringLiteral("Miniaturas más grandes")) {
+                larger = action;
+            }
+        }
+        QVERIFY(medium != nullptr && larger != nullptr);
+        QCOMPARE(larger->shortcut(), QKeySequence(QKeySequence::ZoomIn));
+        larger->trigger();
+        QCOMPARE(thumbnails->thumbnailSize(), 128);
+        QVERIFY(!medium->isChecked());
+        larger->trigger();
+        QCOMPARE(thumbnails->thumbnailSize(), 160);
+        QVERIFY(medium->isChecked());
+
+        // Una pestaña nueva sale con el mismo tamaño.
+        BrowserPane *other = window.openTab(directory.path());
+        QCOMPARE(other->thumbnailView()->thumbnailSize(), 160);
+    }
+
+    void videoAndAudioPlayWithSoundInThePreview()
+    {
+        if (!MediaPreview::isAvailable()) {
+            QSKIP("Compilado sin Qt Multimedia.");
+        }
+        QTemporaryDir data;
+        QTemporaryDir directory;
+        QVERIFY(eu::testsupport::writeWav(directory.filePath(QStringLiteral("canción.wav")), 3.0));
+#ifdef EU_HAVE_FFMPEG
+        QVERIFY(eu::testsupport::writeColorVideo(directory.filePath(QStringLiteral("paseo.mov")),
+                                                 {{Qt::red, 10}, {Qt::blue, 10}}, 10, QSize(160, 120)));
+#endif
+        writeFile(directory.filePath(QStringLiteral("notas.txt")), 10);
+        writeFile(directory.filePath(QStringLiteral("roto.mp4")), 4000);   // no es un video
+
+        MainWindow window(m_scheduler, openJournal(data));
+        BrowserPane *pane = window.openTab(directory.path());
+        QVERIFY(waitReady(pane));
+        window.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&window));
+        PreviewPanel *panel = window.previewPanel();
+        MediaPreview *media = panel->mediaPreview();
+        QVERIFY(media != nullptr);
+
+        // Un audio: el reproductor, sin sonar hasta que se pulsa ▶.
+        selectNames(pane, {QStringLiteral("canción.wav")});
+        QTRY_COMPARE_WITH_TIMEOUT(panel->shown(), PreviewPanel::Shown::Media, 10000);
+        QVERIFY(media->isAudio());
+        QCOMPARE(QDir::cleanPath(media->path()), QDir::cleanPath(directory.filePath(QStringLiteral("canción.wav"))));
+        QVERIFY(!media->isPlaying());
+        media->play();
+        QTRY_VERIFY_WITH_TIMEOUT(media->durationMs() > 0 || !media->error().isEmpty(), 10000);
+        QVERIFY2(media->error().isEmpty(), qPrintable(media->error()));
+        QVERIFY2(std::abs(media->durationMs() - 3000) < 300, qPrintable(QString::number(media->durationMs())));
+        QVERIFY(media->isPlaying());
+        // Se puede saltar a otro punto.
+        media->seek(2000);
+        QTRY_VERIFY_WITH_TIMEOUT(media->positionMs() >= 1900, 10000);
+        // Pausa y sigue (barra espaciadora con el foco en el reproductor).
+        media->setFocus();
+        QTest::keyClick(media, Qt::Key_Space);
+        QVERIFY(!media->isPlaying());
+        QTest::keyClick(media, Qt::Key_Space);
+        QVERIFY(media->isPlaying());
+        // M silencia; el volumen vale para todos los archivos y se guarda.
+        QTest::keyClick(media, Qt::Key_M);
+        QVERIFY(media->isMuted());
+        QTest::keyClick(media, Qt::Key_M);
+        QVERIFY(!media->isMuted());
+        media->setVolume(35);
+
+        // Volver a leer la carpeta (lo mismo seleccionado) no corta lo que suena.
+        selectNames(pane, {QStringLiteral("canción.wav")});
+        QVERIFY(media->isPlaying());
+
+        // Otro archivo: para y suelta el anterior.
+        selectNames(pane, {QStringLiteral("notas.txt")});
+        QTRY_COMPARE_WITH_TIMEOUT(panel->shown(), PreviewPanel::Shown::Text, 10000);
+        QVERIFY(!media->isPlaying());
+        QCOMPARE(media->positionMs(), 0);
+
+        // Un archivo dañado: lo dice y no se queda reproduciendo.
+        selectNames(pane, {QStringLiteral("roto.mp4")});
+        QTRY_COMPARE_WITH_TIMEOUT(panel->shown(), PreviewPanel::Shown::Media, 10000);
+        media->play();
+        QTRY_VERIFY_WITH_TIMEOUT(!media->error().isEmpty(), 10000);
+        QVERIFY(!media->isPlaying());
+
+#ifdef EU_HAVE_FFMPEG
+        // Un video: su miniatura de portada y, al pulsar ▶, los fotogramas.
+        selectNames(pane, {QStringLiteral("paseo.mov")});
+        QTRY_COMPARE_WITH_TIMEOUT(panel->shown(), PreviewPanel::Shown::Media, 10000);
+        QVERIFY(!media->isAudio());
+        QVERIFY(!panel->picture().isNull());
+        QVERIFY(!media->hasFrame());
+        media->play();
+        QTRY_VERIFY_WITH_TIMEOUT(media->hasFrame() || !media->error().isEmpty(), 10000);
+        QVERIFY2(media->error().isEmpty(), qPrintable(media->error()));
+
+        // Nunca suenan dos a la vez: la miniatura calla al panel y al revés.
+        InlinePlayer *inline_ = window.inlinePlayer();
+        inline_->play(directory.filePath(QStringLiteral("paseo.mov")), false);
+        QVERIFY(!media->isPlaying());
+        media->play();
+        QVERIFY(!inline_->isPlaying());
+
+        // Al terminar (dura 2 s), vuelve al principio y suelta el archivo.
+        QTRY_VERIFY_WITH_TIMEOUT(!media->isPlaying(), 15000);
+        QCOMPARE(media->positionMs(), 0);
+        QVERIFY(!media->hasFrame());
+#endif
+
+        // Ocultar el panel (Alt+P) para lo que suene.
+        selectNames(pane, {QStringLiteral("canción.wav")});
+        QTRY_COMPARE_WITH_TIMEOUT(panel->shown(), PreviewPanel::Shown::Media, 10000);
+        media->play();
+        QVERIFY2(media->isPlaying(), qPrintable(media->error() + QStringLiteral(" ruta=") + media->path()));
+        window.setPreviewVisible(false);
+        QVERIFY(!media->isPlaying());
+        window.setPreviewVisible(true);
+
+        // El volumen se recuerda al cerrar.
+        window.close();
+        QCOMPARE(QSettings().value(QStringLiteral("view/previewVolume")).toInt(), 35);
+        QSettings().remove(QStringLiteral("view/previewVolume"));   // para las demás pruebas
     }
 
     void archivesAreBrowsedLikeFoldersAndExtracted()

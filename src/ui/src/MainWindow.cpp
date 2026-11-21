@@ -24,6 +24,7 @@
 #include "eu/ui/IndexDialog.h"
 #include "eu/ui/PathBar.h"
 #include "eu/ui/InlinePlayer.h"
+#include "eu/ui/MediaPreview.h"
 #include "eu/ui/PreviewPanel.h"
 #include "eu/ui/Sidebar.h"
 #include "eu/ui/TrashDialog.h"
@@ -69,12 +70,34 @@
 #include <QVBoxLayout>
 #include <QTreeView>
 
+#include <algorithm>
 #include <chrono>
 #include <future>
+#include <iterator>
 
 namespace eu::ui {
 
 namespace {
+
+/// Tamaños de las miniaturas al agrandarlas o achicarlas (Ctrl + rueda,
+/// Ctrl + más o menos). Incluyen los del menú: pequeñas, medianas y grandes.
+constexpr int thumbnailSteps[] = {48, 64, 80, 96, 128, 160, 192, 256, 320, 384, 448, 512};
+
+/// El tamaño `steps` pasos por encima (o por debajo) de `size`. Si `size` no
+/// es uno de los pasos (un valor escrito a mano en la configuración), el
+/// primer paso cuenta desde el más cercano en esa dirección.
+int steppedThumbnailSize(int size, int steps)
+{
+    for (; steps > 0; --steps) {
+        const int *next = std::upper_bound(std::begin(thumbnailSteps), std::end(thumbnailSteps), size);
+        size = next != std::end(thumbnailSteps) ? *next : thumbnailSteps[std::size(thumbnailSteps) - 1];
+    }
+    for (; steps < 0; ++steps) {
+        const int *notSmaller = std::lower_bound(std::begin(thumbnailSteps), std::end(thumbnailSteps), size);
+        size = notSmaller != std::begin(thumbnailSteps) ? *(notSmaller - 1) : thumbnailSteps[0];
+    }
+    return size;
+}
 
 QIcon themedIcon(const QString &name, QStyle::StandardPixmap fallback)
 {
@@ -241,6 +264,9 @@ MainWindow::MainWindow(tasks::Scheduler &scheduler, std::shared_ptr<journal::Jou
     // Panel derecho: metadatos y vista previa de lo que tiene el cursor.
     m_previewPanel = new PreviewPanel(m_scheduler, this);
     m_previewPanel->setMinimumWidth(180);
+    // Nunca suenan a la vez el panel y una miniatura.
+    connect(m_previewPanel, &PreviewPanel::mediaStarted, m_inlinePlayer, &InlinePlayer::stop);
+    connect(m_inlinePlayer, &InlinePlayer::started, m_previewPanel, &PreviewPanel::pauseMedia);
     m_splitter->addWidget(m_previewPanel);
     m_splitter->setStretchFactor(0, 0);
     m_splitter->setStretchFactor(1, 1);
@@ -266,6 +292,18 @@ MainWindow::MainWindow(tasks::Scheduler &scheduler, std::shared_ptr<journal::Jou
     rememberDefaultShortcuts(customizableActions());
 
     connect(m_actions, &FileActions::started, this, &MainWindow::onActionStarted);
+#ifdef Q_OS_WIN
+    // En Windows, un archivo que se está reproduciendo no se puede mover,
+    // renombrar ni borrar: antes de tocar archivos, los reproductores los sueltan.
+    connect(m_actions, &FileActions::aboutToStart, this, [this](ActionKind kind) {
+        if (kind == ActionKind::CreateFolder || kind == ActionKind::CreateFile || kind == ActionKind::Copy
+            || kind == ActionKind::Compress) {
+            return;   // no tocan lo que ya existe (copiar y comprimir solo leen)
+        }
+        m_previewPanel->releaseMedia();
+        m_inlinePlayer->stop();
+    });
+#endif
     connect(m_actions, &FileActions::progressed, this, &MainWindow::onActionProgressed);
     connect(m_actions, &FileActions::finished, this, &MainWindow::onActionFinished);
     connect(m_actions, &FileActions::runningCountChanged, this, &MainWindow::onRunningCountChanged);
@@ -450,6 +488,15 @@ void MainWindow::createActions()
         m_searchEdit->selectAll();
     });
 
+    m_largerThumbnailsAction = new QAction(tr("Miniaturas más grandes"), this);
+    m_largerThumbnailsAction->setShortcut(QKeySequence::ZoomIn);   // Ctrl++
+    m_largerThumbnailsAction->setToolTip(tr("También con Ctrl + rueda del ratón hacia delante"));
+    connect(m_largerThumbnailsAction, &QAction::triggered, this, [this] { zoomThumbnails(1); });
+    m_smallerThumbnailsAction = new QAction(tr("Miniaturas más pequeñas"), this);
+    m_smallerThumbnailsAction->setShortcut(QKeySequence::ZoomOut);   // Ctrl+-
+    m_smallerThumbnailsAction->setToolTip(tr("También con Ctrl + rueda del ratón hacia atrás"));
+    connect(m_smallerThumbnailsAction, &QAction::triggered, this, [this] { zoomThumbnails(-1); });
+
     m_inlinePlaybackAction = new QAction(tr("Reproducir video y audio en las miniaturas"), this);
     m_inlinePlaybackAction->setCheckable(true);
     m_inlinePlaybackAction->setChecked(InlinePlayer::isAvailable());
@@ -544,6 +591,9 @@ void MainWindow::createActions()
         m_thumbnailSizeActions.insert(size, action);
         connect(action, &QAction::triggered, this, [this, size = size] { setThumbnailSize(size); });
     }
+    sizeMenu->addSeparator();
+    sizeMenu->addAction(m_largerThumbnailsAction);
+    sizeMenu->addAction(m_smallerThumbnailsAction);
     viewMenu->addAction(m_previewAction);
     viewMenu->addAction(m_inlinePlaybackAction);
     viewMenu->addSeparator();
@@ -999,6 +1049,9 @@ void MainWindow::showContextMenu(BrowserPane *pane, const QPoint &globalPosition
         for (const int size : std::as_const(pixels)) {
             sizes->addAction(m_thumbnailSizeActions.value(size));
         }
+        sizes->addSeparator();
+        sizes->addAction(m_largerThumbnailsAction);
+        sizes->addAction(m_smallerThumbnailsAction);
     }
     views->addSeparator();
     views->addAction(m_dualPaneAction);
@@ -2063,6 +2116,7 @@ BrowserPane *MainWindow::openTabIn(QTabWidget *group, const QString &path, bool 
             updatePreview();
         }
     });
+    connect(pane, &BrowserPane::thumbnailZoomRequested, this, &MainWindow::zoomThumbnails);
     connect(pane, &BrowserPane::statusChanged, this, [this, pane] {
         if (pane == currentPane()) {
             updateStatus();
@@ -2845,11 +2899,16 @@ void MainWindow::setViewMode(BrowserPane::ViewMode mode)
 
 void MainWindow::setThumbnailSize(int size)
 {
-    m_thumbnailSize = size;
+    m_thumbnailSize = std::clamp(size, thumbnailSteps[0], thumbnailSteps[std::size(thumbnailSteps) - 1]);
     for (BrowserPane *pane : allPanes()) {
-        pane->setThumbnailSize(size);
+        pane->setThumbnailSize(m_thumbnailSize);
     }
     syncViewActions();
+}
+
+void MainWindow::zoomThumbnails(int steps)
+{
+    setThumbnailSize(steppedThumbnailSize(m_thumbnailSize, steps));
 }
 
 void MainWindow::syncViewActions()
@@ -2860,8 +2919,13 @@ void MainWindow::syncViewActions()
      : mode == BrowserPane::ViewMode::Columns  ? m_columnsAction
                                                : m_detailsAction)
         ->setChecked(true);
-    if (QAction *size = m_thumbnailSizeActions.value(m_thumbnailSize)) {
-        size->setChecked(true);
+    // Un tamaño intermedio (Ctrl + rueda) no es ninguno de los del menú.
+    for (auto it = m_thumbnailSizeActions.cbegin(); it != m_thumbnailSizeActions.cend(); ++it) {
+        it.value()->setChecked(it.key() == m_thumbnailSize);
+    }
+    if (m_largerThumbnailsAction != nullptr) {
+        m_largerThumbnailsAction->setEnabled(m_thumbnailSize < thumbnailSteps[std::size(thumbnailSteps) - 1]);
+        m_smallerThumbnailsAction->setEnabled(m_thumbnailSize > thumbnailSteps[0]);
     }
 }
 
@@ -3058,6 +3122,10 @@ void MainWindow::loadPreferences()
     m_folderSizesAction->setChecked(settings.value(QStringLiteral("view/folderSizes"), false).toBool());
     setThumbnailSize(settings.value(QStringLiteral("view/thumbnailSize"), 160).toInt());
     m_previewAction->setChecked(settings.value(QStringLiteral("view/preview"), true).toBool());
+    if (MediaPreview *media = m_previewPanel->mediaPreview()) {
+        media->setVolume(settings.value(QStringLiteral("view/previewVolume"), 80).toInt());
+        media->setMuted(settings.value(QStringLiteral("view/previewMuted"), false).toBool());
+    }
     if (InlinePlayer::isAvailable()) {
         m_inlinePlaybackAction->setChecked(settings.value(QStringLiteral("view/inlinePlayback"), true).toBool());
     }
@@ -3083,6 +3151,10 @@ void MainWindow::saveSession()
     settings.setValue(QStringLiteral("view/folderSizes"), m_folderSizesAction->isChecked());
     settings.setValue(QStringLiteral("view/thumbnailSize"), m_thumbnailSize);
     settings.setValue(QStringLiteral("view/preview"), m_previewAction->isChecked());
+    if (const MediaPreview *media = m_previewPanel->mediaPreview()) {
+        settings.setValue(QStringLiteral("view/previewVolume"), media->volume());
+        settings.setValue(QStringLiteral("view/previewMuted"), media->isMuted());
+    }
     if (InlinePlayer::isAvailable()) {
         settings.setValue(QStringLiteral("view/inlinePlayback"), m_inlinePlaybackAction->isChecked());
     }

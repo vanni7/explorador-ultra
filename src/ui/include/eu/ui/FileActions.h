@@ -167,6 +167,8 @@ public slots:
     void cancelAll();
 
 signals:
+    /// Justo antes de empezar una acción, cuando aún no ha tocado nada.
+    void aboutToStart(eu::ui::ActionKind kind);
     void started(quint64 id, eu::ui::ActionKind kind);
     void progressed(quint64 id, const eu::ops::Progress &progress);
     void finished(const eu::ui::ActionResult &result);

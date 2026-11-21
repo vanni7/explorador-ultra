@@ -86,6 +86,7 @@ bool InlinePlayer::play(const QString &path, bool isAudio)
     backend.player.setSource(QUrl::fromLocalFile(path));
     backend.sinceFrame.invalidate();
     backend.player.play();
+    emit started();
     emit changed();
     return true;
 }

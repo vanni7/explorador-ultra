@@ -182,6 +182,18 @@ bool hasMediaThumbnails()
     return detail::hasMediaSupport();
 }
 
+MediaKind mediaKindFor(const QString &fileName)
+{
+    const QString suffix = QFileInfo(fileName).suffix().toLower();
+    if (videoSuffixes().contains(suffix)) {
+        return MediaKind::Video;
+    }
+    if (audioSuffixes().contains(suffix)) {
+        return MediaKind::Audio;
+    }
+    return MediaKind::None;
+}
+
 ThumbnailSource thumbnailSourceFor(const ThumbnailRequest &request)
 {
     return request.isDirectory ? ThumbnailSource::Folder : thumbnailSourceFor(request.path);

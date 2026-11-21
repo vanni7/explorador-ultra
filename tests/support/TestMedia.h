@@ -31,6 +31,44 @@ extern "C" {
 
 namespace eu::testsupport {
 
+/// Escribe un WAV (PCM de 16 bits, mono, 8000 Hz) con un pitido de 440 Hz y
+/// `seconds` de duración. No necesita FFmpeg: la cabecera se escribe a mano.
+inline bool writeWav(const QString &path, double seconds)
+{
+    constexpr quint32 rate = 8000;
+    const quint32 samples = quint32(seconds * rate);
+    const quint32 dataBytes = samples * 2;
+    QByteArray bytes;
+    const auto put32 = [&bytes](quint32 value) {
+        for (int shift = 0; shift < 32; shift += 8) {
+            bytes.append(char((value >> shift) & 0xff));
+        }
+    };
+    const auto put16 = [&bytes](quint16 value) {
+        bytes.append(char(value & 0xff));
+        bytes.append(char((value >> 8) & 0xff));
+    };
+    bytes.append("RIFF");
+    put32(36 + dataBytes);
+    bytes.append("WAVEfmt ");
+    put32(16);           // tamaño del bloque fmt
+    put16(1);            // PCM
+    put16(1);            // un canal
+    put32(rate);
+    put32(rate * 2);     // bytes por segundo
+    put16(2);            // bytes por muestra
+    put16(16);           // bits por muestra
+    bytes.append("data");
+    put32(dataBytes);
+    for (quint32 i = 0; i < samples; ++i) {
+        // Onda cuadrada de 440 Hz, flojita: sirve igual y no necesita <cmath>.
+        const bool high = (i * 440 * 2 / rate) % 2 == 0;
+        put16(quint16(qint16(high ? 3000 : -3000)));
+    }
+    QFile file(path);
+    return file.open(QIODevice::WriteOnly) && file.write(bytes) == bytes.size();
+}
+
 #ifdef EU_HAVE_LIBARCHIVE
 /// Escribe un ZIP con estas entradas (los documentos de oficina lo son).
 inline bool writeZip(const QString &path, const QList<QPair<QString, QByteArray>> &entries)

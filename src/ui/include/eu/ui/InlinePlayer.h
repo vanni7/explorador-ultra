@@ -42,6 +42,8 @@ public:
     QString error() const { return m_error; }
 
 signals:
+    /// Empezó a reproducir (para callar el reproductor del panel).
+    void started();
     /// Fotograma nuevo o avance: hay que repintar.
     void changed();
     /// Se paró (a mano, por terminar o por un error).

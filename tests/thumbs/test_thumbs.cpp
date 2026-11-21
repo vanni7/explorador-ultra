@@ -138,6 +138,22 @@ private slots:
         QCOMPARE(thumbnailSourceFor(QStringLiteral("sin-extension")), ThumbnailSource::None);
     }
 
+    void knowsVideoAndAudioEvenWithoutFfmpeg()
+    {
+        // Lo que el reproductor puede abrir, haya o no miniaturas de video.
+        for (const char *name : {"a.mp4", "b.MKV", "c.webm", "d.avi", "e.mov", "f.wmv", "g.mpg", "h.3gp", "i.mts",
+                                 "j.ogv", "k.vob", "l.divx", "m.m4v", "n.flv"}) {
+            QCOMPARE(mediaKindFor(QString::fromLatin1(name)), MediaKind::Video);
+        }
+        for (const char *name : {"a.mp3", "b.FLAC", "c.ogg", "d.opus", "e.m4a", "f.aac", "g.wav", "h.wma", "i.aiff",
+                                 "j.ape", "k.mka", "l.oga"}) {
+            QCOMPARE(mediaKindFor(QString::fromLatin1(name)), MediaKind::Audio);
+        }
+        for (const char *name : {"foto.jpg", "notas.txt", "codigo.ts", "sin-extension", "carta.docx"}) {
+            QCOMPARE(mediaKindFor(QString::fromLatin1(name)), MediaKind::None);
+        }
+    }
+
     void keepsTheProportionAndNeverEnlarges()
     {
         QVERIFY(testImage(800, 400).save(file(QStringLiteral("ancha.png"))));

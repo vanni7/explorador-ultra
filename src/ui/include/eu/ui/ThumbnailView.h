@@ -61,6 +61,9 @@ public:
     std::function<void(const QStringList &, const QString &, bool)> onDrop;
     /// Se llama al empezar a renombrar en esta vista.
     std::function<void()> onEditingStarted;
+    /// Ctrl + rueda: `steps` pasos más grande (positivo) o más pequeño. Quien
+    /// lo recibe decide el tamaño y lo aplica con setThumbnailSize().
+    std::function<void(int steps)> onZoom;
 
 protected:
     void dragEnterEvent(QDragEnterEvent *event) override;
@@ -73,6 +76,7 @@ protected:
     void mouseMoveEvent(QMouseEvent *event) override;
     void mousePressEvent(QMouseEvent *event) override;
     void keyPressEvent(QKeyEvent *event) override;
+    void wheelEvent(QWheelEvent *event) override;
     bool viewportEvent(QEvent *event) override;
     void currentChanged(const QModelIndex &current, const QModelIndex &previous) override;
     void hideEvent(QHideEvent *event) override;
@@ -92,6 +96,7 @@ private:
     bool m_playbackEnabled = true;
     bool m_playbackFromKeyboard = false;   ///< Se para al mover el cursor, no al mover el ratón.
     int m_hoverRow = -1;
+    int m_zoomDelta = 0;   ///< Giro de la rueda con Ctrl que aún no llega a un paso.
     void setHoverRow(int row);
     void stopPlayback();
     QTimer m_retainTimer;   ///< Tras desplazarse, cancela lo que dejó de verse.

@@ -151,6 +151,10 @@ public:
     /// Vista de la pestaña activa (y de las que se abran después).
     void setViewMode(BrowserPane::ViewMode mode);
     void setThumbnailSize(int size);
+    int thumbnailSize() const { return m_thumbnailSize; }
+    /// `steps` pasos más grandes (positivo) o más pequeñas: Ctrl + rueda,
+    /// Ctrl + más y Ctrl + menos.
+    void zoomThumbnails(int steps);
 
     /// Opciones del buscador; son las del botón "Opciones" que tiene al lado.
     void setSearchScope(SearchScope scope);
@@ -370,6 +374,8 @@ private:
     QAction *m_lockTabAction = nullptr;
     QByteArray m_detailsHeader;          ///< Anchos de columnas guardados en la sesión.
     QHash<int, QAction *> m_thumbnailSizeActions;   ///< Por tamaño en píxeles.
+    QAction *m_largerThumbnailsAction = nullptr;
+    QAction *m_smallerThumbnailsAction = nullptr;
     int m_thumbnailSize = 160;
     void syncViewActions();
     /// Comprime lo seleccionado en la carpeta actual.
