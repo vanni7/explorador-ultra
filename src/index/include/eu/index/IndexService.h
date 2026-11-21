@@ -64,6 +64,12 @@ public:
     /// Nombres que no se indexan (la carpeta de la papelera).
     void setExcludedNames(const QStringList &names) { m_excludedNames = names; }
 
+    /// Carpetas cuyos cambios no se siguen: las de la propia aplicación. Sus
+    /// bases cambian con cada escritura y seguirlas sería un bucle sin fin
+    /// (el índice escribe, el sistema avisa, el índice vuelve a escribir…).
+    /// La carpeta de las bases del índice va siempre, aunque no se diga.
+    void setIgnoredFolders(const QStringList &folders);
+
     /// El diario de cambios del sistema, para ponerse al día al arrancar sin
     /// recorrer la unidad entera. De fábrica, systemChangeJournal() (en
     /// Windows, el servicio opcional); nullptr para no usarlo. Vale para las
@@ -114,10 +120,12 @@ private:
                     qint64 journalFolders, const JournalPosition &start);
     void onExpectedEntries(const QString &root, quint64 generation, qint64 entries);
     void stopTask(Root &root);
+    bool isIgnored(const QString &folder) const;
 
     tasks::Scheduler &m_scheduler;
     QString m_dataDirectory;
     QStringList m_excludedNames;
+    QStringList m_ignoredFolders;
     std::shared_ptr<ChangeJournal> m_journal = systemChangeJournal();
     std::map<QString, std::unique_ptr<Root>> m_roots;
     QHash<QString, QString> m_failures;   ///< Carpetas cuya base no se pudo abrir, con el motivo.

@@ -34,6 +34,23 @@ bool insideExcluded(const QString &folder, const QString &root, const QStringLis
     return false;
 }
 
+/// true si `folder` es una de `folders` o está dentro de alguna.
+bool insideAny(const QString &folder, const QStringList &folders)
+{
+#ifdef Q_OS_WIN
+    constexpr Qt::CaseSensitivity sensitivity = Qt::CaseInsensitive;
+#else
+    constexpr Qt::CaseSensitivity sensitivity = Qt::CaseSensitive;
+#endif
+    const QString clean = QDir::cleanPath(folder);
+    for (const QString &other : folders) {
+        if (clean.compare(other, sensitivity) == 0 || clean.startsWith(other + QLatin1Char('/'), sensitivity)) {
+            return true;
+        }
+    }
+    return false;
+}
+
 } // namespace
 
 /// Lo que se guarda de cada carpeta indexada.
@@ -76,6 +93,22 @@ IndexService::IndexService(tasks::Scheduler &scheduler, QString dataDirectory, Q
         schedule();
     });
     m_reviewTimer.start();
+    setIgnoredFolders({});
+}
+
+void IndexService::setIgnoredFolders(const QStringList &folders)
+{
+    m_ignoredFolders.clear();
+    for (const QString &folder : folders + QStringList{m_dataDirectory}) {
+        if (!folder.isEmpty()) {
+            m_ignoredFolders.append(QDir::cleanPath(folder));
+        }
+    }
+}
+
+bool IndexService::isIgnored(const QString &folder) const
+{
+    return insideAny(folder, m_ignoredFolders);
 }
 
 IndexService::~IndexService()
@@ -164,6 +197,9 @@ void IndexService::addRoot(const QString &path)
     root->watcher = TreeWatcher::create(clean);
     Root *raw = root.get();
     connect(root->watcher.get(), &TreeWatcher::folderChanged, this, [this, raw](const QString &folder) {
+        if (isIgnored(folder)) {
+            return;   // lo escribe la propia aplicación (ver setIgnoredFolders)
+        }
         raw->dirty.insert(folder);
         schedule();
     });
@@ -336,12 +372,13 @@ void IndexService::startTask(Root &root)
     // hay que pedirle las que ya están anotadas.
     const bool watcherNeedsFolders = watcher->isActive() && !watcher->watchesWholeTree();
     const JournalPosition previousStart = root.previousStart;
+    const QStringList ignored = m_ignoredFolders;
     // De fondo y sobre su unidad: en un disco lento espera a que no haya
     // nadie más trabajando en él.
     root.task = m_scheduler.submitForPaths(
         tasks::Category::Indexing, tasks::Priority::Background, {path},
         [self, generation, path, whole, catchUp, building, folders, watcher, journal, volume, watcherCoversAll,
-         watcherNeedsFolders, previousStart, index = root.index, gate = m_gate, excluded = m_excludedNames](const tasks::CancelToken &cancel) {
+         watcherNeedsFolders, previousStart, ignored, index = root.index, gate = m_gate, excluded = m_excludedNames](const tasks::CancelToken &cancel) {
             // Dónde está el diario ahora, antes de leer nada: lo que cambie
             // después se verá la próxima vez.
             JournalPosition start;
@@ -366,7 +403,8 @@ void IndexService::startTask(Root &root)
                 if (changes.ok()) {
                     targets.clear();
                     for (const QString &folder : changes.value().folders) {
-                        if (index.covers(folder) && !insideExcluded(folder, path, excluded)) {
+                        if (index.covers(folder) && !insideExcluded(folder, path, excluded)
+                            && !insideAny(folder, ignored)) {
                             targets.append(folder);
                         }
                     }

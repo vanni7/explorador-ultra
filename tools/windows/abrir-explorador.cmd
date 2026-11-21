@@ -3,6 +3,9 @@ rem Abre Explorador Ultra compilado en esta VM (C:\eu\src, con build.cmd).
 rem PATH corto y propio: el heredado de la compilacion (vcvars) puede pasar del
 rem limite de cmd y salia "No hay suficientes recursos de memoria".
 setlocal
+rem Si la consola tenia puesta la plataforma de las pruebas (offscreen), la
+rem aplicacion se abriria sin ventana: se quita.
+set "QT_QPA_PLATFORM="
 set "PATH=C:\Qt\6.12.0\msvc2022_64\bin;%SystemRoot%\System32;%SystemRoot%"
 if not exist "C:\eu\src\build\release\bin\explorador-ultra.exe" (
   echo No esta compilado: ejecuta antes build.cmd

@@ -216,6 +216,11 @@ MainWindow::MainWindow(tasks::Scheduler &scheduler, std::shared_ptr<journal::Jou
         m_scheduler, QStandardPaths::writableLocation(QStandardPaths::AppDataLocation) + QStringLiteral("/indice"),
         this);
     m_indexService->setExcludedNames({trash::trashFolderName()});
+    // Lo que escribe la propia aplicación (bases, registro, caché de
+    // miniaturas) no se sigue: si la unidad indexada es la del sistema, cada
+    // escritura del índice volvería a despertarlo.
+    m_indexService->setIgnoredFolders({QStandardPaths::writableLocation(QStandardPaths::AppDataLocation),
+                                       QStandardPaths::writableLocation(QStandardPaths::CacheLocation)});
     // Índices de contenido (SPEC §6.5): el texto de los documentos de las
     // carpetas elegidas, sacado en el proceso auxiliar.
     m_contentIndexService = new index::ContentIndexService(

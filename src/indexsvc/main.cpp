@@ -711,12 +711,46 @@ bool waitForState(SC_HANDLE service, DWORD wanted, DWORD timeoutMs)
     }
 }
 
+/// Lo para y espera a que su proceso haya salido del todo (hasta entonces
+/// el .exe sigue en uso y la tubería, abierta).
 void stopService(SC_HANDLE service)
 {
+    SERVICE_STATUS_PROCESS before{};
+    DWORD needed = 0;
+    QueryServiceStatusEx(service, SC_STATUS_PROCESS_INFO, reinterpret_cast<LPBYTE>(&before), sizeof(before), &needed);
+    const Handle process(before.dwProcessId != 0 ? OpenProcess(SYNCHRONIZE, FALSE, before.dwProcessId) : nullptr);
     SERVICE_STATUS status{};
     if (ControlService(service, SERVICE_CONTROL_STOP, &status)) {
-        waitForState(service, SERVICE_STOPPED, 30000);
+        waitForState(service, SERVICE_STOPPED, 60000);
     }
+    if (process.valid()) {
+        WaitForSingleObject(process.get(), 30000);
+    }
+}
+
+/// Avisa en la consola de qué paso falló (al lanzarlo la aplicación no se
+/// ve, pero sí en las pruebas y a mano) y devuelve el código de salida.
+int failure(int code, const char *step)
+{
+    std::fprintf(stderr, "eu-indexsvc: %s (error %lu)\n", step, GetLastError());
+    return code;
+}
+
+/// Copia el .exe; reintenta un rato si está en uso (el proceso anterior aún
+/// se está cerrando, o el antivirus lo está revisando).
+bool copyProgram(const wchar_t *from, const std::wstring &to)
+{
+    for (int attempt = 0; attempt < 30; ++attempt) {
+        if (CopyFileW(from, to.c_str(), FALSE)) {
+            return true;
+        }
+        const DWORD error = GetLastError();
+        if (error != ERROR_SHARING_VIOLATION && error != ERROR_ACCESS_DENIED && error != ERROR_LOCK_VIOLATION) {
+            return false;
+        }
+        Sleep(1000);
+    }
+    return false;
 }
 
 int install()
@@ -727,14 +761,14 @@ int install()
     std::vector<wchar_t> self(32768);
     const DWORD selfLength = GetModuleFileNameW(nullptr, self.data(), DWORD(self.size()));
     if (selfLength == 0 || selfLength >= self.size()) {
-        return exitCopyFailed;
+        return failure(exitCopyFailed, "no se sabe dónde está este programa");
     }
     const std::wstring folder = installFolder();
     const std::wstring target = folder + L"\\eu-indexsvc.exe";
 
     SC_HANDLE manager = OpenSCManagerW(nullptr, nullptr, SC_MANAGER_CONNECT | SC_MANAGER_CREATE_SERVICE);
     if (manager == nullptr) {
-        return exitServiceManager;
+        return failure(exitServiceManager, "no se pudo abrir el administrador de servicios");
     }
     SC_HANDLE service = OpenServiceW(manager, usn::serviceName, SERVICE_ALL_ACCESS);
     if (service != nullptr) {
@@ -746,14 +780,15 @@ int install()
             CloseServiceHandle(service);
         }
         CloseServiceHandle(manager);
-        return exitCopyFailed;
+        return failure(exitCopyFailed, "no se pudo crear la carpeta en Archivos de programa");
     }
-    if (_wcsicmp(self.data(), target.c_str()) != 0 && !CopyFileW(self.data(), target.c_str(), FALSE)) {
+    if (_wcsicmp(self.data(), target.c_str()) != 0 && !copyProgram(self.data(), target)) {
+        const int code = failure(exitCopyFailed, "no se pudo copiar a Archivos de programa");
         if (service != nullptr) {
             CloseServiceHandle(service);
         }
         CloseServiceHandle(manager);
-        return exitCopyFailed;
+        return code;
     }
     const std::wstring command = L"\"" + target + L"\"";
     if (service != nullptr) {
@@ -766,8 +801,9 @@ int install()
                                  nullptr, nullptr);
     }
     if (service == nullptr) {
+        const int code = failure(exitServiceManager, "no se pudo registrar el servicio");
         CloseServiceHandle(manager);
-        return exitServiceManager;
+        return code;
     }
     std::wstring text = description;
     SERVICE_DESCRIPTIONW serviceDescription{text.data()};
@@ -787,9 +823,10 @@ int install()
     ChangeServiceConfig2W(service, SERVICE_CONFIG_FAILURE_ACTIONS, &failure);
 
     int result = exitOk;
-    if ((!StartServiceW(service, 0, nullptr) && GetLastError() != ERROR_SERVICE_ALREADY_RUNNING)
-        || !waitForState(service, SERVICE_RUNNING, 30000)) {
-        result = exitStartFailed;
+    if (!StartServiceW(service, 0, nullptr) && GetLastError() != ERROR_SERVICE_ALREADY_RUNNING) {
+        result = failure(exitStartFailed, "no se pudo arrancar");
+    } else if (!waitForState(service, SERVICE_RUNNING, 60000)) {
+        result = failure(exitStartFailed, "arrancó pero no llegó a estar en marcha (ver el Visor de eventos)");
     }
     CloseServiceHandle(service);
     CloseServiceHandle(manager);

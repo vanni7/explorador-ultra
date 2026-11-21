@@ -263,6 +263,34 @@ private slots:
         QCOMPARE(journal->asked(), 2);
     }
 
+    void doesNotFollowItsOwnWrites()
+    {
+        // Como al indexar la unidad del sistema: las bases del índice están
+        // dentro de lo indexado. Antes, cada escritura del índice avisaba de un
+        // cambio, que volvía a escribir… sin parar (visto en Windows con C:).
+        QTemporaryDir tree;
+        const QString root = QDir::cleanPath(tree.path());
+        writeFile(root + QStringLiteral("/a/uno.txt"));
+        writeFile(root + QStringLiteral("/cache-de-la-app/vieja.png"));
+        IndexService service(m_scheduler, root + QStringLiteral("/datos-de-la-app"));
+        service.setChangeJournal(nullptr);
+        service.setIgnoredFolders({root + QStringLiteral("/cache-de-la-app")});
+        service.addRoot(root);
+        QVERIFY(waitReady(service, root));
+        if (!service.statusOf(root)->watching) {
+            QSKIP("Este sistema no avisa de los cambios.");
+        }
+        QSignalSpy changes(&service, &IndexService::changed);
+        writeFile(root + QStringLiteral("/datos-de-la-app/otra-base.db"));
+        writeFile(root + QStringLiteral("/cache-de-la-app/miniatura.png"));
+        QTest::qWait(2000);
+        QCOMPARE(changes.count(), 0);   // no se pone a trabajar
+        QVERIFY(!service.isBusy());
+        // Lo demás se sigue igual.
+        writeFile(root + QStringLiteral("/a/dos.txt"));
+        QTRY_VERIFY_WITH_TIMEOUT(!find(*service.indexFor(root), QStringLiteral("dos")).isEmpty(), 20000);
+    }
+
     void anUnmountedRootKeepsItsIndex()
     {
         QTemporaryDir tree;

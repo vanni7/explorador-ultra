@@ -564,7 +564,9 @@ core::Result<SyncProgress> Index::sync(const QString &folder, const SyncOptions 
     }
 
     const bool cancelled = cancel.isCancelled();
-    if (!failed && !cancelled) {
+    // Los recuentos solo cambian si entró o salió algo: contarlo todo en una
+    // tabla de cientos de miles de filas en cada aviso de cambio sale caro.
+    if (!failed && !cancelled && (fullRun || progress.added > 0 || progress.removed > 0)) {
         QSqlQuery count(database);
         if (count.exec(QStringLiteral("SELECT COUNT(*) FROM entries")) && count.next()) {
             setMetaValue(database, QStringLiteral("entries"), count.value(0).toString());

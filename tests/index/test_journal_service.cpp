@@ -148,8 +148,8 @@ private slots:
         qunsetenv(usn::pipeVariable);
         QProcess install;
         install.start(serviceProgram(), {QStringLiteral("--instalar")});
-        QVERIFY(install.waitForFinished(120000));
-        QCOMPARE(install.exitCode(), 0);
+        QVERIFY(install.waitForFinished(180000));
+        QVERIFY2(install.exitCode() == 0, install.readAllStandardError().constData());
         QCOMPARE(journalservice::state(), journalservice::State::Running);
         const QString installed = QDir::fromNativeSeparators(qEnvironmentVariable("ProgramFiles"))
             + QStringLiteral("/Explorador Ultra/servicio/eu-indexsvc.exe");
@@ -158,8 +158,8 @@ private slots:
         // Instalar otra vez lo actualiza sin fallar.
         QProcess again;
         again.start(serviceProgram(), {QStringLiteral("--instalar")});
-        QVERIFY(again.waitForFinished(120000));
-        QCOMPARE(again.exitCode(), 0);
+        QVERIFY(again.waitForFinished(180000));
+        QVERIFY2(again.exitCode() == 0, again.readAllStandardError().constData());
 
         // Por la tubería del servicio instalado (la aplicación comprueba que es él).
         QTemporaryDir directory;
@@ -168,8 +168,8 @@ private slots:
 
         QProcess uninstall;
         uninstall.start(serviceProgram(), {QStringLiteral("--desinstalar")});
-        QVERIFY(uninstall.waitForFinished(120000));
-        QCOMPARE(uninstall.exitCode(), 0);
+        QVERIFY(uninstall.waitForFinished(180000));
+        QVERIFY2(uninstall.exitCode() == 0, uninstall.readAllStandardError().constData());
         // (Windows lo borra del todo cuando nadie lo tiene abierto.)
         QTRY_COMPARE_WITH_TIMEOUT(journalservice::state(), journalservice::State::NotInstalled, 30000);
         QTRY_VERIFY_WITH_TIMEOUT(!QFileInfo::exists(installed), 10000);
