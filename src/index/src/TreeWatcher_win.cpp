@@ -51,6 +51,7 @@ public:
 
     bool isActive() const override { return m_directory != INVALID_HANDLE_VALUE; }
     void addFolder(const QString &) override {}   // el sistema ya vigila el árbol entero
+    bool watchesWholeTree() const override { return true; }
 
 private:
     void run()

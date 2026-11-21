@@ -10,6 +10,32 @@
 
 namespace eu::index {
 
+namespace {
+
+/// Propiedad del índice con hasta dónde está al día según el diario de cambios.
+QString journalProperty()
+{
+    return QStringLiteral("diario");
+}
+
+/// Con más carpetas cambiadas que estas, sale más a cuenta recorrerlo todo.
+constexpr int maxChangedFolders = 5000;
+
+/// true si `folder` está dentro de una carpeta que no se indexa (la papelera).
+bool insideExcluded(const QString &folder, const QString &root, const QStringList &excluded)
+{
+    const QString relative = QDir(root).relativeFilePath(folder);
+    const QStringList parts = relative.split(QLatin1Char('/'), Qt::SkipEmptyParts);
+    for (const QString &part : parts) {
+        if (excluded.contains(part, Qt::CaseInsensitive)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+} // namespace
+
 /// Lo que se guarda de cada carpeta indexada.
 struct IndexService::Root
 {
@@ -20,6 +46,11 @@ struct IndexService::Root
     RootStatus status;
     QSet<QString> dirty;        ///< Carpetas de las que llegó un aviso.
     bool wholePending = false;  ///< Hay que recorrerlo entero.
+    /// Hay que ponerlo al día con el diario de cambios (al arrancar, o si se
+    /// perdieron avisos); si el diario no sirve, se recorre entero.
+    bool catchUpPending = false;
+    QString volume;             ///< Unidad con diario de cambios ("C:"), o vacío.
+    JournalPosition previousStart;  ///< Dónde estaba el diario al empezar la tarea anterior.
     bool running = false;
     tasks::TaskHandle task;
     quint64 generation = 0;
@@ -120,7 +151,16 @@ void IndexService::addRoot(const QString &path)
     root->status.root = clean;
     root->status.info = root->index.info();
     root->status.state = root->status.info.complete ? RootStatus::State::Updating : RootStatus::State::Building;
-    root->wholePending = true;   // construirlo, o ponerlo al día de lo que cambió con la aplicación cerrada
+    // Construirlo, o ponerlo al día de lo que cambió con la aplicación
+    // cerrada: si la unidad tiene diario de cambios y se sabe hasta dónde
+    // llegó la última vez, se le pregunta en vez de recorrerla entera.
+    root->volume = m_journal ? m_journal->volumeOf(clean) : QString();
+    if (root->status.info.complete && !root->volume.isEmpty()
+        && JournalPosition::fromString(root->index.property(journalProperty())).isValid()) {
+        root->catchUpPending = true;
+    } else {
+        root->wholePending = true;
+    }
     root->watcher = TreeWatcher::create(clean);
     Root *raw = root.get();
     connect(root->watcher.get(), &TreeWatcher::folderChanged, this, [this, raw](const QString &folder) {
@@ -128,7 +168,12 @@ void IndexService::addRoot(const QString &path)
         schedule();
     });
     connect(root->watcher.get(), &TreeWatcher::overflowed, this, [this, raw] {
-        raw->wholePending = true;
+        // Se perdieron avisos: el diario sabe cuáles (si lo hay); si no, se recorre.
+        if (raw->volume.isEmpty()) {
+            raw->wholePending = true;
+        } else {
+            raw->catchUpPending = true;
+        }
         schedule();
     });
     connect(root->watcher.get(), &TreeWatcher::limitReached, this, &IndexService::changed);
@@ -206,7 +251,7 @@ void IndexService::setPaused(bool paused)
 bool IndexService::isBusy() const
 {
     for (const auto &[path, root] : m_roots) {
-        if (root->running || root->wholePending || !root->dirty.isEmpty()) {
+        if (root->running || root->wholePending || root->catchUpPending || !root->dirty.isEmpty()) {
             return true;
         }
     }
@@ -243,7 +288,7 @@ void IndexService::startNext()
         if (root->status.state == RootStatus::State::Failed) {
             continue;
         }
-        if (root->wholePending) {
+        if (root->wholePending || root->catchUpPending) {
             next = root.get();
             break;
         }
@@ -259,16 +304,18 @@ void IndexService::startNext()
 void IndexService::startTask(Root &root)
 {
     // Con muchísimas carpetas cambiadas sale más a cuenta recorrerlo todo.
-    const bool whole = root.wholePending || root.dirty.size() > 5000;
+    const bool whole = root.wholePending || root.dirty.size() > maxChangedFolders;
+    const bool catchUp = !whole && root.catchUpPending;
     QStringList folders;
     if (!whole) {
         folders = QStringList(root.dirty.constBegin(), root.dirty.constEnd());
     }
     root.dirty.clear();
     root.wholePending = false;
+    root.catchUpPending = false;
     root.running = true;
     m_running = true;
-    if (whole) {
+    if (whole || catchUp) {
         root.status.state = root.status.info.complete ? RootStatus::State::Updating : RootStatus::State::Building;
         root.status.progress = {};
         root.status.error.clear();
@@ -279,18 +326,82 @@ void IndexService::startTask(Root &root)
     const quint64 generation = root.generation;
     const QString path = root.status.root;
     TreeWatcher *watcher = root.watcher.get();   // vive hasta que la tarea termina (ver stopTask)
+    // El diario de cambios, si la carpeta está en una unidad que lo tiene.
+    const std::shared_ptr<ChangeJournal> journal = root.volume.isEmpty() ? nullptr : m_journal;
+    const QString volume = root.volume;
+    const bool building = !root.status.info.complete;
+    // Los avisos del sistema solo dejan el índice "al día" si vigila el árbol entero.
+    const bool watcherCoversAll = watcher->isActive() && !watcher->isLimited();
+    // Si vigila carpeta a carpeta (Linux), al ponerse al día sin recorrer
+    // hay que pedirle las que ya están anotadas.
+    const bool watcherNeedsFolders = watcher->isActive() && !watcher->watchesWholeTree();
+    const JournalPosition previousStart = root.previousStart;
     // De fondo y sobre su unidad: en un disco lento espera a que no haya
     // nadie más trabajando en él.
     root.task = m_scheduler.submitForPaths(
         tasks::Category::Indexing, tasks::Priority::Background, {path},
-        [self, generation, path, whole, folders, watcher, index = root.index, gate = m_gate,
-         excluded = m_excludedNames](const tasks::CancelToken &cancel) {
+        [self, generation, path, whole, catchUp, building, folders, watcher, journal, volume, watcherCoversAll,
+         watcherNeedsFolders, previousStart, index = root.index, gate = m_gate, excluded = m_excludedNames](const tasks::CancelToken &cancel) {
+            // Dónde está el diario ahora, antes de leer nada: lo que cambie
+            // después se verá la próxima vez.
+            JournalPosition start;
+            if (journal) {
+                const core::Result<JournalPosition> position = journal->position(volume);
+                if (position.ok()) {
+                    start = position.value();
+                }
+            }
+
+            bool wholeTree = whole;
+            QStringList targets = whole ? QStringList{path} : folders;
+            qint64 journalFolders = -1;
+            if (catchUp) {
+                // Solo las carpetas que cambiaron desde la última vez.
+                const JournalPosition since = JournalPosition::fromString(index.property(journalProperty()));
+                const core::Result<JournalChanges> changes =
+                    journal != nullptr && since.isValid()
+                        ? journal->changesSince(volume, since, maxChangedFolders)
+                        : core::Result<JournalChanges>(core::Error{core::ErrorCode::NotFound,
+                                                                   QStringLiteral("sin diario de cambios"), path, 0});
+                if (changes.ok()) {
+                    targets.clear();
+                    for (const QString &folder : changes.value().folders) {
+                        if (index.covers(folder) && !insideExcluded(folder, path, excluded)) {
+                            targets.append(folder);
+                        }
+                    }
+                    journalFolders = targets.size();
+                    if (watcherNeedsFolders) {
+                        index.forEachFolder([watcher](const QString &folder) { watcher->addFolder(folder); }, cancel);
+                    }
+                } else {
+                    qInfo("Índice de %s: el diario de cambios no sirve (%s); se recorre entero", qPrintable(path),
+                          qPrintable(changes.error().message));
+                    wholeTree = true;
+                    targets = QStringList{path};
+                }
+            }
+
+            // La primera vez que se indexa una unidad entera, su tabla de
+            // archivos dice cuántas entradas esperar (para el avance).
+            if (wholeTree && building && journal && QDir::cleanPath(path).size() == 3) {
+                const core::Result<VolumeCounts> counted = journal->counts(volume);
+                if (counted.ok()) {
+                    const qint64 entries = counted.value().files + counted.value().folders;
+                    QMetaObject::invokeMethod(qApp, [self, generation, path, entries] {
+                        if (self) {
+                            self->onExpectedEntries(path, generation, entries);
+                        }
+                    }, Qt::QueuedConnection);
+                }
+            }
+
             SyncOptions options;
-            options.wholeTree = whole;
+            options.wholeTree = wholeTree;
             options.excludedNames = excluded;
             options.pause = gate.get();
             options.onFolder = [watcher](const QString &folder) { watcher->addFolder(folder); };
-            if (whole) {
+            if (wholeTree) {
                 options.onProgress = [self, generation, path](const SyncProgress &progress) {
                     QMetaObject::invokeMethod(qApp, [self, generation, path, progress] {
                         if (self) {
@@ -300,21 +411,42 @@ void IndexService::startTask(Root &root)
                 };
             }
             core::Status status;
-            const QStringList targets = whole ? QStringList{path} : folders;
-            for (const QString &folder : targets) {
+            for (const QString &folder : std::as_const(targets)) {
                 const core::Result<SyncProgress> synced = index.sync(folder, options, cancel);
                 if (!synced.ok()) {
                     status = synced.error();
                     break;
                 }
             }
+
+            // Hasta dónde queda al día: lo recorrido o puesto al día con el
+            // diario, desde `start`; con los avisos del sistema, desde donde
+            // empezó la tarea anterior (lo que cambió antes de ese punto ya
+            // llegó seguro, aunque un aviso tarde un instante).
+            if (status.ok() && journal) {
+                const JournalPosition reached =
+                    (wholeTree || catchUp) ? start : (watcherCoversAll ? previousStart : JournalPosition{});
+                if (reached.isValid()) {
+                    index.setProperty(journalProperty(), reached.toString());
+                }
+            }
             const IndexInfo info = index.info();
-            QMetaObject::invokeMethod(qApp, [self, generation, path, status, info] {
+            QMetaObject::invokeMethod(qApp, [self, generation, path, status, info, journalFolders, start] {
                 if (self) {
-                    self->onFinished(path, generation, status, info);
+                    self->onFinished(path, generation, status, info, journalFolders, start);
                 }
             }, Qt::QueuedConnection);
         });
+}
+
+void IndexService::onExpectedEntries(const QString &path, quint64 generation, qint64 entries)
+{
+    const auto found = m_roots.find(path);
+    if (found == m_roots.end() || found->second->generation != generation) {
+        return;
+    }
+    found->second->status.expectedEntries = entries;
+    emit changed();
 }
 
 void IndexService::onProgress(const QString &path, quint64 generation, const SyncProgress &progress)
@@ -328,7 +460,7 @@ void IndexService::onProgress(const QString &path, quint64 generation, const Syn
 }
 
 void IndexService::onFinished(const QString &path, quint64 generation, const core::Status &status,
-                              const IndexInfo &info)
+                              const IndexInfo &info, qint64 journalFolders, const JournalPosition &start)
 {
     const auto found = m_roots.find(path);
     if (found == m_roots.end() || found->second->generation != generation) {
@@ -339,6 +471,15 @@ void IndexService::onFinished(const QString &path, quint64 generation, const cor
     m_running = false;
     root.status.info = info;
     root.status.progress = {};
+    if (journalFolders >= 0) {
+        root.status.journalFolders = journalFolders;
+    }
+    if (info.complete) {
+        root.status.expectedEntries = 0;
+    }
+    if (status.ok()) {
+        root.previousStart = start;
+    }
     if (status.ok()) {
         root.status.state = info.complete ? RootStatus::State::Ready : RootStatus::State::Building;
         root.status.error.clear();

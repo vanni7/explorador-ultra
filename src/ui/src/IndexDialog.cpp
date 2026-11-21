@@ -6,13 +6,18 @@
 #include <QDateTime>
 #include <QDialogButtonBox>
 #include <QDir>
+#include <QGroupBox>
 #include <QHBoxLayout>
 #include <QHeaderView>
 #include <QLabel>
 #include <QLocale>
+#include <QMessageBox>
 #include <QPushButton>
 #include <QTreeWidget>
 #include <QVBoxLayout>
+
+#include <algorithm>
+#include <climits>
 
 namespace eu::ui {
 
@@ -29,6 +34,11 @@ QString indexStateText(const index::RootStatus &status)
     const QString folders = QLocale().toString(status.progress.foldersScanned);
     switch (status.state) {
     case State::Building:
+        if (status.expectedEntries > 0) {
+            // La tabla de archivos de la unidad dice cuántas entradas esperar.
+            const qint64 percent = std::min<qint64>(99, status.progress.entriesSeen * 100 / status.expectedEntries);
+            return IndexDialog::tr("Indexando… %1 % (%2 carpetas)").arg(percent).arg(folders);
+        }
         return IndexDialog::tr("Indexando… %1 carpetas").arg(folders);
     case State::Updating:
         return IndexDialog::tr("Poniéndose al día… %1 carpetas").arg(folders);
@@ -94,6 +104,29 @@ IndexDialog::IndexDialog(index::IndexService &service, VolumeSource volumes, QWi
     layout->addWidget(intro);
     layout->addWidget(m_list, 1);
     layout->addWidget(m_note);
+
+    // El servicio opcional de Windows (SPEC §6.4): solo con consentimiento
+    // explícito y con el permiso de administrador que pide Windows.
+    auto *serviceBox = new QGroupBox(tr("Búsqueda acelerada en Windows (opcional)"), this);
+    m_serviceBox = serviceBox;
+    m_serviceLabel = new QLabel(serviceBox);
+    m_serviceLabel->setWordWrap(true);
+    m_serviceButton = new QPushButton(serviceBox);
+    auto *serviceLayout = new QHBoxLayout(serviceBox);
+    serviceLayout->addWidget(m_serviceLabel, 1);
+    serviceLayout->addWidget(m_serviceButton, 0, Qt::AlignTop);
+    layout->addWidget(serviceBox);
+    connect(m_serviceButton, &QPushButton::clicked, this, [this] {
+        runServiceSetup(index::journalservice::state() == index::journalservice::State::NotInstalled);
+    });
+    m_setupTimer.setInterval(300);
+    connect(&m_setupTimer, &QTimer::timeout, this, [this] {
+        if (m_setup && m_setup->isFinished()) {
+            onServiceSetupFinished();
+        }
+    });
+    updateService();
+
     layout->addLayout(buttons);
 
     connect(closeButton, &QPushButton::clicked, this, &QDialog::accept);
@@ -172,10 +205,15 @@ void IndexDialog::updateRows()
         item->setText(EntriesColumn, (status && status->info.entries > 0)
                                          ? QLocale().toString(status->info.entries) : QString());
         if (status && status->info.updatedMs > 0) {
-            item->setToolTip(StateColumn, tr("Último recorrido completo: %1")
-                                              .arg(QLocale().toString(
-                                                  QDateTime::fromMSecsSinceEpoch(status->info.updatedMs),
-                                                  QLocale::ShortFormat)));
+            QString tip = tr("Último recorrido completo: %1")
+                              .arg(QLocale().toString(QDateTime::fromMSecsSinceEpoch(status->info.updatedMs),
+                                                      QLocale::ShortFormat));
+            if (status->journalFolders >= 0) {
+                tip += QLatin1Char('\n')
+                    + tr("Al abrir se puso al día con el diario de cambios de NTFS: %n carpeta(s) cambiada(s).",
+                         nullptr, int(std::min<qint64>(status->journalFolders, INT_MAX)));
+            }
+            item->setToolTip(StateColumn, tip);
         }
         limited = limited || (status && status->watchLimited);
     }
@@ -196,6 +234,106 @@ void IndexDialog::updateRows()
                            "Después reinicia Explorador Ultra."));
     }
     m_note->setVisible(limited);
+}
+
+void IndexDialog::updateService()
+{
+    using State = index::journalservice::State;
+    const State state = index::journalservice::state();
+    m_serviceBox->setVisible(state != State::Unavailable);
+    if (state == State::Unavailable) {
+        return;
+    }
+    if (m_setup) {
+        m_serviceButton->setEnabled(false);
+        m_serviceLabel->setText(m_setupInstalls ? tr("Instalando el servicio…") : tr("Quitando el servicio…"));
+        return;
+    }
+    m_serviceButton->setEnabled(true);
+    QString text;
+    switch (state) {
+    case State::NotInstalled:
+        text = tr("Un servicio de Explorador Ultra puede leer el diario de cambios de NTFS para que, al abrir la "
+                  "aplicación, los índices se pongan al día en segundos en vez de recorrer las unidades enteras. "
+                  "Solo lee, no envía nada fuera del equipo y se puede quitar cuando quieras; instalarlo pide "
+                  "permiso de administrador. Sin él todo funciona igual.");
+        m_serviceButton->setText(tr("Instalar…"));
+        break;
+    case State::Running:
+        text = tr("El servicio está instalado y en marcha: los índices de las unidades NTFS se ponen al día con "
+                  "su diario de cambios.");
+        m_serviceButton->setText(tr("Desinstalar…"));
+        break;
+    case State::Stopped:
+        text = tr("El servicio está instalado pero detenido: Windows lo arranca al iniciar. Mientras tanto, los "
+                  "índices se ponen al día recorriendo las unidades.");
+        m_serviceButton->setText(tr("Desinstalar…"));
+        break;
+    case State::Unavailable:
+        break;
+    }
+    if (!m_serviceMessage.isEmpty()) {
+        text = m_serviceMessage + QLatin1Char(' ') + text;
+    }
+    m_serviceLabel->setText(text);
+}
+
+void IndexDialog::runServiceSetup(bool install)
+{
+    const QString question =
+        install ? tr("Se instalará el servicio «Explorador Ultra: índice de NTFS», que se ejecuta con permisos de "
+                     "sistema y solo lee el diario de cambios de las unidades NTFS. Windows pedirá permiso de "
+                     "administrador. ¿Instalarlo?")
+                : tr("Se parará y se quitará el servicio. Windows pedirá permiso de administrador. Los índices se "
+                     "pondrán al día recorriendo las unidades, como antes. ¿Quitarlo?");
+    if (QMessageBox::question(this, install ? tr("Instalar el servicio") : tr("Quitar el servicio"), question)
+        != QMessageBox::Yes) {
+        return;
+    }
+    m_serviceMessage.clear();
+    m_serviceButton->setEnabled(false);
+    m_serviceLabel->setText(tr("Esperando el permiso de administrador…"));
+    const core::Result<index::journalservice::Setup> started = index::journalservice::Setup::start(install);
+    if (!started.ok()) {
+        m_serviceMessage = started.error().code == core::ErrorCode::Cancelled
+            ? tr("No se dio el permiso: no se cambió nada.")
+            : tr("No se pudo: %1.").arg(started.error().message);
+        updateService();
+        return;
+    }
+    m_setup = started.value();
+    m_setupInstalls = install;
+    m_setupTimer.start();
+    updateService();
+}
+
+void IndexDialog::onServiceSetupFinished()
+{
+    m_setupTimer.stop();
+    const int code = m_setup->exitCode();
+    m_setup.reset();
+    // Los códigos de salida de eu-indexsvc (src/indexsvc/main.cpp).
+    switch (code) {
+    case 0:
+        m_serviceMessage = m_setupInstalls ? tr("Instalado.") : tr("Quitado.");
+        break;
+    case 2:
+        m_serviceMessage = tr("No se pudo: hace falta permiso de administrador.");
+        break;
+    case 3:
+        m_serviceMessage = tr("No se pudo copiar el servicio a «Archivos de programa».");
+        break;
+    case 4:
+        m_serviceMessage = tr("El administrador de servicios de Windows no lo permitió.");
+        break;
+    case 5:
+        m_serviceMessage = tr("Se instaló pero no arrancó; el motivo está en el Visor de eventos de Windows.");
+        break;
+    default:
+        m_serviceMessage = tr("No se pudo (código %1).").arg(code);
+        break;
+    }
+    updateService();
 }
 
 QTreeWidgetItem *IndexDialog::itemFor(const QString &root) const

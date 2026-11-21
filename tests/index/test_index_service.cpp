@@ -7,6 +7,9 @@
 #include <QTemporaryDir>
 #include <QTest>
 
+#include <atomic>
+#include <mutex>
+
 using namespace eu;
 using namespace eu::index;
 
@@ -41,6 +44,53 @@ bool waitReady(IndexService &service, const QString &root)
         return status && status->state == RootStatus::State::Ready && !service.isBusy();
     }, 30000);
 }
+
+/// Un diario de cambios de mentira: la prueba dice qué carpetas cambiaron.
+class FakeJournal : public ChangeJournal
+{
+public:
+    QString volumeOf(const QString &) const override { return QStringLiteral("X:"); }
+
+    core::Result<JournalPosition> position(const QString &) const override { return JournalPosition{7, now.load()}; }
+
+    core::Result<JournalChanges> changesSince(const QString &, const JournalPosition &since,
+                                              int maxFolders) const override
+    {
+        const std::lock_guard<std::mutex> lock(m_mutex);
+        ++m_asked;
+        m_lastSince = since;
+        if (recreated) {
+            return core::Error{core::ErrorCode::Corrupted, QStringLiteral("diario recreado"), QString(), 0};
+        }
+        if (changed.size() > maxFolders) {
+            return core::Error{core::ErrorCode::Busy, QStringLiteral("demasiados"), QString(), 0};
+        }
+        return JournalChanges{changed, JournalPosition{7, now.load()}};
+    }
+
+    core::Result<VolumeCounts> counts(const QString &) const override { return VolumeCounts{100, 10}; }
+
+    int asked() const
+    {
+        const std::lock_guard<std::mutex> lock(m_mutex);
+        return m_asked;
+    }
+    JournalPosition lastSince() const
+    {
+        const std::lock_guard<std::mutex> lock(m_mutex);
+        return m_lastSince;
+    }
+
+    std::atomic<qint64> now{100};
+    // Se cambian solo con el servicio parado.
+    QStringList changed;
+    bool recreated = false;
+
+private:
+    mutable std::mutex m_mutex;
+    mutable int m_asked = 0;
+    mutable JournalPosition m_lastSince;
+};
 
 } // namespace
 
@@ -145,6 +195,72 @@ private slots:
         QCOMPARE(second.statusOf(root)->state, RootStatus::State::Building);
         QVERIFY(waitReady(second, root));
         QCOMPARE(second.statusOf(root)->info.entries, 2);
+    }
+
+    void catchesUpWithTheChangeJournalInsteadOfWalkingTheDisk()
+    {
+        QTemporaryDir tree;
+        QTemporaryDir data;
+        const QString root = QDir::cleanPath(tree.path());
+        writeFile(root + QStringLiteral("/a/viejo.txt"));
+        writeFile(root + QStringLiteral("/b/viejo2.txt"));
+        const auto journal = std::make_shared<FakeJournal>();
+        const auto open = [&](IndexService &service) {
+            service.setChangeJournal(journal);
+            service.setExcludedNames({QStringLiteral("papelera")});
+            service.addRoot(root);
+        };
+        {
+            // La primera vez se recorre entera y se anota hasta dónde llegaba el diario.
+            IndexService first(m_scheduler, data.path());
+            open(first);
+            QCOMPARE(first.statusOf(root)->state, RootStatus::State::Building);
+            QVERIFY(waitReady(first, root));
+            QCOMPARE(journal->asked(), 0);
+            QCOMPARE(first.indexFor(root)->property(QStringLiteral("diario")), QStringLiteral("7:100"));
+        }
+
+        // Con la aplicación cerrada: cambian «a» y «b», pero el diario (de
+        // mentira) solo cuenta «a». Si se recorriera el disco, saldría lo de «b».
+        writeFile(root + QStringLiteral("/a/nuevo-a.txt"));
+        writeFile(root + QStringLiteral("/b/nuevo-b.txt"));
+        writeFile(root + QStringLiteral("/papelera/tirado.txt"));
+        journal->now = 200;
+        journal->changed = {root + QStringLiteral("/a"), root + QStringLiteral("/papelera"),
+                            QStringLiteral("/fuera/de/la/raiz")};
+        {
+            IndexService second(m_scheduler, data.path());
+            open(second);
+            QCOMPARE(second.statusOf(root)->state, RootStatus::State::Updating);
+            QVERIFY(waitReady(second, root));
+            QCOMPARE(journal->asked(), 1);
+            QCOMPARE(journal->lastSince().usn, qint64(100));
+            const auto index = second.indexFor(root);
+            QCOMPARE(find(*index, QStringLiteral("nuevo")), QStringList{root + QStringLiteral("/a/nuevo-a.txt")});
+            QVERIFY(find(*index, QStringLiteral("tirado")).isEmpty());   // la papelera no se indexa
+            // Solo «a»: lo de fuera de la raíz y la papelera se descartan.
+            QCOMPARE(second.statusOf(root)->journalFolders, qint64(1));
+            QCOMPARE(index->property(QStringLiteral("diario")), QStringLiteral("7:200"));
+        }
+
+        // Si el diario no sirve (se volvió a crear), se recorre entera como siempre.
+        journal->recreated = true;
+        {
+            IndexService third(m_scheduler, data.path());
+            open(third);
+            QVERIFY(waitReady(third, root));
+            QCOMPARE(journal->asked(), 2);
+            QCOMPARE(third.statusOf(root)->journalFolders, qint64(-1));
+            QCOMPARE(find(*third.indexFor(root), QStringLiteral("nuevo")),
+                     (QStringList{root + QStringLiteral("/a/nuevo-a.txt"), root + QStringLiteral("/b/nuevo-b.txt")}));
+        }
+
+        // Sin diario (otro sistema, o el servicio sin instalar), lo de siempre.
+        IndexService fourth(m_scheduler, data.path());
+        fourth.setChangeJournal(nullptr);
+        fourth.addRoot(root);
+        QVERIFY(waitReady(fourth, root));
+        QCOMPARE(journal->asked(), 2);
     }
 
     void anUnmountedRootKeepsItsIndex()

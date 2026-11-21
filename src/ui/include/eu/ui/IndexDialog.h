@@ -5,8 +5,10 @@
 #include "eu/index/IndexService.h"
 
 #include <QDialog>
+#include <QTimer>
 
 #include <functional>
+#include <optional>
 
 class QLabel;
 class QPushButton;
@@ -30,6 +32,8 @@ public:
     IndexDialog(index::IndexService &service, VolumeSource volumes, QWidget *parent = nullptr);
 
     QTreeWidget *list() const { return m_list; }
+    /// El recuadro del servicio de Windows (oculto donde no existe).
+    QWidget *serviceBox() const { return m_serviceBox; }
     /// Marca o desmarca una unidad, como haría el usuario.
     void setIndexed(const QString &root, bool indexed);
 
@@ -42,6 +46,9 @@ private:
     void updateRows();
     QTreeWidgetItem *itemFor(const QString &root) const;
     QString selectedRoot() const;
+    void updateService();
+    void runServiceSetup(bool install);
+    void onServiceSetupFinished();
 
     index::IndexService &m_service;
     VolumeSource m_volumes;
@@ -50,6 +57,13 @@ private:
     QPushButton *m_pauseButton = nullptr;
     QPushButton *m_refreshButton = nullptr;
     QPushButton *m_rebuildButton = nullptr;
+    QWidget *m_serviceBox = nullptr;
+    QLabel *m_serviceLabel = nullptr;
+    QPushButton *m_serviceButton = nullptr;
+    QTimer m_setupTimer;   ///< Mira si terminó el instalador lanzado como administrador.
+    std::optional<index::journalservice::Setup> m_setup;
+    bool m_setupInstalls = false;
+    QString m_serviceMessage;   ///< Resultado de la última instalación o desinstalación.
     bool m_updating = false;
 };
 

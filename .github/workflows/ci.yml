@@ -106,6 +106,10 @@ jobs:
 
       - name: Pruebas
         run: ctest --preset ${{ matrix.preset }}
+        env:
+          # En Windows la CI es administradora: se prueba a instalar, usar y
+          # quitar el servicio de NTFS de verdad (test_index_journal_service).
+          EU_PRUEBA_INSTALAR_SERVICIO: "1"
 
       # Si una prueba falla sin dejar salida (el proceso murió de golpe), se
       # repite sola y con todo detalle: así queda el código de salida a la vista.

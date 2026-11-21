@@ -268,6 +268,34 @@ IndexInfo Index::info() const
     return info;
 }
 
+QString Index::property(const QString &key) const
+{
+    Connection connection(m_databasePath);
+    return connection.isOpen() ? metaValue(connection.database(), QStringLiteral("propio.") + key) : QString();
+}
+
+bool Index::setProperty(const QString &key, const QString &value) const
+{
+    Connection connection(m_databasePath);
+    return connection.isOpen() && setMetaValue(connection.database(), QStringLiteral("propio.") + key, value);
+}
+
+void Index::forEachFolder(const std::function<void(const QString &)> &visit, const tasks::CancelToken &cancel) const
+{
+    Connection connection(m_databasePath);
+    if (!connection.isOpen()) {
+        return;
+    }
+    QSqlQuery query(connection.database());
+    query.setForwardOnly(true);
+    if (!query.exec(QStringLiteral("SELECT path FROM dirs"))) {
+        return;
+    }
+    while (query.next() && !cancel.isCancelled()) {
+        visit(absolutePath(query.value(0).toString()));
+    }
+}
+
 core::Result<SyncProgress> Index::sync(const QString &folder, const SyncOptions &options,
                                        const tasks::CancelToken &cancel) const
 {

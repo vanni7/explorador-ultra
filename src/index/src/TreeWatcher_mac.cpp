@@ -61,6 +61,7 @@ public:
 
     bool isActive() const override { return m_stream != nullptr; }
     void addFolder(const QString &) override {}   // el sistema ya vigila el árbol entero
+    bool watchesWholeTree() const override { return true; }
 
 private:
     static void onEvents(ConstFSEventStreamRef, void *info, size_t count, void *eventPaths,

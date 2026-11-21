@@ -77,6 +77,16 @@ public:
 
     IndexInfo info() const;
 
+    /// Datos propios de quien usa el índice (p. ej. hasta dónde se leyó el
+    /// diario de cambios de NTFS), guardados con él. Se pierden si el índice
+    /// se vacía (otra carpeta u otra versión). Vacío si no existe.
+    QString property(const QString &key) const;
+    bool setProperty(const QString &key, const QString &value) const;
+
+    /// Llama a `visit` con cada carpeta anotada (rutas absolutas), sin leer
+    /// el disco. Bloqueante: se llama desde una tarea.
+    void forEachFolder(const std::function<void(const QString &)> &visit, const tasks::CancelToken &cancel) const;
+
     /// Pone el índice de acuerdo con el disco a partir de `folder` (que debe
     /// ser la raíz o estar dentro de ella). Bloqueante: se llama desde una tarea.
     core::Result<SyncProgress> sync(const QString &folder, const SyncOptions &options,

@@ -1,6 +1,7 @@
 // Explorador Ultra — SPDX-License-Identifier: GPL-3.0-or-later
 #pragma once
 
+#include "eu/index/ChangeJournal.h"
 #include "eu/index/Index.h"
 #include "eu/index/TreeWatcher.h"
 #include "eu/tasks/Scheduler.h"
@@ -35,6 +36,14 @@ struct RootStatus
     bool watchLimited = false;    ///< Faltan carpetas por vigilar (límite de inotify).
     qint64 watchedFolders = 0;
     QString error;
+    /// Al arrancar se puso al día con el diario de cambios del sistema (en
+    /// Windows, el servicio de NTFS) en vez de recorrerla: cuántas carpetas
+    /// leyó. -1 si no fue así.
+    qint64 journalFolders = -1;
+    /// Mientras se construye por primera vez una unidad entera: cuántas
+    /// entradas tiene según su tabla de archivos (MFT), para el avance. 0 si
+    /// no se sabe.
+    qint64 expectedEntries = 0;
 };
 
 /// Mantiene los índices de las carpetas elegidas: los construye en segundo
@@ -54,6 +63,12 @@ public:
 
     /// Nombres que no se indexan (la carpeta de la papelera).
     void setExcludedNames(const QStringList &names) { m_excludedNames = names; }
+
+    /// El diario de cambios del sistema, para ponerse al día al arrancar sin
+    /// recorrer la unidad entera. De fábrica, systemChangeJournal() (en
+    /// Windows, el servicio opcional); nullptr para no usarlo. Vale para las
+    /// carpetas que se añadan después.
+    void setChangeJournal(std::shared_ptr<ChangeJournal> journal) { m_journal = std::move(journal); }
 
     QStringList roots() const;
     QList<RootStatus> status() const;
@@ -95,12 +110,15 @@ private:
     void startNext();
     void startTask(Root &root);
     void onProgress(const QString &root, quint64 generation, const SyncProgress &progress);
-    void onFinished(const QString &root, quint64 generation, const core::Status &status, const IndexInfo &info);
+    void onFinished(const QString &root, quint64 generation, const core::Status &status, const IndexInfo &info,
+                    qint64 journalFolders, const JournalPosition &start);
+    void onExpectedEntries(const QString &root, quint64 generation, qint64 entries);
     void stopTask(Root &root);
 
     tasks::Scheduler &m_scheduler;
     QString m_dataDirectory;
     QStringList m_excludedNames;
+    std::shared_ptr<ChangeJournal> m_journal = systemChangeJournal();
     std::map<QString, std::unique_ptr<Root>> m_roots;
     QHash<QString, QString> m_failures;   ///< Carpetas cuya base no se pudo abrir, con el motivo.
     std::shared_ptr<search::PauseGate> m_gate;

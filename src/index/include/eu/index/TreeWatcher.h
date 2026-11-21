@@ -43,6 +43,9 @@ public:
     virtual bool isLimited() const { return false; }
     /// Cuántas carpetas se vigilan una a una (0 donde se vigila el árbol entero).
     virtual qint64 watchedFolders() const { return 0; }
+    /// true si el sistema vigila el árbol entero de una vez (Windows, macOS);
+    /// false si hay que pedirle cada carpeta con addFolder() (Linux).
+    virtual bool watchesWholeTree() const { return false; }
 
 signals:
     /// Cambió el contenido de esta carpeta (algo se creó, borró, renombró o se
