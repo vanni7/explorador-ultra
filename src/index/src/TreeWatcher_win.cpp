@@ -53,6 +53,7 @@ public:
     bool isActive() const override { return m_directory != INVALID_HANDLE_VALUE; }
     void addFolder(const QString &) override {}   // el sistema ya vigila el árbol entero
     bool watchesWholeTree() const override { return true; }
+    void setIgnoredEntries(const QStringList &entries) override { m_ignoredEntries = entries; }
 
 private:
     void run()
@@ -116,11 +117,14 @@ private:
                 offset += info->NextEntryOffset;
             }
             QMetaObject::invokeMethod(this, [this, changed, modified] {
-                for (const QString &folder : changed) {
-                    emit folderChanged(folder);
-                }
+                QSet<QString> folders = changed;
                 for (auto it = modified.cbegin(); it != modified.cend(); ++it) {
-                    emit entryModified(it.value(), it.key());
+                    if (!m_ignoredEntries.contains(it.key(), Qt::CaseInsensitive)) {
+                        folders.insert(it.value());
+                    }
+                }
+                for (const QString &folder : folders) {
+                    emit folderChanged(folder);
                 }
             }, Qt::QueuedConnection);
         }
@@ -131,6 +135,7 @@ private:
     HANDLE m_stop = nullptr;
     HANDLE m_ready = nullptr;
     std::thread m_thread;
+    QStringList m_ignoredEntries;   // solo se usa en el hilo del objeto
 };
 
 } // namespace

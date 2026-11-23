@@ -104,6 +104,9 @@ void IndexService::setIgnoredFolders(const QStringList &folders)
             m_ignoredFolders.append(QDir::cleanPath(folder));
         }
     }
+    for (auto &entry : m_roots) {
+        entry.second->watcher->setIgnoredEntries(m_ignoredFolders);
+    }
 }
 
 bool IndexService::isIgnored(const QString &folder) const
@@ -195,21 +198,11 @@ void IndexService::addRoot(const QString &path)
         root->wholePending = true;
     }
     root->watcher = TreeWatcher::create(clean);
+    root->watcher->setIgnoredEntries(m_ignoredFolders);
     Root *raw = root.get();
     connect(root->watcher.get(), &TreeWatcher::folderChanged, this, [this, raw](const QString &folder) {
         if (isIgnored(folder)) {
             return;   // lo escribe la propia aplicación (ver setIgnoredFolders)
-        }
-        raw->dirty.insert(folder);
-        schedule();
-    });
-    connect(root->watcher.get(), &TreeWatcher::entryModified, this,
-            [this, raw](const QString &folder, const QString &entry) {
-        // Al escribir en la carpeta de datos, Windows avisa también de la
-        // carpeta misma como «modificada» dentro de su madre. Si eso contara,
-        // se releería la madre, se escribiría en la base y vuelta a empezar.
-        if (isIgnored(folder) || isIgnored(entry)) {
-            return;
         }
         raw->dirty.insert(folder);
         schedule();
