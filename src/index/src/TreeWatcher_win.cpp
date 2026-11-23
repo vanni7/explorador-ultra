@@ -2,6 +2,7 @@
 #include "eu/index/TreeWatcher.h"
 
 #include <QDir>
+#include <QHash>
 #include <QSet>
 
 #include <thread>
@@ -92,6 +93,7 @@ private:
                 continue;
             }
             QSet<QString> changed;
+            QHash<QString, QString> modified;   // elemento -> carpeta que lo contiene
             const auto *base = reinterpret_cast<const BYTE *>(buffer.data());
             DWORD offset = 0;
             while (true) {
@@ -101,15 +103,24 @@ private:
                 // Cambia la carpeta que contiene al elemento nombrado.
                 const qsizetype slash = relative.lastIndexOf(QLatin1Char('/'));
                 const QString prefix = root().endsWith(QLatin1Char('/')) ? root() : root() + QLatin1Char('/');
-                changed.insert(slash < 0 ? root() : prefix + relative.left(slash));
+                const QString folder = slash < 0 ? root() : prefix + relative.left(slash);
+                if (info->Action == FILE_ACTION_MODIFIED) {
+                    // Puede ser una carpeta a la que solo se le escribió dentro.
+                    modified.insert(prefix + relative, folder);
+                } else {
+                    changed.insert(folder);
+                }
                 if (info->NextEntryOffset == 0) {
                     break;
                 }
                 offset += info->NextEntryOffset;
             }
-            QMetaObject::invokeMethod(this, [this, changed] {
+            QMetaObject::invokeMethod(this, [this, changed, modified] {
                 for (const QString &folder : changed) {
                     emit folderChanged(folder);
+                }
+                for (auto it = modified.cbegin(); it != modified.cend(); ++it) {
+                    emit entryModified(it.value(), it.key());
                 }
             }, Qt::QueuedConnection);
         }

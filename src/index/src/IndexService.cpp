@@ -203,6 +203,17 @@ void IndexService::addRoot(const QString &path)
         raw->dirty.insert(folder);
         schedule();
     });
+    connect(root->watcher.get(), &TreeWatcher::entryModified, this,
+            [this, raw](const QString &folder, const QString &entry) {
+        // Al escribir en la carpeta de datos, Windows avisa también de la
+        // carpeta misma como «modificada» dentro de su madre. Si eso contara,
+        // se releería la madre, se escribiría en la base y vuelta a empezar.
+        if (isIgnored(folder) || isIgnored(entry)) {
+            return;
+        }
+        raw->dirty.insert(folder);
+        schedule();
+    });
     connect(root->watcher.get(), &TreeWatcher::overflowed, this, [this, raw] {
         // Se perdieron avisos: el diario sabe cuáles (si lo hay); si no, se recorre.
         if (raw->volume.isEmpty()) {

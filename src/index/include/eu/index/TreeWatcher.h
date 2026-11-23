@@ -51,6 +51,11 @@ signals:
     /// Cambió el contenido de esta carpeta (algo se creó, borró, renombró o se
     /// terminó de escribir).
     void folderChanged(const QString &folder);
+    /// Se modificó `entry`, un elemento de `folder`, sin crearse ni borrarse
+    /// (solo Windows). Va aparte porque Windows también lo dice de una carpeta
+    /// cuando se escribe dentro de ella: quien escucha debe poder descartarlo
+    /// si esa carpeta es una de las que no se siguen.
+    void entryModified(const QString &folder, const QString &entry);
     /// El sistema descartó avisos: hay que volver a recorrer el árbol.
     void overflowed();
     /// Se alcanzó el límite de carpetas vigiladas (solo Linux).
