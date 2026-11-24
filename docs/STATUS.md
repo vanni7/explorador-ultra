@@ -1,6 +1,6 @@
 # Estado del proyecto
 
-Última actualización: 2026-11-24 · Fase actual: **5 (en curso, rama `fase-5/profesional`)**; la Fase 4 se entregó el 17-nov con puntos abiertos (ver `INFORME_FASE_4.md`); la Fase 3, el 16-nov (`INFORME_FASE_3.md`); la Fase 2, el 14-nov (`INFORME_FASE_2.md`)
+Última actualización: 2026-11-24 · Fase actual: **6 (en curso, rama `fase-6/optimizacion`; empezó el 24-nov por las mediciones)**; la Fase 4 se entregó el 17-nov con puntos abiertos (ver `INFORME_FASE_4.md`); la Fase 3, el 16-nov (`INFORME_FASE_3.md`); la Fase 2, el 14-nov (`INFORME_FASE_2.md`)
 
 Estados: **Terminada** (cumple §26) · **Parcial** · **Pendiente** · **Bloqueada**.
 

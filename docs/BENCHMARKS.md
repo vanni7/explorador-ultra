@@ -194,6 +194,24 @@ VM de Windows 11 (6 núcleos), unidad C: con unas 362 900 entradas, servicio ins
 
 Mide la consulta, no el arranque completo de la aplicación (que además relee las carpetas cambiadas). Disco virtual; sin caché fría real.
 
+### Ventana real con 100 000 archivos (Fase 6, 24-nov)
+`eu-bench-ui open <carpeta>` abre la carpeta en una `MainWindow` de verdad (plataforma `offscreen`, ajustes aislados) y mide con un temporizador de 1 ms el mayor hueco del bucle de eventos (= bloqueo de la interfaz). Carpeta de `eu-bench mktree` (100 000 archivos vacíos, nombres variados) en el SSD del sistema, caché caliente, Ubuntu 26.04, tres vueltas:
+
+| Medida | Resultado | Meta (SPEC §4) |
+|---|---|---|
+| Primeros elementos en la lista | 121–133 ms | < 300 ms ✔ |
+| Listado completo | 544–572 ms | < 3 s ✔ |
+| Bloqueo máximo de la interfaz al abrir | 27–29 ms | < 50 ms ✔ (objetivo 16 ms: ✘) |
+| Memoria de la pestaña con 100 000 elementos | +36–37 MB (75 → 111 MB el proceso entero) | < 300 MB ✔ |
+| Ordenar por tamaño, fecha o nombre | 7–14 ms (bloqueo ≤ 12,8 ms) | — |
+| Seleccionar todo | bloqueo ≤ 1 ms | — |
+
+`eu-bench-ui cancel <carpeta>`: medir el tamaño de la carpeta personal y cancelar a los 300 ms, cinco veces: la tarea terminó entre 0,1 y 1,6 ms después de pedirlo (meta < 500 ms ✔).
+
+Observado: las dos primeras ejecuciones de `eu-bench-ui open` se quedaron más de 20 s sin terminar de abrir; con los mismos datos no volvió a pasar en cinco vueltas más. Causa sin aclarar (el sistema no deja engancharse con gdb: `ptrace_scope=1`); si se repite, mirar el estado del modelo que imprime cada 2 s.
+
+No medido aún: lo mismo en Windows (VM) y con caché fría; el objetivo de 16 ms de bloqueo (el hueco de 27–29 ms está al llegar los lotes del listado).
+
 ### No medido todavía (pendiente)
 - Tiempo de apertura real de una carpeta en Archivos de GNOME (no hay forma fiable de automatizarlo; `gio list` es una aproximación de su motor, no de su interfaz).
 - Caché fría, HDD, USB y unidades de red.
