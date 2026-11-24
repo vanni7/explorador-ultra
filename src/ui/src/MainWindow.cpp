@@ -335,18 +335,7 @@ MainWindow::MainWindow(tasks::Scheduler &scheduler, std::shared_ptr<journal::Jou
     });
     connect(m_sidebar, &Sidebar::filesDropped, this, &MainWindow::transfer);
     connect(m_sidebar, &Sidebar::contextMenuRequested, this, &MainWindow::showSidebarMenu);
-    // Ctrl+V con el teclado en el árbol pega en la carpeta elegida en él
-    // (como "Pegar en esta carpeta" de su menú).
-    auto *pasteInTree = new QAction(tr("Pegar en la carpeta del árbol"), m_sidebar);
-    pasteInTree->setShortcut(QKeySequence::Paste);
-    pasteInTree->setShortcutContext(Qt::WidgetShortcut);
-    m_sidebar->addAction(pasteInTree);
-    connect(pasteInTree, &QAction::triggered, this, [this] {
-        const QString place = m_sidebar->currentPlace();
-        if (m_actions->isAvailable() && !place.isEmpty() && QFileInfo(place).isDir()) {
-            pasteInto(place);
-        }
-    });
+    createSidebarActions();
     m_sidebar->setMoveByDefaultRule([this](const QString &source, const QString &destination) {
         return movesByDefault(source, destination);
     });
@@ -599,6 +588,9 @@ void MainWindow::createActions()
     sizeMenu->addSeparator();
     sizeMenu->addAction(m_largerThumbnailsAction);
     sizeMenu->addAction(m_smallerThumbnailsAction);
+    // Se rellena al abrirse: marca el orden de la pestaña que se está viendo.
+    QMenu *sortMenu = viewMenu->addMenu(tr("Ordenar por"));
+    connect(sortMenu, &QMenu::aboutToShow, this, [this, sortMenu] { fillSortMenu(sortMenu, currentPane()); });
     viewMenu->addAction(m_previewAction);
     viewMenu->addAction(m_inlinePlaybackAction);
     viewMenu->addSeparator();
@@ -1041,8 +1033,21 @@ void MainWindow::showContextMenu(BrowserPane *pane, const QPoint &globalPosition
         menu.addAction(m_selectAllAction);
         menu.addAction(m_refreshAction);
     }
+    // Herramientas que trabajan sobre lo elegido o sobre esta carpeta.
+    menu.addSeparator();
+    if (pane->selectedCount() > 0) {
+        menu.addAction(m_printAction);
+    }
+    if (pane->showsFolder()) {
+        menu.addAction(m_organizeAction);
+        menu.addAction(m_duplicatesAction);
+        menu.addAction(m_syncAction);
+    }
     // Cómo se ve la carpeta, también desde aquí.
     menu.addSeparator();
+    if (pane->showsFolder()) {
+        addSortMenu(&menu, pane);
+    }
     QMenu *views = menu.addMenu(tr("Vista"));
     views->addAction(m_detailsAction);
     views->addAction(m_thumbnailsAction);
@@ -1061,6 +1066,51 @@ void MainWindow::showContextMenu(BrowserPane *pane, const QPoint &globalPosition
     views->addSeparator();
     views->addAction(m_dualPaneAction);
     menu.exec(globalPosition);
+}
+
+void MainWindow::addSortMenu(QMenu *menu, BrowserPane *pane)
+{
+    fillSortMenu(menu->addMenu(tr("Ordenar por")), pane);
+}
+
+void MainWindow::fillSortMenu(QMenu *sortMenu, BrowserPane *pane)
+{
+    // Ordenar por nombre, tamaño, fecha o tipo, de menor a mayor o al revés
+    // (lo mismo que pulsar en la cabecera de la vista detallada).
+    sortMenu->clear();
+    if (pane == nullptr || !pane->showsFolder()) {
+        sortMenu->addAction(tr("(No hay una carpeta a la vista)"))->setEnabled(false);
+        return;
+    }
+    const QPointer<BrowserPane> target(pane);
+    auto *columns = new QActionGroup(sortMenu);
+    for (const auto &[column, name] : {std::pair{Column::Name, tr("Nombre")}, std::pair{Column::Size, tr("Tamaño")},
+                                       std::pair{Column::Modified, tr("Fecha de modificación")},
+                                       std::pair{Column::Type, tr("Tipo")}}) {
+        QAction *action = sortMenu->addAction(name);
+        action->setCheckable(true);
+        action->setChecked(pane->sortColumn() == column);
+        columns->addAction(action);
+        connect(action, &QAction::triggered, this, [target, column = column] {
+            if (target) {
+                target->sortBy(column, target->sortOrder());
+            }
+        });
+    }
+    sortMenu->addSeparator();
+    auto *orders = new QActionGroup(sortMenu);
+    for (const auto &[order, name] : {std::pair{Qt::AscendingOrder, tr("Ascendente (A→Z, menor a mayor, más antiguo primero)")},
+                                      std::pair{Qt::DescendingOrder, tr("Descendente (Z→A, mayor a menor, más reciente primero)")}}) {
+        QAction *action = sortMenu->addAction(name);
+        action->setCheckable(true);
+        action->setChecked(pane->sortOrder() == order);
+        orders->addAction(action);
+        connect(action, &QAction::triggered, this, [target, order = order] {
+            if (target) {
+                target->sortBy(target->sortColumn(), order);
+            }
+        });
+    }
 }
 
 QString MainWindow::freeName(const QString &folder, const QString &stem, const QString &extension)
@@ -1405,7 +1455,11 @@ void MainWindow::showSimilarImages()
 void MainWindow::copyToClipboard(bool cut)
 {
     const BrowserPane *pane = currentPane();
-    const QStringList paths = pane ? pane->selectedPaths() : QStringList();
+    copyToClipboard(cut, pane ? pane->selectedPaths() : QStringList());
+}
+
+void MainWindow::copyToClipboard(bool cut, const QStringList &paths)
+{
     if (paths.isEmpty()) {
         return;
     }
@@ -1446,6 +1500,62 @@ void MainWindow::pasteInto(const QString &destination)
     }
 }
 
+void MainWindow::createSidebarActions()
+{
+    // Los atajos de Edición solo actúan en la zona de archivos; en el árbol
+    // tienen los suyos, que trabajan sobre la carpeta elegida en él.
+    const auto treeAction = [this](const QString &text, const QList<QKeySequence> &keys) {
+        auto *action = new QAction(text, m_sidebar);
+        action->setShortcuts(keys);
+        action->setShortcutContext(Qt::WidgetShortcut);
+        m_sidebar->addAction(action);
+        return action;
+    };
+    // Ctrl+V pega en la carpeta elegida (como "Pegar en esta carpeta").
+    connect(treeAction(tr("Pegar en la carpeta del árbol"), {QKeySequence::Paste}), &QAction::triggered, this, [this] {
+        const QString place = m_sidebar->currentPlace();
+        if (m_actions->isAvailable() && !place.isEmpty() && QFileInfo(place).isDir()) {
+            pasteInto(place);
+        }
+    });
+    // Copiar vale también para un favorito o una unidad: no cambia nada.
+    connect(treeAction(tr("Copiar la carpeta del árbol"), {QKeySequence::Copy}), &QAction::triggered, this, [this] {
+        const QString place = m_sidebar->currentPlace();
+        if (!place.isEmpty() && QFileInfo(place).isDir() && !QDir(place).isRoot()) {
+            copyToClipboard(false, {place});
+        }
+    });
+    // Cortar y borrar, solo subcarpetas (ver Sidebar::currentSubfolder).
+    connect(treeAction(tr("Cortar la carpeta del árbol"), {QKeySequence::Cut}), &QAction::triggered, this, [this] {
+        const QString folder = m_sidebar->currentSubfolder();
+        if (!folder.isEmpty()) {
+            copyToClipboard(true, {folder});
+        }
+    });
+#ifdef Q_OS_MACOS
+    const QKeySequence trashKey(Qt::CTRL | Qt::Key_Backspace);
+    const QKeySequence deleteKey(Qt::CTRL | Qt::ALT | Qt::Key_Backspace);
+#else
+    const QKeySequence trashKey(Qt::Key_Delete);
+    const QKeySequence deleteKey(Qt::SHIFT | Qt::Key_Delete);
+#endif
+    const auto removeFromTree = [this](bool permanently) {
+        const QString folder = m_sidebar->currentSubfolder();
+        if (folder.isEmpty()) {
+            if (!m_sidebar->currentPlace().isEmpty()) {
+                report(tr("Los favoritos y las unidades no se borran desde el árbol: despliégalos y elige una subcarpeta."),
+                       false);
+            }
+            return;
+        }
+        removePaths({folder}, permanently);
+    };
+    connect(treeAction(tr("Enviar la carpeta del árbol a la papelera"), {trashKey}), &QAction::triggered, this,
+            [removeFromTree] { removeFromTree(false); });
+    connect(treeAction(tr("Eliminar permanentemente la carpeta del árbol"), {deleteKey}), &QAction::triggered, this,
+            [removeFromTree] { removeFromTree(true); });
+}
+
 void MainWindow::showSidebarMenu(const QString &path, const QPoint &globalPosition)
 {
     QMenu menu(this);
@@ -1457,6 +1567,18 @@ void MainWindow::showSidebarMenu(const QString &path, const QPoint &globalPositi
     QAction *pasteHere = menu.addAction(m_pasteAction->icon(), tr("Pegar en esta carpeta"));
     pasteHere->setEnabled(m_actions->isAvailable()
                           && !fileSelectionFrom(QGuiApplication::clipboard()->mimeData()).isEmpty());
+    // Cortar y borrar solo para subcarpetas (el clic derecho ya dejó el
+    // cursor del árbol sobre el nodo pulsado).
+    const bool removable = m_actions->isAvailable() && m_sidebar->currentSubfolder() == path;
+    QAction *copy = menu.addAction(m_copyAction->icon(), tr("Copiar"));
+    copy->setEnabled(!QDir(path).isRoot());
+    QAction *cut = menu.addAction(m_cutAction->icon(), tr("Cortar"));
+    cut->setEnabled(removable);
+    menu.addSeparator();
+    QAction *trash = menu.addAction(m_trashAction->icon(), m_trashAction->text());
+    trash->setEnabled(removable);
+    QAction *erase = menu.addAction(m_deleteAction->icon(), m_deleteAction->text());
+    erase->setEnabled(removable);
     menu.addSeparator();
     QAction *copyPath = menu.addAction(tr("Copiar la ruta"));
 
@@ -1467,6 +1589,12 @@ void MainWindow::showSidebarMenu(const QString &path, const QPoint &globalPositi
         openTab(path);
     } else if (chosen == pasteHere) {
         pasteInto(path);
+    } else if (chosen == copy) {
+        copyToClipboard(false, {path});
+    } else if (chosen == cut) {
+        copyToClipboard(true, {path});
+    } else if (chosen == trash || chosen == erase) {
+        removePaths({path}, chosen == erase);
     } else if (chosen == copyPath) {
         QGuiApplication::clipboard()->setText(QDir::toNativeSeparators(path));
         statusBar()->showMessage(tr("Ruta copiada al portapapeles."), 4000);
@@ -1536,24 +1664,36 @@ ops::TransferOptions MainWindow::transferOptions(bool move)
 void MainWindow::trashSelection()
 {
     const BrowserPane *pane = currentPane();
-    const QStringList paths = pane ? pane->selectedPaths() : QStringList();
-    if (paths.isEmpty() || !m_actions->isAvailable()) {
-        return;
-    }
-    // Sin pregunta: enviar a la papelera se puede deshacer.
-    m_requestedCounts.insert(m_actions->trash(paths), int(paths.size()));
+    removePaths(pane ? pane->selectedPaths() : QStringList(), false);
 }
 
 void MainWindow::deleteSelectionPermanently()
 {
     const BrowserPane *pane = currentPane();
-    const QStringList paths = pane ? pane->selectedPaths() : QStringList();
+    removePaths(pane ? pane->selectedPaths() : QStringList(), true);
+}
+
+void MainWindow::removePaths(const QStringList &paths, bool permanently)
+{
     if (paths.isEmpty() || !m_actions->isAvailable()) {
         return;
     }
-    if (askPermanentDelete(paths, {})) {
-        m_requestedCounts.insert(m_actions->deletePermanently(paths), int(paths.size()));
+    // Sin pregunta: enviar a la papelera se puede deshacer.
+    if (permanently && !askPermanentDelete(paths, {})) {
+        return;
     }
+    for (BrowserPane *pane : allPanes()) {
+        const QString current = QDir::cleanPath(pane->currentPath());
+        for (const QString &path : paths) {
+            const QString removed = QDir::cleanPath(path);
+            if (current == removed || current.startsWith(removed + QLatin1Char('/'))) {
+                pane->navigateTo(parentPathOf(removed));
+                break;
+            }
+        }
+    }
+    m_requestedCounts.insert(permanently ? m_actions->deletePermanently(paths) : m_actions->trash(paths),
+                             int(paths.size()));
 }
 
 TrashDialog *MainWindow::showTrash()

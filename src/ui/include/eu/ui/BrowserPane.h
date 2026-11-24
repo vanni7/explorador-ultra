@@ -118,6 +118,10 @@ public:
     enum class ViewMode { Details, Thumbnails, Columns };
     void setViewMode(ViewMode mode);
     ViewMode viewMode() const { return m_viewMode; }
+    /// Orden de la carpeta (vale para todas las vistas: comparten el modelo).
+    void sortBy(Column column, Qt::SortOrder order);
+    Column sortColumn() const;
+    Qt::SortOrder sortOrder() const;
     ThumbnailView *thumbnailView() const { return m_thumbView; }
     MillerView *millerView() const { return m_millerView; }
     /// La vista de archivos que se usa ahora (detallada, miniaturas o la
@@ -271,6 +275,10 @@ private:
     void onSearchFinished(quint64 generation, const search::SearchSummary &summary);
     void onResultActivated(const QModelIndex &index);
     void updateSearchInfo();
+    /// Mide en segundo plano las carpetas seleccionadas cuyo tamaño aún no se
+    /// conoce, para que la barra de estado dé el peso de toda la selección.
+    void measureSelectedFolders();
+    void forgetSelectionSizes();
 
     tasks::Scheduler &m_scheduler;
     QString m_location;   ///< Lo que muestra la pestaña: una carpeta o volumesLocation().
@@ -323,6 +331,12 @@ private:
     QLineEdit *m_filterEdit = nullptr;
     QLabel *m_filterInfo = nullptr;
     QString m_filterProblem;   ///< Error de sintaxis o aviso del filtro escrito.
+
+    // Tamaño de las carpetas seleccionadas (ruta → acumulado; `finished` si es definitivo).
+    QHash<QString, DirectoryModel::FolderSize> m_selectionSizes;
+    tasks::TaskHandle m_selectionSizeTask;
+    QTimer m_selectionSizeTimer;   ///< Espera a que la selección se calme antes de medir.
+    quint64 m_selectionSizeGeneration = 0;
 
     QStringList m_backHistory;
     QStringList m_forwardHistory;

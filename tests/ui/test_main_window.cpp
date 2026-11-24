@@ -1,5 +1,6 @@
 // Explorador Ultra — SPDX-License-Identifier: GPL-3.0-or-later
 #include "eu/ui/BrowserPane.h"
+#include "eu/core/SizeFormat.h"
 #include "eu/ui/FileClipboard.h"
 #include "eu/ui/Locations.h"
 #include "eu/ui/MainWindow.h"
@@ -1501,6 +1502,42 @@ private slots:
             // Queda el estado del par para la próxima vez en los dos sentidos.
             QVERIFY(QFile::exists(sync::stateFile(QStandardPaths::writableLocation(QStandardPaths::AppDataLocation),
                                                   left, right)));
+
+            // Se puede volver a comparar. Lo borrado a un lado se reconoce como
+            // borrado (no como «falta») y se pregunta qué hacer con ello.
+            QVERIFY(QFile::remove(right + QStringLiteral("/nuevo.txt")));
+            dialog.startCompare();
+            QTRY_VERIFY(!dialog.isBusy());
+            QVERIFY2(dialog.summary()->text().contains(QStringLiteral("borrado")), qPrintable(dialog.summary()->text()));
+            dialog.setAskAboutDeletions();
+            QList<sync::Action> asked;
+            dialog.setDeletionChooserForTesting([&](const QList<sync::Action> &deletions) {
+                asked = deletions;
+                QHash<QString, sync::DeletionChoice> choices;
+                for (const sync::Action &action : deletions) {
+                    choices.insert(action.relativePath, sync::DeletionChoice::Propagate);
+                }
+                return std::optional<QHash<QString, sync::DeletionChoice>>(choices);
+            });
+            dialog.simulate();
+            QCOMPARE(asked.size(), 1);
+            QCOMPARE(asked.first().relativePath, QStringLiteral("nuevo.txt"));
+            QVERIFY(!asked.first().deletedOnLeft);
+            QVERIFY(dialog.planIsCurrent());
+            bool trashesLeft = false;
+            for (const sync::Action &action : dialog.plan().actions) {
+                trashesLeft = trashesLeft
+                    || (action.relativePath == QStringLiteral("nuevo.txt") && action.kind == sync::ActionKind::TrashLeft);
+            }
+            QVERIFY(trashesLeft);
+            // Si se cancela la pregunta, no queda simulación.
+            dialog.setDeletionChooserForTesting([](const QList<sync::Action> &) {
+                return std::optional<QHash<QString, sync::DeletionChoice>>();
+            });
+            dialog.startCompare();
+            QTRY_VERIFY(!dialog.isBusy());
+            dialog.simulate();
+            QVERIFY(!dialog.planIsCurrent());
         });
         window.showSync();
         QVERIFY(driven);
@@ -1842,6 +1879,118 @@ private slots:
         pane->navigateTo(beta);
         QVERIFY(waitReady(pane));
         QTRY_VERIFY(!sidebar->model()->hasChildren(indexOf(beta)));
+    }
+
+    void treeCopiesCutsAndDeletesItsSubfolders()
+    {
+        QTemporaryDir directory;
+        QVERIFY(QDir(directory.path()).mkpath(QStringLiteral("raiz/alfa/dentro")));
+        QVERIFY(QDir(directory.path()).mkpath(QStringLiteral("raiz/beta")));
+        QVERIFY(QDir(directory.path()).mkpath(QStringLiteral("otra")));
+        const QString root = QDir::cleanPath(directory.filePath(QStringLiteral("raiz")));
+        const QString alfa = root + QStringLiteral("/alfa");
+        const QString beta = root + QStringLiteral("/beta");
+
+        MainWindow window(m_scheduler, openJournal(directory));
+        BrowserPane *pane = window.openTab(directory.filePath(QStringLiteral("otra")));
+        QVERIFY(waitReady(pane));
+        window.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&window));
+        window.activateWindow();
+        QStringList confirmed;
+        window.setDeleteConfirmation([&](const QStringList &paths) {
+            confirmed = paths;
+            return true;
+        });
+
+        Sidebar *sidebar = window.sidebar();
+        sidebar->addPlace(QStringLiteral("Raíz"), root);
+        QTest::mouseClick(sidebar->viewport(), Qt::LeftButton, Qt::NoModifier, sidebar->positionOf(root));
+        QTRY_COMPARE(pane->currentPath(), root);
+        QTRY_VERIFY(!sidebar->positionOf(alfa).isNull());
+
+        // Un favorito (primer nivel) no se borra ni se corta desde el árbol.
+        QCOMPARE(sidebar->currentPlace(), root);
+        QVERIFY(sidebar->currentSubfolder().isEmpty());
+        QTest::keyClick(sidebar, Qt::Key_Delete, Qt::ShiftModifier);
+        QVERIFY(confirmed.isEmpty());
+        QVERIFY(QFileInfo(root).isDir());
+
+        // Ctrl+C copia la carpeta elegida en el árbol, no lo seleccionado en la lista.
+        QTest::mouseClick(sidebar->viewport(), Qt::LeftButton, Qt::NoModifier, sidebar->positionOf(alfa));
+        QTRY_COMPARE(pane->currentPath(), alfa);
+        QCOMPARE(window.focusWidget(), sidebar);
+        QCOMPARE(sidebar->currentSubfolder(), alfa);
+        QTest::keyClick(sidebar, Qt::Key_C, Qt::ControlModifier);
+        FileSelection copied = fileSelectionFrom(QGuiApplication::clipboard()->mimeData());
+        QCOMPARE(copied.paths, QStringList{alfa});
+        QVERIFY(!copied.cut);
+        QTest::keyClick(sidebar, Qt::Key_X, Qt::ControlModifier);
+        QVERIFY(fileSelectionFrom(QGuiApplication::clipboard()->mimeData()).cut);
+        QGuiApplication::clipboard()->clear();
+
+        // Mayús+Supr la elimina (tras confirmar); la pestaña que estaba dentro
+        // vuelve a la carpeta madre.
+        QTest::keyClick(sidebar, Qt::Key_Delete, Qt::ShiftModifier);
+        QCOMPARE(confirmed, QStringList{alfa});
+        QCOMPARE(pane->currentPath(), root);
+        QVERIFY(waitIdle(window));
+        QTRY_VERIFY(!QFileInfo::exists(alfa));
+        QVERIFY(QFileInfo(beta).isDir());
+    }
+
+    void statusBarWeighsSelectedFilesAndFolders()
+    {
+        QTemporaryDir directory;
+        const QString root = QDir::cleanPath(directory.path());
+        QVERIFY(QDir(root).mkpath(QStringLiteral("carpeta/sub")));
+        writeFile(root + QStringLiteral("/carpeta/a.bin"), 3000);
+        writeFile(root + QStringLiteral("/carpeta/sub/b.bin"), 2000);
+        writeFile(root + QStringLiteral("/suelto.bin"), 1000);
+
+        QTemporaryDir data;
+        MainWindow window(m_scheduler, openJournal(data));
+        BrowserPane *pane = window.openTab(root);
+        QVERIFY(waitReady(pane));
+        pane->selectAll();
+        // Archivos y carpetas juntos: 1000 + 3000 + 2000 bytes.
+        const QString total = QStringLiteral("(%1)").arg(core::formatSize(6000, pane->model()->sizeUnits()));
+        QTRY_VERIFY2(pane->statusText().contains(total), qPrintable(pane->statusText()));
+        QVERIFY(pane->statusText().contains(QStringLiteral("2 seleccionado")));
+        // Lo mismo desde las miniaturas (comparten la selección).
+        pane->setViewMode(BrowserPane::ViewMode::Thumbnails);
+        QVERIFY(pane->statusText().contains(total));
+        pane->setViewMode(BrowserPane::ViewMode::Details);
+    }
+
+    void folderCanBeSortedFromTheMenu()
+    {
+        QTemporaryDir directory;
+        const QString root = QDir::cleanPath(directory.path());
+        writeFile(root + QStringLiteral("/a.txt"), 300);
+        writeFile(root + QStringLiteral("/b.txt"), 100);
+        writeFile(root + QStringLiteral("/c.txt"), 200);
+
+        QTemporaryDir data;
+        MainWindow window(m_scheduler, openJournal(data));
+        BrowserPane *pane = window.openTab(root);
+        QVERIFY(waitReady(pane));
+        const auto names = [pane] {
+            QStringList list;
+            for (int row = 0; row < pane->model()->rowCount(); ++row) {
+                list.append(pane->model()->entryAt(row).name);
+            }
+            return list;
+        };
+        QCOMPARE(names(), (QStringList{QStringLiteral("a.txt"), QStringLiteral("b.txt"), QStringLiteral("c.txt")}));
+        pane->sortBy(Column::Size, Qt::DescendingOrder);
+        QCOMPARE(pane->sortColumn(), Column::Size);
+        QCOMPARE(pane->sortOrder(), Qt::DescendingOrder);
+        QCOMPARE(names(), (QStringList{QStringLiteral("a.txt"), QStringLiteral("c.txt"), QStringLiteral("b.txt")}));
+        pane->sortBy(Column::Size, Qt::AscendingOrder);
+        QCOMPARE(names(), (QStringList{QStringLiteral("b.txt"), QStringLiteral("c.txt"), QStringLiteral("a.txt")}));
+        pane->sortBy(Column::Name, Qt::DescendingOrder);
+        QCOMPARE(names(), (QStringList{QStringLiteral("c.txt"), QStringLiteral("b.txt"), QStringLiteral("a.txt")}));
     }
 
     void arrowKeysWorkInsideTheTree()

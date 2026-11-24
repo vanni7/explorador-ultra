@@ -31,6 +31,7 @@
 #include <QPainter>
 #include <QKeyEvent>
 #include <QPointer>
+#include <chrono>
 #include <QPushButton>
 #include <QRubberBand>
 #include <QSignalBlocker>
@@ -656,6 +657,14 @@ BrowserPane::BrowserPane(tasks::Scheduler &scheduler, fs::DirectoryWatcher &watc
             &BrowserPane::currentItemChanged);
     connect(this, &BrowserPane::pathChanged, this, &BrowserPane::currentItemChanged);
     connect(m_view->selectionModel(), &QItemSelectionModel::selectionChanged, this, &BrowserPane::statusChanged);
+    // El peso de las carpetas seleccionadas se calcula aparte, tras una pausa
+    // corta: al seleccionar con Mayús+flechas no se lanza una medida por paso.
+    m_selectionSizeTimer.setSingleShot(true);
+    m_selectionSizeTimer.setInterval(250);
+    connect(&m_selectionSizeTimer, &QTimer::timeout, this, &BrowserPane::measureSelectedFolders);
+    connect(m_view->selectionModel(), &QItemSelectionModel::selectionChanged, this, [this] {
+        m_selectionSizeTimer.start();
+    });
     connect(m_model, &DirectoryModel::stateChanged, this, &BrowserPane::onModelStateChanged);
     connect(m_model, &DirectoryModel::contentReplaced, this, &BrowserPane::restoreSelection);
     // Tras volver a leer la carpeta, lo seleccionado puede haber desaparecido
@@ -805,6 +814,7 @@ BrowserPane::~BrowserPane()
 {
     // La tarea de búsqueda no toca este objeto: basta pedirle que pare.
     cancelSearch();
+    forgetSelectionSizes();
     if (!m_watchedPath.isEmpty()) {
         m_watcher.unwatch(m_watchedPath);
     }
@@ -939,6 +949,7 @@ void BrowserPane::changePath(const QString &path, const QString &nameToSelect)
         m_watchedPath.clear();
     }
     m_location = path;
+    forgetSelectionSizes();
     if (!showsSearch() && m_searchState != SearchState::Idle) {
         // Se sale de unos resultados: la búsqueda se detiene y se libera la lista.
         cancelSearch();
@@ -1950,22 +1961,143 @@ QString BrowserPane::statusText() const
 
     const QModelIndexList rows = m_view->selectionModel()->selectedRows();
     if (!rows.isEmpty()) {
+        // Archivos por su tamaño; carpetas por lo medido (en la columna o
+        // aparte). Mientras falte alguna, el total es un mínimo.
         qint64 bytes = 0;
-        bool onlyFiles = true;
+        bool pending = false;
+        bool incomplete = false;
         for (const QModelIndex &index : rows) {
+            if (index.row() >= m_model->rowCount()) {
+                continue;
+            }
             const fs::Entry &entry = m_model->entryAt(index.row());
-            if (entry.isDirectory) {
-                onlyFiles = false;
-            } else {
+            if (!entry.isDirectory) {
                 bytes += entry.size;
+                continue;
+            }
+            if (entry.isSymlink) {
+                continue;   // un enlace no ocupa lo que hay detrás
+            }
+            const DirectoryModel::FolderSize *known = m_model->folderSizeAt(index.row());
+            const auto measured = m_selectionSizes.constFind(m_model->filePath(index.row()));
+            if (known != nullptr && known->finished) {
+                bytes += known->size.bytes;
+                incomplete = incomplete || known->size.incomplete;
+            } else if (measured != m_selectionSizes.constEnd()) {
+                bytes += measured->size.bytes;
+                incomplete = incomplete || measured->size.incomplete;
+                pending = pending || !measured->finished;
+            } else {
+                pending = true;
             }
         }
         text += tr(" · %n seleccionado(s)", nullptr, int(rows.size()));
-        if (onlyFiles) {
-            text += QStringLiteral(" (%1)").arg(core::formatSize(bytes, m_model->sizeUnits()));
+        const QString size = core::formatSize(bytes, m_model->sizeUnits());
+        if (pending) {
+            text += bytes > 0 ? tr(" (≥ %1, calculando…)").arg(size) : tr(" (calculando el tamaño…)");
+        } else {
+            text += incomplete ? QStringLiteral(" (≥ %1)").arg(size) : QStringLiteral(" (%1)").arg(size);
         }
     }
     return text;
+}
+
+void BrowserPane::sortBy(Column column, Qt::SortOrder order)
+{
+    // Por la cabecera de la vista detallada: así su flecha también cambia y
+    // el orden se guarda con el resto de la sesión.
+    m_view->sortByColumn(int(column), order);
+}
+
+Column BrowserPane::sortColumn() const
+{
+    const int section = m_view->header()->sortIndicatorSection();
+    return section >= 0 && section < int(Column::Tags) ? Column(section) : Column::Name;
+}
+
+Qt::SortOrder BrowserPane::sortOrder() const
+{
+    return m_view->header()->sortIndicatorOrder();
+}
+
+void BrowserPane::forgetSelectionSizes()
+{
+    ++m_selectionSizeGeneration;
+    if (m_selectionSizeTask.isValid()) {
+        m_selectionSizeTask.cancel();
+        m_selectionSizeTask = tasks::TaskHandle();
+    }
+    m_selectionSizes.clear();
+    m_selectionSizeTimer.stop();
+}
+
+void BrowserPane::measureSelectedFolders()
+{
+    if (showsSearch() || showsVolumes()) {
+        return;
+    }
+    QStringList folders;
+    for (const QModelIndex &index : m_view->selectionModel()->selectedRows()) {
+        if (index.row() >= m_model->rowCount()) {
+            continue;
+        }
+        const fs::Entry &entry = m_model->entryAt(index.row());
+        const DirectoryModel::FolderSize *known = m_model->folderSizeAt(index.row());
+        const QString path = m_model->filePath(index.row());
+        const auto measured = m_selectionSizes.constFind(path);
+        if (entry.isDirectory && !entry.isSymlink && !(known != nullptr && known->finished)
+            && !(measured != m_selectionSizes.constEnd() && measured->finished)) {
+            folders.append(path);
+        }
+    }
+    // Lo que se estaba midiendo y ya no hace falta se abandona; lo terminado
+    // se conserva mientras no se cambie de carpeta.
+    ++m_selectionSizeGeneration;
+    if (m_selectionSizeTask.isValid()) {
+        m_selectionSizeTask.cancel();
+        m_selectionSizeTask = tasks::TaskHandle();
+    }
+    for (auto it = m_selectionSizes.begin(); it != m_selectionSizes.end();) {
+        it = it->finished ? std::next(it) : m_selectionSizes.erase(it);
+    }
+    if (folders.isEmpty()) {
+        emit statusChanged();
+        return;
+    }
+    const quint64 generation = m_selectionSizeGeneration;
+    const QPointer<BrowserPane> self(this);
+    const auto deliver = [self, generation](const QString &path, const fs::TreeSize &size, bool finished) {
+        QMetaObject::invokeMethod(qApp, [self, generation, path, size, finished] {
+            if (!self || generation != self->m_selectionSizeGeneration) {
+                return;
+            }
+            self->m_selectionSizes.insert(path, DirectoryModel::FolderSize{size, finished});
+            emit self->statusChanged();
+        }, Qt::QueuedConnection);
+    };
+    // Una sola tarea, de una carpeta en una (como la columna Tamaño).
+    m_selectionSizeTask = m_scheduler.submitForPaths(
+        tasks::Category::Metadata, tasks::Priority::UserInteraction, folders,
+        [folders, deliver](const tasks::CancelToken &cancel) {
+            using Clock = std::chrono::steady_clock;
+            for (const QString &folder : folders) {
+                if (cancel.isCancelled()) {
+                    return;
+                }
+                Clock::time_point lastSent = Clock::now();
+                const fs::TreeSize size = fs::measureTree(folder, cancel, [&](const fs::TreeSize &partial) {
+                    if (Clock::now() - lastSent >= std::chrono::milliseconds(250)) {
+                        lastSent = Clock::now();
+                        deliver(folder, partial, false);
+                    }
+                });
+                if (size.cancelled) {
+                    return;
+                }
+                deliver(folder, size, true);
+            }
+        });
+    emit statusChanged();
 }
 
 } // namespace eu::ui

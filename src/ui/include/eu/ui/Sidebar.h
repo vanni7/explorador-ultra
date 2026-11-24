@@ -40,6 +40,11 @@ public:
     static bool hasSubfolders(const QString &path);
     /// Ruta del nodo que tiene el cursor del teclado, o vacía.
     QString currentPlace() const;
+    /// Ruta del nodo con el cursor si es una subcarpeta desplegada, o vacía.
+    /// Los lugares de primer nivel (favoritos y unidades) son accesos, no
+    /// carpetas que se puedan cortar o borrar desde aquí: suprimir
+    /// «Documentos» por error sería grave.
+    QString currentSubfolder() const;
     /// Ruta del nodo que hay en un punto del panel, o vacía (para las pruebas).
     QString pathAt(const QPoint &position) const;
     /// Posición del nodo de una ruta ya cargada, o un punto nulo si no está.

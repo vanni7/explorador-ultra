@@ -25,6 +25,7 @@
 class QAction;
 class QDockWidget;
 class QLabel;
+class QMenu;
 class QLineEdit;
 class QProgressBar;
 class QToolButton;
@@ -264,8 +265,18 @@ private:
     void createProgressWidgets();
     void showContextMenu(BrowserPane *pane, const QPoint &globalPosition);
     void showSidebarMenu(const QString &path, const QPoint &globalPosition);
+    /// Submenú «Ordenar por» de la carpeta de `pane`.
+    void addSortMenu(QMenu *menu, BrowserPane *pane);
+    void fillSortMenu(QMenu *sortMenu, BrowserPane *pane);
     void updateEditActions();
     void copyToClipboard(bool cut);
+    void copyToClipboard(bool cut, const QStringList &paths);
+    /// Papelera o borrado definitivo de `paths` (Supr y Mayús+Supr, en la
+    /// lista y en el árbol). Las pestañas que estén dentro se van antes a la
+    /// carpeta madre, para no quedarse mirando una carpeta que ya no existe.
+    void removePaths(const QStringList &paths, bool permanently);
+    /// Atajos y menú del árbol: copiar, cortar y borrar la carpeta elegida en él.
+    void createSidebarActions();
     /// Copia o mueve `paths` a `destination` (pegar y soltar acaban aquí).
     void transfer(const QStringList &paths, const QString &destination, bool move);
     /// Opciones de pegar o soltar: preguntar en los choques y comprobar o no las copias.

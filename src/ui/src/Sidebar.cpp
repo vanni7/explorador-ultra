@@ -96,6 +96,9 @@ Sidebar::Sidebar(tasks::Scheduler &scheduler, fs::VolumeMonitor &volumes, QWidge
     connect(this, &QWidget::customContextMenuRequested, this, [this](const QPoint &position) {
         const QString path = pathAt(position);
         if (!path.isEmpty()) {
+            // Como en los exploradores del sistema: el nodo pulsado queda
+            // marcado mientras está su menú.
+            setCurrentIndex(indexAt(position));
             emit contextMenuRequested(path, viewport()->mapToGlobal(position));
         }
     });
@@ -126,6 +129,16 @@ QString Sidebar::currentPlace() const
 {
     const QModelIndex index = currentIndex();
     return index == m_volumesSection->index() ? volumesLocation() : index.data(PathRole).toString();
+}
+
+QString Sidebar::currentSubfolder() const
+{
+    const QModelIndex index = currentIndex();
+    // sección → lugar → subcarpeta: solo desde el tercer nivel.
+    if (!index.isValid() || !index.parent().isValid() || !index.parent().parent().isValid()) {
+        return {};
+    }
+    return index.data(PathRole).toString();
 }
 
 void Sidebar::keyPressEvent(QKeyEvent *event)
