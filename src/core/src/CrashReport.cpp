@@ -19,6 +19,7 @@
 #include <csignal>
 #include <ctime>
 #include <dlfcn.h>
+#include <sys/mman.h>
 #include <execinfo.h>
 #include <fcntl.h>
 #include <unistd.h>
@@ -211,7 +212,20 @@ void onFatalSignal(int number, siginfo_t *info, void *rawContext)
         put("Direcciones de funciones guardadas en la pila (aproximado, de la más reciente a la más antigua):\n");
         auto *const *words = static_cast<void *const *>(stackPointer);
         int shown = 0;
+        // La pila puede acabar antes de 4 KB (llamadas poco hondas): leer más
+        // allá volvía a fallar dentro del informe y lo dejaba sin terminar.
+        // Antes de entrar en cada página se comprueba que existe (msync falla
+        // con ENOMEM si no está en el mapa del proceso).
+        const long pageSize = ::sysconf(_SC_PAGESIZE);
+        uintptr_t checkedPage = 0;
         for (int i = 0; i < 512 && shown < 40; ++i) {
+            const uintptr_t page = reinterpret_cast<uintptr_t>(&words[i]) & ~uintptr_t(pageSize - 1);
+            if (page != checkedPage) {
+                if (::msync(reinterpret_cast<void *>(page), size_t(pageSize), MS_ASYNC) != 0) {
+                    break;
+                }
+                checkedPage = page;
+            }
             Dl_info symbol;
             if (dladdr(words[i], &symbol) != 0 && symbol.dli_sname != nullptr) {
                 putSymbol(words[i]);
