@@ -9,6 +9,12 @@
 #include <QTest>
 #include <QTimeZone>
 
+#ifdef Q_OS_WIN
+#include <chrono>
+#include <thread>
+#include <windows.h>
+#endif
+
 using namespace eu;
 using namespace eu::ops;
 
@@ -88,6 +94,40 @@ private slots:
         QCOMPARE(renameNoReplace(directory.filePath(QStringLiteral("fantasma")), a).error().code,
                  core::ErrorCode::NotFound);
     }
+
+#ifdef Q_OS_WIN
+    void renameWaitsForABriefLockButReportsALongOne()
+    {
+        QTemporaryDir directory;
+        const QString source = directory.filePath(QStringLiteral("abierto.txt"));
+        const QString target = directory.filePath(QStringLiteral("nuevo.txt"));
+        writeFile(source, "x");
+        const std::wstring native = QDir::toNativeSeparators(source).toStdWString();
+
+        // Abierto un momento, como hace un antivirus: se espera y se renombra.
+        HANDLE brief = CreateFileW(native.c_str(), GENERIC_READ, 0, nullptr, OPEN_EXISTING, 0, nullptr);
+        QVERIFY(brief != INVALID_HANDLE_VALUE);
+        std::thread release([brief] {
+            std::this_thread::sleep_for(std::chrono::milliseconds(300));
+            CloseHandle(brief);
+        });
+        const core::Status renamed = renameNoReplace(source, target);
+        release.join();
+        QVERIFY(renamed.ok());
+        QVERIFY(QFileInfo::exists(target));
+
+        // Abierto todo el rato: avisa de que está en uso y no toca nada.
+        const std::wstring nativeTarget = QDir::toNativeSeparators(target).toStdWString();
+        HANDLE held = CreateFileW(nativeTarget.c_str(), GENERIC_READ, 0, nullptr, OPEN_EXISTING, 0, nullptr);
+        QVERIFY(held != INVALID_HANDLE_VALUE);
+        const core::Status blocked = renameNoReplace(target, source);
+        CloseHandle(held);
+        QVERIFY(!blocked.ok());
+        QCOMPARE(blocked.error().code, core::ErrorCode::Busy);
+        QVERIFY(QFileInfo::exists(target));
+        QVERIFY(!QFileInfo::exists(source));
+    }
+#endif
 
     void renameWorksForFolders()
     {

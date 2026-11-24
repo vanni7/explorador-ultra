@@ -14,6 +14,7 @@
 #include <QDirIterator>
 #include <QTimeZone>
 
+#include <algorithm>
 #include <array>
 #include <atomic>
 #include <optional>
@@ -371,10 +372,22 @@ core::Status renameNoReplace(const QString &source, const QString &target)
     // MOVEFILE_COPY_ALLOWED falla entre volúmenes en vez de copiar a escondidas.
     const std::wstring from = QDir::toNativeSeparators(source).toStdWString();
     const std::wstring to = QDir::toNativeSeparators(target).toStdWString();
-    if (MoveFileExW(from.c_str(), to.c_str(), 0) != 0) {
-        return {};
+    // Un antivirus o el indexador de Windows abren cada archivo nuevo un
+    // instante, y mientras tanto no se puede renombrar. Se reintenta unos 2 s;
+    // si sigue en uso de verdad (un programa lo tiene abierto), se informa.
+    DWORD lastError = ERROR_SUCCESS;
+    for (int attempt = 0; attempt < 12; ++attempt) {
+        if (MoveFileExW(from.c_str(), to.c_str(), 0) != 0) {
+            return {};
+        }
+        lastError = GetLastError();
+        if (lastError != ERROR_SHARING_VIOLATION && lastError != ERROR_LOCK_VIOLATION) {
+            break;
+        }
+        if (attempt < 11) {
+            Sleep(DWORD(std::min(250, 25 * (attempt + 1))));
+        }
     }
-    const DWORD lastError = GetLastError();
     return core::errorFromWindows(lastError, lastError == ERROR_ALREADY_EXISTS || lastError == ERROR_FILE_EXISTS
                                                  ? target : source);
 #else
