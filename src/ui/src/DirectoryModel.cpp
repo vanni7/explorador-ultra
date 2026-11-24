@@ -492,14 +492,28 @@ void DirectoryModel::onFolderSize(quint64 generation, const QString &name, const
 void DirectoryModel::replaceEntries(std::vector<fs::Entry> &&entries)
 {
     beginResetModel();
+    // Lo anterior se libera en segundo plano si es grande: soltar 100 000
+    // nombres cuesta varios milisegundos que la ventana no tiene por qué esperar.
+    std::vector<fs::Entry> old;
+    std::vector<fs::Entry> oldUnfiltered;
+    old.swap(m_entries);
+    oldUnfiltered.swap(m_unfiltered);
     if (m_filter.isEmpty()) {
         m_entries = std::move(entries);
-        m_unfiltered.clear();
     } else {
         m_unfiltered = std::move(entries);
         m_entries = filtered(m_unfiltered);
     }
     endResetModel();
+    if (old.size() + oldUnfiltered.size() > 20000) {
+        m_scheduler.submit(tasks::Category::General, tasks::Priority::Background,
+                           [old = std::make_shared<std::vector<fs::Entry>>(std::move(old)),
+                            oldUnfiltered = std::make_shared<std::vector<fs::Entry>>(std::move(oldUnfiltered))](
+                               const tasks::CancelToken &) mutable {
+            old.reset();
+            oldUnfiltered.reset();
+        });
+    }
     m_progressive = false;
     m_keepCurrentContent = false;
     emit contentReplaced();
