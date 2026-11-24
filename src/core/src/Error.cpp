@@ -35,6 +35,7 @@ QString describe(ErrorCode code)
     case ErrorCode::CrossDevice:       return QCoreApplication::translate(context, "El origen y el destino están en unidades distintas.");
     case ErrorCode::Corrupted:         return QCoreApplication::translate(context, "Los datos están dañados.");
     case ErrorCode::IoError:           return QCoreApplication::translate(context, "Error de lectura o escritura.");
+    case ErrorCode::Crashed:           return QCoreApplication::translate(context, "El proceso auxiliar se cerró de golpe.");
     case ErrorCode::Unknown:           break;
     }
     return QCoreApplication::translate(context, "Error desconocido.");
@@ -61,6 +62,7 @@ QString errorCodeName(ErrorCode code)
     case ErrorCode::CrossDevice:       return QStringLiteral("CrossDevice");
     case ErrorCode::Corrupted:         return QStringLiteral("Corrupted");
     case ErrorCode::IoError:           return QStringLiteral("IoError");
+    case ErrorCode::Crashed:           return QStringLiteral("Crashed");
     case ErrorCode::Unknown:           break;
     }
     return QStringLiteral("Unknown");

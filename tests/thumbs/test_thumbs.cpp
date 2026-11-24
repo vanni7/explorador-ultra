@@ -518,7 +518,7 @@ private slots:
         QVERIFY(testImage(50, 50).save(file(QStringLiteral("x__revienta__.png"))));
         const auto crashed = renderThumbnailIsolated(requestFor(file(QStringLiteral("x__revienta__.png"))), {});
         QVERIFY(!crashed.ok());
-        QCOMPARE(crashed.error().code, core::ErrorCode::Corrupted);
+        QCOMPARE(crashed.error().code, core::ErrorCode::Crashed);
         // …y el siguiente funciona (se arrancó otro auxiliar).
         QVERIFY(renderThumbnailIsolated(requestFor(file(QStringLiteral("aislada.png"))), {}).ok());
 
@@ -557,13 +557,19 @@ private slots:
         QVERIFY(!readMetadataIsolated(file(QStringLiteral("aislada.png")), {}).isEmpty());
 
         // El servicio usa el auxiliar: el archivo que lo cierra queda como fallido.
-        auto shared = std::make_shared<ThumbnailCache>(QString());
-        ThumbnailService service(m_scheduler, shared);
-        QSignalSpy ready(&service, &ThumbnailService::ready);
+        // Pero solo en esta sesión: un cierre del auxiliar puede ser cosa del
+        // entorno, y en la próxima sesión se vuelve a intentar.
+        QTemporaryDir cacheDir;
         const ThumbnailRequest bad = requestFor(file(QStringLiteral("x__revienta__.png")));
-        service.request(bad);
-        QVERIFY(ready.wait(10000));
-        QCOMPARE(service.request(bad).state, ThumbnailCache::State::Failed);
+        {
+            auto shared = std::make_shared<ThumbnailCache>(cacheDir.path());
+            ThumbnailService service(m_scheduler, shared);
+            QSignalSpy ready(&service, &ThumbnailService::ready);
+            service.request(bad);
+            QVERIFY(ready.wait(10000));
+            QCOMPARE(service.request(bad).state, ThumbnailCache::State::Failed);
+        }
+        QCOMPARE(ThumbnailCache(cacheDir.path()).load(bad).state, ThumbnailCache::State::Missing);
     }
 
     void cacheKeepsThumbnailsInMemoryAndOnDisk()

@@ -27,6 +27,7 @@ enum class ErrorCode {
     CrossDevice,       ///< Origen y destino están en volúmenes distintos.
     Corrupted,         ///< Datos dañados (base de datos, archivo comprimido…).
     IoError,           ///< Error de lectura o escritura sin clasificar.
+    Crashed,           ///< Un proceso auxiliar se cerró de golpe (por el archivo o por su entorno).
     Unknown,
 };
 
