@@ -1908,6 +1908,14 @@ private slots:
             return true;
         });
 
+        // Eliminar permanentemente: Mayús+Supr (⌥⌘⌫ en macOS).
+        const auto deletePermanently = [](QWidget *target) {
+#ifdef Q_OS_MACOS
+            QTest::keyClick(target, Qt::Key_Backspace, Qt::ControlModifier | Qt::AltModifier);
+#else
+            QTest::keyClick(target, Qt::Key_Delete, Qt::ShiftModifier);
+#endif
+        };
         Sidebar *sidebar = window.sidebar();
         sidebar->addPlace(QStringLiteral("Raíz"), root);
         QTest::mouseClick(sidebar->viewport(), Qt::LeftButton, Qt::NoModifier, sidebar->positionOf(root));
@@ -1917,7 +1925,7 @@ private slots:
         // Un favorito (primer nivel) no se borra ni se corta desde el árbol.
         QCOMPARE(sidebar->currentPlace(), root);
         QVERIFY(sidebar->currentSubfolder().isEmpty());
-        QTest::keyClick(sidebar, Qt::Key_Delete, Qt::ShiftModifier);
+        deletePermanently(sidebar);
         QVERIFY(confirmed.isEmpty());
         QVERIFY(QFileInfo(root).isDir());
 
@@ -1936,7 +1944,7 @@ private slots:
 
         // Mayús+Supr la elimina (tras confirmar); la pestaña que estaba dentro
         // vuelve a la carpeta madre.
-        QTest::keyClick(sidebar, Qt::Key_Delete, Qt::ShiftModifier);
+        deletePermanently(sidebar);
         QCOMPARE(confirmed, QStringList{alfa});
         QCOMPARE(pane->currentPath(), root);
         QVERIFY(waitIdle(window));
