@@ -46,9 +46,19 @@ install(FILES "${PROJECT_SOURCE_DIR}/LICENSE" DESTINATION "${CMAKE_INSTALL_DATAD
 # El auxiliar de miniaturas usa un subconjunto de lo que usa la aplicación.
 # De los controladores de bases de datos solo se usa SQLite: los demás
 # arrastran bibliotecas (ODBC, PostgreSQL, Oracle…) que no hacen falta.
+# La plataforma «offscreen» hace falta siempre: el auxiliar de miniaturas
+# (eu-thumbnailer) la usa para pintar sin ventana. Sin ella, cada miniatura
+# acababa en un aviso de «no Qt platform plugin».
 set(eu_deploy_options EXCLUDE_PLUGINS qsqlodbc qsqlpsql qsqloci qsqlibase qsqlmimer qsqlmysql)
-if(UNIX AND NOT APPLE)
+if(WIN32)
+    list(APPEND eu_deploy_options INCLUDE_PLUGINS qoffscreen)
+elseif(UNIX AND NOT APPLE)
     list(APPEND eu_deploy_options INCLUDE_PLUGINS qwayland qoffscreen EXCLUDE_PLUGIN_TYPES qmltooling)
+endif()
+if(APPLE)
+    # macdeployqt no tiene cómo pedirla: se copia dentro del .app.
+    install(FILES "${QT6_INSTALL_PREFIX}/${QT6_INSTALL_PLUGINS}/platforms/libqoffscreen.dylib"
+            DESTINATION "explorador-ultra.app/Contents/PlugIns/platforms")
 endif()
 qt_generate_deploy_app_script(
     TARGET explorador-ultra

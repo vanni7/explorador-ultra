@@ -75,6 +75,10 @@ jobs:
           sudo apt-get install -y ./paquetes/*.deb
           # Sin el Qt de la compilación: solo lo que trae el paquete.
           env -u LD_LIBRARY_PATH -u QT_PLUGIN_PATH QT_QPA_PLATFORM=offscreen /usr/bin/explorador-ultra --smoke-test
+          # Y el auxiliar de miniaturas (su propio proceso, con su plataforma sin pantalla).
+          printf '{"path":"%s","size":1,"mtime":1,"maxSide":64,"dir":false,"out":"%s"}\n' \
+            "$PWD/assets/icon/png/explorador-ultra-256.png" "$RUNNER_TEMP/mini.png" \
+            | env -u LD_LIBRARY_PATH -u QT_PLUGIN_PATH -u QT_QPA_PLATFORM /opt/explorador-ultra/bin/eu-thumbnailer | tee /dev/stderr | grep -q '"ok":true'
           sudo apt-get remove -y explorador-ultra
 
       - name: AppImage
@@ -175,10 +179,13 @@ jobs:
       - name: Probar lo instalado (sin Qt en el PATH)
         shell: bash
         run: |
-          # Solo para la prueba: la plataforma sin pantalla, que no va en el paquete.
-          cp "$QT_ROOT_DIR/plugins/platforms/qoffscreen.dll" dist/plugins/platforms/
+          # «offscreen» va en el paquete (la usa el auxiliar de miniaturas).
+          test -f dist/plugins/platforms/qoffscreen.dll
           PATH="/c/Windows/system32:/c/Windows" QT_QPA_PLATFORM=offscreen dist/bin/explorador-ultra.exe --smoke-test
-          rm dist/plugins/platforms/qoffscreen.dll
+          # Y el auxiliar de miniaturas (su propio proceso, con su plataforma sin pantalla).
+          printf '{"path":"%s","size":1,"mtime":1,"maxSide":64,"dir":false,"out":"%s"}\n' \
+            "$(cygpath -m "$PWD/assets/icon/png/explorador-ultra-256.png")" "$(cygpath -m "$RUNNER_TEMP/mini.png")" \
+            | PATH="/c/Windows/system32:/c/Windows" dist/bin/eu-thumbnailer.exe | tee /dev/stderr | grep -q '"ok":true'
 
       - name: Instalador (Inno Setup)
         # Desde PowerShell: Git Bash convertiría los «/D…» en rutas.
@@ -194,12 +201,10 @@ jobs:
         run: |
           $setup = Get-ChildItem paquetes\*.exe | Select-Object -First 1
           Start-Process $setup.FullName -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART','/DIR=C:\EU-prueba' -Wait
-          Copy-Item "$env:QT_ROOT_DIR\plugins\platforms\qoffscreen.dll" C:\EU-prueba\plugins\platforms\
           $env:Path = "C:\Windows\system32;C:\Windows"
           $env:QT_QPA_PLATFORM = "offscreen"
           $p = Start-Process C:\EU-prueba\bin\explorador-ultra.exe -ArgumentList '--smoke-test' -Wait -PassThru
           if ($p.ExitCode -ne 0) { throw "La aplicación instalada no arrancó (código $($p.ExitCode))" }
-          Remove-Item C:\EU-prueba\plugins\platforms\qoffscreen.dll
           Start-Process C:\EU-prueba\unins000.exe -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES' -Wait
 
       - uses: actions/upload-artifact@v4
@@ -245,10 +250,14 @@ jobs:
         run: |
           cmake --install build --prefix dist
           app=dist/explorador-ultra.app
-          # Solo para la prueba: la plataforma sin pantalla, que no va en el paquete.
-          cp "$QT_ROOT_DIR/plugins/platforms/libqoffscreen.dylib" "$app/Contents/PlugIns/platforms/"
+          test -f "$app/Contents/PlugIns/platforms/libqoffscreen.dylib"
           env -u DYLD_LIBRARY_PATH -u DYLD_FRAMEWORK_PATH QT_QPA_PLATFORM=offscreen \
             "$app/Contents/MacOS/explorador-ultra" --smoke-test
+          # Y el auxiliar de miniaturas (su propio proceso, con su plataforma sin pantalla).
+          printf '{"path":"%s","size":1,"mtime":1,"maxSide":64,"dir":false,"out":"%s"}\n' \
+            "$PWD/assets/icon/png/explorador-ultra-256.png" "$RUNNER_TEMP/mini.png" \
+            | env -u DYLD_LIBRARY_PATH -u DYLD_FRAMEWORK_PATH -u QT_QPA_PLATFORM "$app/Contents/MacOS/eu-thumbnailer" \
+            | tee /dev/stderr | grep -q '"ok":true'
 
       - name: .dmg
         run: |
