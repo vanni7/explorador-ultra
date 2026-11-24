@@ -15,6 +15,9 @@ if(APPLE)
     install(TARGETS explorador-ultra BUNDLE DESTINATION .)
     # Dentro del .app, junto al ejecutable principal.
     install(TARGETS eu-thumbnailer RUNTIME DESTINATION "explorador-ultra.app/Contents/MacOS")
+    # macdeployqt solo arregla el ejecutable principal: el auxiliar busca Qt
+    # en los Frameworks del mismo .app.
+    set_target_properties(eu-thumbnailer PROPERTIES INSTALL_RPATH "@executable_path/../Frameworks")
 else()
     install(TARGETS ${eu_installed_programs} RUNTIME DESTINATION "${CMAKE_INSTALL_BINDIR}")
 endif()
