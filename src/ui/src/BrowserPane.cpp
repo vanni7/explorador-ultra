@@ -1704,6 +1704,7 @@ void BrowserPane::setShowHidden(bool show)
 void BrowserPane::setFolderSizesEnabled(bool enabled)
 {
     m_model->setFolderSizesEnabled(enabled);
+    m_thumbView->setShowSizes(enabled);
 }
 
 void BrowserPane::onModelStateChanged(DirectoryModel::State state)

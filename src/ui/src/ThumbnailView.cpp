@@ -62,7 +62,7 @@ public:
 
     QSize sizeHint(const QStyleOptionViewItem &option, const QModelIndex &) const override
     {
-        const int lines = 2 * option.fontMetrics.height();
+        const int lines = (m_view->showsSizes() ? 3 : 2) * option.fontMetrics.height();
         return QSize(m_view->thumbnailSize() + 2 * padding, m_view->thumbnailSize() + 3 * padding + lines);
     }
 
@@ -166,6 +166,26 @@ public:
         painter->setFont(opt.font);
         painter->drawText(textRect, Qt::AlignHCenter | Qt::AlignTop | Qt::TextWrapAnywhere, shown);
         painter->restore();
+
+        // Con «Calcular el tamaño de las carpetas», el tamaño debajo del nombre
+        // (el de la carpeta, en cuanto se conoce; el de un archivo, siempre).
+        if (m_view->showsSizes()) {
+            const QString sizeText = m_model->index(row, int(Column::Size)).data(Qt::DisplayRole).toString();
+            if (!sizeText.isEmpty()) {
+                // Justo debajo del nombre, ocupe este una línea o dos.
+                const int nameLines = shown.contains(QChar(QChar::LineSeparator)) ? 2 : 1;
+                const QRect sizeRect(textRect.left(), textRect.top() + nameLines * opt.fontMetrics.height(),
+                                     textRect.width(), opt.fontMetrics.height());
+                QColor dim = color;
+                dim.setAlphaF(0.65f);
+                painter->save();
+                painter->setPen(dim);
+                painter->setFont(opt.font);
+                painter->drawText(sizeRect, Qt::AlignHCenter | Qt::AlignTop,
+                                  opt.fontMetrics.elidedText(sizeText, Qt::ElideMiddle, sizeRect.width()));
+                painter->restore();
+            }
+        }
     }
 
     QWidget *createEditor(QWidget *parent, const QStyleOptionViewItem &option, const QModelIndex &index) const override
@@ -307,6 +327,15 @@ ThumbnailView::ThumbnailView(DirectoryModel *model, QWidget *parent) : QListView
     m_repaintTimer.setSingleShot(true);
     m_repaintTimer.setInterval(40);
     connect(&m_repaintTimer, &QTimer::timeout, viewport(), qOverload<>(&QWidget::update));
+    // La lista solo atiende a su columna (el nombre): los tamaños de carpeta
+    // que van llegando cambian otra, y hay que repintar a mano.
+    connect(model, &QAbstractItemModel::dataChanged, this,
+            [this](const QModelIndex &topLeft, const QModelIndex &bottomRight) {
+        if (m_showSizes && topLeft.column() <= int(Column::Size) && bottomRight.column() >= int(Column::Size)
+            && isVisible() && !m_repaintTimer.isActive()) {
+            m_repaintTimer.start();
+        }
+    });
 }
 
 void ThumbnailView::setThumbnailService(thumbs::ThumbnailService *service)
@@ -336,9 +365,18 @@ void ThumbnailView::setThumbnailSize(int size)
     updateGrid();
 }
 
+void ThumbnailView::setShowSizes(bool show)
+{
+    if (show == m_showSizes) {
+        return;
+    }
+    m_showSizes = show;
+    updateGrid();
+}
+
 void ThumbnailView::updateGrid()
 {
-    const int lines = 2 * fontMetrics().height();
+    const int lines = (m_showSizes ? 3 : 2) * fontMetrics().height();
     setGridSize(QSize(m_size + 2 * padding + 8, m_size + 3 * padding + lines + 8));
     setIconSize(QSize(m_size, m_size));
     doItemsLayout();

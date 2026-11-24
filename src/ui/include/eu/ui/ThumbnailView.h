@@ -37,6 +37,9 @@ public:
     /// Lado de la miniatura en píxeles lógicos (96, 160, 256…).
     void setThumbnailSize(int size);
     int thumbnailSize() const { return m_size; }
+    /// El tamaño debajo del nombre (con «Calcular el tamaño de las carpetas»).
+    void setShowSizes(bool show);
+    bool showsSizes() const { return m_showSizes; }
 
     /// Reproducir video y audio dentro de la miniatura (SPEC §5.5): botón ▶
     /// al pasar el puntero o barra espaciadora sobre el elemento con el
@@ -91,6 +94,7 @@ private:
     DirectoryModel *m_model;
     thumbs::ThumbnailService *m_service = nullptr;
     int m_size = 160;
+    bool m_showSizes = false;
     bool m_dropActive = false;
     int m_dropRow = -1;
     InlinePlayer *m_player = nullptr;

@@ -2569,6 +2569,27 @@ private slots:
         }
     }
 
+    void thumbnailsMakeRoomForTheSizeWhenAsked()
+    {
+        QTemporaryDir data;
+        QTemporaryDir directory;
+        writeFile(directory.filePath(QStringLiteral("nota.txt")), 10);
+        MainWindow window(m_scheduler, openJournal(data));
+        BrowserPane *pane = window.openTab(directory.path());
+        QVERIFY(waitReady(pane));
+        window.setViewMode(BrowserPane::ViewMode::Thumbnails);
+        ThumbnailView *thumbnails = pane->thumbnailView();
+        const int heightWithoutSize = thumbnails->gridSize().height();
+
+        // Una línea más para el tamaño, y se devuelve al quitarlo.
+        pane->setFolderSizesEnabled(true);
+        QVERIFY(thumbnails->showsSizes());
+        QCOMPARE(thumbnails->gridSize().height(), heightWithoutSize + thumbnails->fontMetrics().height());
+        pane->setFolderSizesEnabled(false);
+        QVERIFY(!thumbnails->showsSizes());
+        QCOMPARE(thumbnails->gridSize().height(), heightWithoutSize);
+    }
+
     void ctrlWheelMakesThumbnailsBiggerOrSmaller()
     {
         QTemporaryDir data;
