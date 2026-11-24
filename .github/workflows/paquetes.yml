@@ -181,11 +181,13 @@ jobs:
           rm dist/plugins/platforms/qoffscreen.dll
 
       - name: Instalador (Inno Setup)
-        shell: bash
+        # Desde PowerShell: Git Bash convertiría los «/D…» en rutas.
+        shell: pwsh
         run: |
-          "/c/Program Files (x86)/Inno Setup 6/ISCC.exe" "/DAppVersion=$EU_VERSION" \
-            "/DSourceDir=$(cygpath -w "$PWD/dist")" "/DOutputDir=$(cygpath -w "$PWD/paquetes")" \
-            packaging/windows/explorador-ultra.iss
+          New-Item -ItemType Directory -Force paquetes | Out-Null
+          & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" "/DAppVersion=$env:EU_VERSION" `
+            "/DSourceDir=$PWD\dist" "/DOutputDir=$PWD\paquetes" packaging\windows\explorador-ultra.iss
+          if ($LASTEXITCODE -ne 0) { throw "Inno Setup falló ($LASTEXITCODE)" }
 
       - name: Probar el instalador
         shell: pwsh
