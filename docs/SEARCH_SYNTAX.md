@@ -88,10 +88,9 @@ Se escriben `clave:valor`, sin espacio tras los dos puntos. La clave puede ir en
 | `hidden:` | Elementos ocultos. | `hidden:sí` · `hidden:no` |
 | `regex:` | Expresión regular sobre el nombre, entre barras. | `regex:/^IMG_\d{4}\.jpe?g$/` |
 | `name:` | Igual que un término suelto; útil para buscar algo que se parece a un filtro. | `name:fot*.jpg` |
-| `tag:` | Etiqueta. **Aún no disponible** (Fase 5). | `tag:rojo` |
+| `tag:` | Tiene esa etiqueta (por su nombre). | `tag:rojo` |
 | `content:` | Texto dentro del archivo (texto, PDF, documentos de oficina y RTF; ver «Opciones del buscador»). Es siempre "contiene". Solo en el buscador: el filtro Ctrl+I no abre archivos y lo avisa. | `content:"presupuesto anual"` · `content:riso ext:txt` |
 
-Si la consulta usa `tag:`, la aplicación avisa de que ese filtro todavía no funciona; no devuelve resultados como si lo hubiera aplicado.
 
 Una palabra con dos puntos que no sea uno de estos filtros (`nota:importante`) se busca tal cual.
 
