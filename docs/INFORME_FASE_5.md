@@ -46,5 +46,16 @@ Fecha: 2026-11-23 · Estado: **entregada con puntos abiertos**. El explorador su
 5. El cierre inesperado del 20-nov (apartado D).
 6. Siguen abiertos los puntos de los informes anteriores.
 
+## E2. Ajustes tras las pruebas del dueño (24-nov)
+| Aviso | Qué era | Qué se hizo |
+|---|---|---|
+| En Windows no respondían la rueda, F3/F6, Ctrl+C/V/Z, Supr ni las flechas | Una tecla modificadora (Alt o Ctrl) se quedó «pegada» en la VM: VirtualBox sobre Wayland a veces no entrega la tecla soltada al cambiar de ventana en Ubuntu. Soltándola, todo funciona en la app (probado mandando las teclas a la VM y la rueda desde dentro de Windows) | Nada en la app. Si vuelve a pasar en la VM: pulsar y soltar Ctrl, Alt y Mayús dentro de ella |
+| Suprimir y Ctrl+C/Ctrl+V en el árbol | Los atajos de Edición solo actuaban en la zona de archivos; el árbol solo tenía Pegar | Copiar, cortar, papelera y borrar definitivo en el árbol (teclado y menú), solo subcarpetas para cortar y borrar |
+| La selección no daba su peso | Solo se sumaba si no había carpetas | Se suman también las carpetas, medidas en segundo plano |
+| Menú contextual | — | Imprimir, Organizar, Buscar duplicados, Comparar y sincronizar y «Ordenar por» (también en Ver) |
+| Sincronizar: «Elegir…», ancho, «Comparar», borrados | Los borrados solo se reconocían en los dos sentidos y con una casilla para todo | Unidades en «Elegir…», ¾ del ancho, borrados reconocidos en cualquier sentido con pregunta por elemento (quitar del otro lado, recuperar, dejar) y «Borrado a la derecha/izquierda» en la tabla. «Comparar» siguió activo tras sincronizar en todas las pruebas: no se reprodujo |
+| Selección poco visible en Windows | El estilo windows11 de Qt la pinta casi blanca | Tema «Sistema» con Fusion y los colores de Windows: bloque azul con texto blanco, como en Ubuntu |
+| Botones en inglés en Windows | Las traducciones de Qt se buscaban por el idioma de Windows | Se cargan siempre en español |
+
 ## F. Siguiente fase
 Fase 6 — Optimización y distribución. Plan y criterios en [`PHASE_PLAN.md`](PHASE_PLAN.md).
