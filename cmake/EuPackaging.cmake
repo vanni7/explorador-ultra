@@ -41,9 +41,11 @@ install(FILES "${PROJECT_SOURCE_DIR}/LICENSE" DESTINATION "${CMAKE_INSTALL_DATAD
 # solo lleva la plataforma X11 (xcb): se añaden Wayland (la sesión normal de
 # Ubuntu) y «offscreen» (sin pantalla, para comprobar el paquete en la CI).
 # El auxiliar de miniaturas usa un subconjunto de lo que usa la aplicación.
-set(eu_deploy_options "")
+# De los controladores de bases de datos solo se usa SQLite: los demás
+# arrastran bibliotecas (ODBC, PostgreSQL, Oracle…) que no hacen falta.
+set(eu_deploy_options EXCLUDE_PLUGINS qsqlodbc qsqlpsql qsqloci qsqlibase qsqlmimer qsqlmysql)
 if(UNIX AND NOT APPLE)
-    set(eu_deploy_options INCLUDE_PLUGINS qwayland qoffscreen EXCLUDE_PLUGIN_TYPES qmltooling)
+    list(APPEND eu_deploy_options INCLUDE_PLUGINS qwayland qoffscreen EXCLUDE_PLUGIN_TYPES qmltooling)
 endif()
 qt_generate_deploy_app_script(
     TARGET explorador-ultra
@@ -51,3 +53,48 @@ qt_generate_deploy_app_script(
     NO_UNSUPPORTED_PLATFORM_ERROR
     ${eu_deploy_options})
 install(SCRIPT "${eu_deploy_script}")
+
+# ------------------------------------------------------------------ paquetes
+# CPack hace el .deb (Linux) y el .dmg (macOS); el instalador de Windows lo
+# hace Inno Setup (packaging/windows) y el AppImage, linuxdeploy (ver
+# docs/DISTRIBUCION.md). Todos parten de la instalación de arriba.
+set(CPACK_PACKAGE_NAME "explorador-ultra")
+set(CPACK_PACKAGE_VENDOR "Explorador Ultra")
+set(CPACK_PACKAGE_CONTACT "https://github.com/vanni7/explorador-ultra")
+set(CPACK_PACKAGE_DESCRIPTION_SUMMARY "${PROJECT_DESCRIPTION}")
+set(CPACK_PACKAGE_VERSION "${PROJECT_VERSION}")
+set(CPACK_PACKAGE_HOMEPAGE_URL "https://github.com/vanni7/explorador-ultra")
+set(CPACK_RESOURCE_FILE_LICENSE "${PROJECT_SOURCE_DIR}/LICENSE")
+set(CPACK_STRIP_FILES ON)
+
+option(EU_PACKAGE_DEB "Preparar la instalación para el .deb (en /opt, con enlaces en /usr)" OFF)
+if(EU_PACKAGE_DEB)
+    # En /opt: con prefijo /usr, el Qt que va dentro pisaría al de Ubuntu.
+    set(CPACK_GENERATOR DEB)
+    set(CPACK_PACKAGING_INSTALL_PREFIX "/opt/explorador-ultra")
+    set(CPACK_DEBIAN_FILE_NAME DEB-DEFAULT)
+    set(CPACK_DEBIAN_PACKAGE_SECTION utils)
+    set(CPACK_DEBIAN_PACKAGE_MAINTAINER "Explorador Ultra <https://github.com/vanni7/explorador-ultra>")
+    # Las bibliotecas del sistema que hacen falta (libarchive, FFmpeg…) las
+    # calcula dpkg-shlibdeps; las de Qt van dentro del paquete.
+    set(CPACK_DEBIAN_PACKAGE_SHLIBDEPS ON)
+    set(CPACK_DEBIAN_PACKAGE_SHLIBDEPS_PRIVATE_DIRS
+        "${CMAKE_INSTALL_LIBDIR}" "plugins/platforms" "plugins/imageformats")
+    # Para el escritorio: el acceso, los iconos y la orden en el PATH.
+    install(FILES "${PROJECT_SOURCE_DIR}/packaging/linux/explorador-ultra.desktop"
+            DESTINATION /usr/share/applications)
+    foreach(size 16 22 24 32 48 64 128 256 512)
+        install(FILES "${PROJECT_SOURCE_DIR}/assets/icon/png/explorador-ultra-${size}.png"
+                DESTINATION "/usr/share/icons/hicolor/${size}x${size}/apps" RENAME explorador-ultra.png)
+    endforeach()
+    install(FILES "${PROJECT_SOURCE_DIR}/assets/icon/explorador-ultra.svg"
+            DESTINATION /usr/share/icons/hicolor/scalable/apps)
+    install(CODE "
+        file(MAKE_DIRECTORY \"\$ENV{DESTDIR}/usr/bin\")
+        file(CREATE_LINK /opt/explorador-ultra/bin/explorador-ultra
+             \"\$ENV{DESTDIR}/usr/bin/explorador-ultra\" SYMBOLIC)")
+elseif(APPLE)
+    set(CPACK_GENERATOR DragNDrop)
+    set(CPACK_DMG_VOLUME_NAME "Explorador Ultra")
+endif()
+include(CPack)
