@@ -1,0 +1,3 @@
+// Icono del ejecutable en Windows (Explorador de Windows, barra de tareas,
+// accesos directos y Agregar o quitar programas).
+IDI_ICON1 ICON "../../assets/icon/explorador-ultra.ico"

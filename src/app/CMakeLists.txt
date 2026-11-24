@@ -4,6 +4,15 @@ qt_add_executable(explorador-ultra WIN32 MACOSX_BUNDLE
     main.cpp
     resources.qrc)
 
+# Icono del programa: recurso en Windows, .icns dentro del .app en macOS.
+if(WIN32)
+    target_sources(explorador-ultra PRIVATE explorador-ultra.rc)
+elseif(APPLE)
+    set(eu_icns "${PROJECT_SOURCE_DIR}/assets/icon/explorador-ultra.icns")
+    set_source_files_properties("${eu_icns}" PROPERTIES MACOSX_PACKAGE_LOCATION Resources)
+    target_sources(explorador-ultra PRIVATE "${eu_icns}")
+    set_target_properties(explorador-ultra PROPERTIES MACOSX_BUNDLE_ICON_FILE explorador-ultra.icns)
+endif()
 target_link_libraries(explorador-ultra PRIVATE eu::core eu::tasks eu::ui Qt6::Widgets Qt6::Svg)
 eu_target_defaults(explorador-ultra)
 
