@@ -124,6 +124,14 @@ public:
         endResetModel();
     }
 
+    /// Lo borrado en un lado desde la última sincronización (ruta → borrado a la izquierda).
+    void setDeletions(QHash<QString, bool> deletedOnLeft)
+    {
+        beginResetModel();
+        m_deletedOnLeft = std::move(deletedOnLeft);
+        endResetModel();
+    }
+
     void setPlan(const sync::Plan *plan)
     {
         m_actions.clear();
@@ -191,8 +199,13 @@ public:
         switch (role) {
         case Qt::DisplayRole:
             switch (index.column()) {
-            case StateColumn:
+            case StateColumn: {
+                const auto deleted = m_deletedOnLeft.constFind(item.relativePath);
+                if (deleted != m_deletedOnLeft.cend()) {
+                    return *deleted ? SyncDialog::tr("Borrado a la izquierda") : SyncDialog::tr("Borrado a la derecha");
+                }
                 return stateText(item.state);
+            }
             case PathColumn:
                 return QDir::toNativeSeparators(item.relativePath);
             case LeftColumn:
@@ -236,6 +249,7 @@ private:
     const sync::Comparison *m_comparison = nullptr;
     QList<int> m_rows;                           ///< Índices en comparison->items.
     QHash<QString, sync::Action> m_actions;      ///< Por ruta relativa, tras simular.
+    QHash<QString, bool> m_deletedOnLeft;         ///< Borrados desde la última sincronización.
 };
 
 SyncDialog::SyncDialog(tasks::Scheduler &scheduler, FileActions *actions, QString left, QString right,
@@ -298,6 +312,8 @@ SyncDialog::SyncDialog(tasks::Scheduler &scheduler, FileActions *actions, QStrin
     m_stopButton = new QPushButton(tr("Detener"), this);
     m_progress = new QLabel(this);
     m_progress->setEnabled(false);
+    // Un texto largo («Sincronizando… …») no debe ensanchar la ventana.
+    m_progress->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
     auto *compareRow = new QHBoxLayout;
     compareRow->addWidget(new QLabel(tr("Comparar por:"), this));
     compareRow->addWidget(m_criterion);
@@ -527,6 +543,18 @@ void SyncDialog::onCompared(quint64 generation, const sync::Comparison &comparis
         sync::saveState(sync::stateFile(m_stateDirectory, comparison.left, comparison.right), state);
         m_previous = state;
     }
+    // Lo borrado en un lado desde la última vez se enseña como tal, no como
+    // «solo en el otro lado».
+    QHash<QString, bool> deletions;
+    if (m_hasComparison && !m_previous.isEmpty()) {
+        for (const sync::Action &action : sync::plan(m_comparison, syncOptions(), &m_previous).actions) {
+            if (action.deletion) {
+                deletions.insert(action.relativePath, action.deletedOnLeft);
+            }
+        }
+    }
+    m_deletionCount = int(deletions.size());
+    m_model->setDeletions(std::move(deletions));
     m_progress->setText(comparison.cancelled ? tr("Comparación detenida.") : QString());
     updateSummary();
     updateButtons();
@@ -536,6 +564,8 @@ void SyncDialog::onCompared(quint64 generation, const sync::Comparison &comparis
 void SyncDialog::invalidateComparison()
 {
     m_deletionChoices.clear();
+    m_deletionCount = 0;
+    m_model->setDeletions({});
     if (m_hasComparison) {
         m_hasComparison = false;
         m_model->setComparison(nullptr, false);
@@ -720,17 +750,10 @@ void SyncDialog::updateSummary()
     QString text = parts.isEmpty() ? tr("Las dos carpetas son iguales.") : tr("Diferencias: %1.").arg(parts.join(QStringLiteral(", ")));
     text += QLatin1Char(' ') + tr("%n idéntico(s).", nullptr, m_comparison.count(sync::State::Identical));
     // Lo borrado en un lado desde la última sincronización (no es «nuevo» en el otro).
-    if (!m_previous.isEmpty()) {
-        const sync::Plan detected = sync::plan(m_comparison, syncOptions(), &m_previous);
-        int deleted = 0;
-        for (const sync::Action &action : detected.actions) {
-            deleted += action.deletion ? 1 : 0;
-        }
-        if (deleted > 0) {
-            text += QLatin1Char(' ')
-                + tr("%n elemento(s) borrado(s) en un lado desde la última sincronización: al simular se "
-                     "decide si se quitan también del otro lado o se recuperan.", nullptr, deleted);
-        }
+    if (m_deletionCount > 0) {
+        text += QLatin1Char(' ')
+            + tr("%n elemento(s) borrado(s) en un lado desde la última sincronización: al simular se "
+                 "decide si se quitan también del otro lado o se recuperan.", nullptr, m_deletionCount);
     }
     if (m_comparison.skippedLinks > 0) {
         text += QLatin1Char(' ') + tr("%n enlace(s) simbólico(s) sin comparar.", nullptr, m_comparison.skippedLinks);
@@ -819,8 +842,8 @@ std::optional<QHash<QString, sync::DeletionChoice>> SyncDialog::askDeletions(con
     }
     QDialog dialog(this);
     dialog.setWindowTitle(tr("Elementos borrados desde la última sincronización"));
-    auto *intro = new QLabel(tr("Desde la última sincronización de estas carpetas se borraron %n elemento(s) en "
-                                "un solo lado. Elige qué hacer con cada uno: quitarlo también del otro lado "
+    auto *intro = new QLabel(tr("Desde la última sincronización de estas carpetas hay %n elemento(s) borrado(s) "
+                                "en un solo lado. Elige qué hacer con cada uno: quitarlo también del otro lado "
                                 "(va a la papelera propia y se puede deshacer), recuperarlo desde el lado que "
                                 "aún lo tiene o dejarlo como está.", nullptr, int(deletions.size())),
                              &dialog);

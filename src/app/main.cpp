@@ -62,10 +62,16 @@ int main(int argc, char *argv[])
 
     // Traducciones: primero las de Qt (botones estándar, diálogos) y luego las
     // propias. Hoy solo existe el español; añadir un idioma es añadir un .ts.
+    // La aplicación está en español, así que Qt también, aunque el sistema
+    // esté en otro idioma (con Windows en inglés los botones estándar salían
+    // «Yes» y «Cancel»). Se busca donde está Qt y junto al programa (instalado).
     QTranslator qtTranslator;
-    if (qtTranslator.load(QLocale(), QStringLiteral("qtbase"), QStringLiteral("_"),
-                          QLibraryInfo::path(QLibraryInfo::TranslationsPath))) {
-        QApplication::installTranslator(&qtTranslator);
+    for (const QString &folder : {QLibraryInfo::path(QLibraryInfo::TranslationsPath),
+                                  QCoreApplication::applicationDirPath() + QStringLiteral("/translations")}) {
+        if (qtTranslator.load(QStringLiteral("qtbase_es"), folder)) {
+            QApplication::installTranslator(&qtTranslator);
+            break;
+        }
     }
     QTranslator appTranslator;
     if (appTranslator.load(QStringLiteral(":/i18n/explorador-ultra_es.qm"))) {

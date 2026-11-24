@@ -1509,6 +1509,11 @@ private slots:
             dialog.startCompare();
             QTRY_VERIFY(!dialog.isBusy());
             QVERIFY2(dialog.summary()->text().contains(QStringLiteral("borrado")), qPrintable(dialog.summary()->text()));
+            QStringList states;
+            for (int row = 0; row < dialog.view()->model()->rowCount(); ++row) {
+                states.append(dialog.view()->model()->index(row, 0).data().toString());
+            }
+            QVERIFY2(states.contains(QStringLiteral("Borrado a la derecha")), qPrintable(states.join(QLatin1Char(','))));
             dialog.setAskAboutDeletions();
             QList<sync::Action> asked;
             dialog.setDeletionChooserForTesting([&](const QList<sync::Action> &deletions) {
