@@ -2067,7 +2067,11 @@ void MainWindow::onActionFinished(const ActionResult &result)
                 + tr("Se deshace todo junto con Deshacer (%1).").arg(m_undoAction->shortcut().toString(QKeySequence::NativeText));
             break;
         case ActionKind::Sync:
-            message = tr("Sincronización terminada: %n elemento(s) copiado(s).", nullptr, int(outcome.resultPaths.size()));
+            message = tr("Sincronización terminada: %n elemento(s) copiado(s)", nullptr, int(outcome.resultPaths.size()));
+            if (!outcome.trashed.isEmpty()) {
+                message += tr(" y %n a la papelera", nullptr, int(outcome.trashed.size()));
+            }
+            message += QLatin1Char('.');
             message += QLatin1Char(' ')
                 + tr("Se deshace todo junto con Deshacer (%1).").arg(m_undoAction->shortcut().toString(QKeySequence::NativeText));
             break;

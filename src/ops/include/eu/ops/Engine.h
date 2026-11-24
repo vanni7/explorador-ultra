@@ -88,6 +88,7 @@ struct Outcome
     QStringList identical;     ///< De ellos, los omitidos por ser idénticos al destino.
     QStringList replaced;      ///< Destinos reemplazados (lo que había está en la papelera).
     QStringList removedFolders; ///< Carpetas que quedaron vacías por la operación y se quitaron (organizar).
+    QStringList trashed;       ///< Sincronizar: lo quitado a la papelera propia (borrados propagados).
     int verified = 0;          ///< Archivos copiados y comprobados con su hash.
     /// Copiar y mover: lo que no se terminó (error o cancelación), con el
     /// destino exacto que se eligió, para reintentarlo con Engine::retry.

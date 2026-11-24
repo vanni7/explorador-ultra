@@ -553,7 +553,7 @@ void SyncDialog::onCompared(quint64 generation, const sync::Comparison &comparis
             }
         }
     }
-    m_deletionCount = int(deletions.size());
+    m_deletedOnLeft = deletions;
     m_model->setDeletions(std::move(deletions));
     m_progress->setText(comparison.cancelled ? tr("Comparación detenida.") : QString());
     updateSummary();
@@ -564,7 +564,7 @@ void SyncDialog::onCompared(quint64 generation, const sync::Comparison &comparis
 void SyncDialog::invalidateComparison()
 {
     m_deletionChoices.clear();
-    m_deletionCount = 0;
+    m_deletedOnLeft.clear();
     m_model->setDeletions({});
     if (m_hasComparison) {
         m_hasComparison = false;
@@ -735,8 +735,15 @@ void SyncDialog::updateSummary()
         return;
     }
     QStringList parts;
+    // Lo borrado desde la última vez no cuenta como «solo en un lado»: va aparte.
+    int deletedOnLeft = 0;
+    for (const bool onLeft : std::as_const(m_deletedOnLeft)) {
+        deletedOnLeft += onLeft ? 1 : 0;
+    }
+    const int deletedOnRight = int(m_deletedOnLeft.size()) - deletedOnLeft;
     const auto add = [&](sync::State state, const QString &text) {
-        const int count = m_comparison.count(state);
+        int count = m_comparison.count(state);
+        count -= state == sync::State::RightOnly ? deletedOnLeft : state == sync::State::LeftOnly ? deletedOnRight : 0;
         if (count > 0) {
             parts.append(text.arg(count));
         }
@@ -747,13 +754,19 @@ void SyncDialog::updateSummary()
     add(sync::State::LeftOnly, tr("%1 solo a la izquierda"));
     add(sync::State::RightOnly, tr("%1 solo a la derecha"));
     add(sync::State::TypeConflict, tr("%1 archivo contra carpeta"));
+    if (deletedOnLeft > 0) {
+        parts.append(tr("%1 borrados a la izquierda").arg(deletedOnLeft));
+    }
+    if (deletedOnRight > 0) {
+        parts.append(tr("%1 borrados a la derecha").arg(deletedOnRight));
+    }
     QString text = parts.isEmpty() ? tr("Las dos carpetas son iguales.") : tr("Diferencias: %1.").arg(parts.join(QStringLiteral(", ")));
     text += QLatin1Char(' ') + tr("%n idéntico(s).", nullptr, m_comparison.count(sync::State::Identical));
     // Lo borrado en un lado desde la última sincronización (no es «nuevo» en el otro).
-    if (m_deletionCount > 0) {
+    if (!m_deletedOnLeft.isEmpty()) {
         text += QLatin1Char(' ')
-            + tr("%n elemento(s) borrado(s) en un lado desde la última sincronización: al simular se "
-                 "decide si se quitan también del otro lado o se recuperan.", nullptr, m_deletionCount);
+            + tr("Lo borrado se cuenta desde la última sincronización: al simular se decide si se quita "
+                 "también del otro lado o se recupera.");
     }
     if (m_comparison.skippedLinks > 0) {
         text += QLatin1Char(' ') + tr("%n enlace(s) simbólico(s) sin comparar.", nullptr, m_comparison.skippedLinks);

@@ -927,6 +927,7 @@ Outcome Engine::synchronize(const QList<QPair<QString, QString>> &copies, const 
         if (run.step(journal::StepKind::Rename, item.value().originalPath, stored, stored,
                      [&] { return trash::moveIntoTrash(item.value()); })) {
             ++run.progress.itemsDone;
+            run.outcome.trashed.append(path);
         } else {
             trash::discardItemRecord(item.value());
         }

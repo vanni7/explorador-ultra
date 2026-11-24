@@ -102,7 +102,8 @@ private:
     DeletionChooser m_deletionChooser;
     /// Lo que se respondió sobre los borrados de esta comparación.
     QHash<QString, sync::DeletionChoice> m_deletionChoices;
-    int m_deletionCount = 0;   ///< Borrados detectados en la última comparación.
+    /// Borrados detectados en la última comparación (ruta → ¿a la izquierda?).
+    QHash<QString, bool> m_deletedOnLeft;
 
     QLineEdit *m_leftEdit = nullptr;
     QLineEdit *m_rightEdit = nullptr;
