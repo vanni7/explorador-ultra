@@ -176,9 +176,9 @@ jobs:
         shell: bash
         run: |
           # Solo para la prueba: la plataforma sin pantalla, que no va en el paquete.
-          cp "$QT_ROOT_DIR/plugins/platforms/qoffscreen.dll" dist/bin/platforms/
+          cp "$QT_ROOT_DIR/plugins/platforms/qoffscreen.dll" dist/plugins/platforms/
           PATH="/c/Windows/system32:/c/Windows" QT_QPA_PLATFORM=offscreen dist/bin/explorador-ultra.exe --smoke-test
-          rm dist/bin/platforms/qoffscreen.dll
+          rm dist/plugins/platforms/qoffscreen.dll
 
       - name: Instalador (Inno Setup)
         shell: bash
@@ -192,12 +192,12 @@ jobs:
         run: |
           $setup = Get-ChildItem paquetes\*.exe | Select-Object -First 1
           Start-Process $setup.FullName -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART','/DIR=C:\EU-prueba' -Wait
-          Copy-Item "$env:QT_ROOT_DIR\plugins\platforms\qoffscreen.dll" C:\EU-prueba\bin\platforms\
+          Copy-Item "$env:QT_ROOT_DIR\plugins\platforms\qoffscreen.dll" C:\EU-prueba\plugins\platforms\
           $env:Path = "C:\Windows\system32;C:\Windows"
           $env:QT_QPA_PLATFORM = "offscreen"
           $p = Start-Process C:\EU-prueba\bin\explorador-ultra.exe -ArgumentList '--smoke-test' -Wait -PassThru
           if ($p.ExitCode -ne 0) { throw "La aplicación instalada no arrancó (código $($p.ExitCode))" }
-          Remove-Item C:\EU-prueba\bin\platforms\qoffscreen.dll
+          Remove-Item C:\EU-prueba\plugins\platforms\qoffscreen.dll
           Start-Process C:\EU-prueba\unins000.exe -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES' -Wait
 
       - uses: actions/upload-artifact@v4
