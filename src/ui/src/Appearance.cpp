@@ -23,17 +23,38 @@ struct SystemLook
     QFont font;
 };
 
-const SystemLook &systemLook()
-{
-    static const SystemLook look{QApplication::style()->name(), QApplication::palette(), QApplication::font()};
-    return look;
-}
-
 QColor mixed(const QColor &a, const QColor &b, qreal amountOfB)
 {
     return QColor::fromRgbF(float(a.redF() * (1 - amountOfB) + b.redF() * amountOfB),
                             float(a.greenF() * (1 - amountOfB) + b.greenF() * amountOfB),
                             float(a.blueF() * (1 - amountOfB) + b.blueF() * amountOfB));
+}
+
+const SystemLook &systemLook()
+{
+    static const SystemLook look = [] {
+        SystemLook system{QApplication::style()->name(), QApplication::palette(), QApplication::font()};
+#ifdef Q_OS_WIN
+        // El estilo «windows11» de Qt marca lo seleccionado con un fondo casi
+        // blanco y una rayita: en el árbol y en las listas apenas se distingue.
+        // Con Fusion (el que se ve en Linux) y los colores de Windows, la
+        // selección es un bloque del color de acento con el texto en blanco.
+        system.styleName = QStringLiteral("Fusion");
+        for (const QPalette::ColorGroup group : {QPalette::Active, QPalette::Inactive}) {
+            QColor highlight = system.palette.color(QPalette::Active, QPalette::Accent);
+            if (!highlight.isValid() || highlight.lightnessF() > 0.7f) {
+                highlight = QColor(0x00, 0x67, 0xc0);   // azul de Windows, si el acento es muy claro
+            }
+            if (group == QPalette::Inactive) {
+                highlight = mixed(highlight, system.palette.color(QPalette::Base), 0.35);
+            }
+            system.palette.setColor(group, QPalette::Highlight, highlight);
+            system.palette.setColor(group, QPalette::HighlightedText, contrastingText(highlight));
+        }
+#endif
+        return system;
+    }();
+    return look;
 }
 
 /// Una paleta completa a partir de unos pocos colores.
