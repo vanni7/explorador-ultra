@@ -21,6 +21,7 @@
 #include "eu/core/NaturalCompare.h"
 #include "eu/fs/DirectoryLister.h"
 #include "eu/fs/Volumes.h"
+#include "eu/index/ChangeJournal.h"
 #include "eu/index/Index.h"
 #include "eu/dupes/Duplicates.h"
 #include "eu/index/ContentIndex.h"
@@ -749,6 +750,53 @@ int commandTransfer(const QString &file, const QString &folder, int rounds)
     return 0;
 }
 
+/// Ponerse al día con el diario de cambios frente a recorrer la unidad. Crea 20
+/// archivos en una carpeta temporal dentro de `root` y los borra al terminar.
+/// Las tres pasadas son con la caché ya caliente tras la primera.
+int commandJournal(const QString &root)
+{
+    const std::shared_ptr<eu::index::ChangeJournal> journal = eu::index::systemChangeJournal();
+    const QString volume = journal->volumeOf(root);
+    if (volume.isEmpty() || !journal->position(volume).ok()) {
+        out() << "No hay diario de cambios en " << root << " (¿servicio instalado?)\n";
+        return 1;
+    }
+    QTemporaryDir temporary(root + QStringLiteral("/eu-bench-XXXXXX"));
+    if (!temporary.isValid()) {
+        out() << "No se puede crear la carpeta temporal en " << root << "\n";
+        return 1;
+    }
+    for (int pass = 1; pass <= 3; ++pass) {
+        const auto start = journal->position(volume);
+        for (int i = 0; i < 20; ++i) {
+            QFile file(temporary.filePath(QStringLiteral("p%1-%2.txt").arg(pass).arg(i)));
+            if (file.open(QIODevice::WriteOnly)) {
+                file.write("x");
+            }
+        }
+        QElapsedTimer clock;
+        clock.start();
+        const auto changes = journal->changesSince(volume, start.value(), 100000);
+        const qint64 journalMs = clock.elapsed();
+        if (!changes.ok()) {
+            out() << "El diario falló: " << changes.error().message << "\n";
+            return 1;
+        }
+        clock.restart();
+        qint64 entries = 0;
+        QDirIterator walk(root, QDir::AllEntries | QDir::NoDotAndDotDot | QDir::Hidden | QDir::System,
+                          QDirIterator::Subdirectories);
+        while (walk.hasNext()) {
+            walk.next();
+            (void)walk.fileInfo().size();
+            ++entries;
+        }
+        out() << "pasada " << pass << ": diario " << journalMs << " ms (" << changes.value().folders.size()
+              << " carpetas cambiadas); recorrido " << clock.elapsed() << " ms (" << entries << " entradas)\n";
+    }
+    return 0;
+}
+
 int main(int argc, char *argv[])
 {
     // QGuiApplication: las miniaturas de texto y la duración pintan letras.
@@ -800,6 +848,9 @@ int main(int argc, char *argv[])
             folders.append(QDir::cleanPath(folder));
         }
         return commandWalk(folders);
+    }
+    if (command == QStringLiteral("journal") && arguments.size() == 3) {
+        return commandJournal(QDir::cleanPath(arguments[2]));
     }
     if (command == QStringLiteral("index") && arguments.size() >= 4) {
         return commandIndex(QDir::cleanPath(arguments[2]), arguments[3], arguments.mid(4));

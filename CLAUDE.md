@@ -35,10 +35,10 @@ Los resultados solo se anotan en `docs/BENCHMARKS.md` si se midieron de verdad.
 - VM de Windows del proyecto: `EU-Win11-Build` en `~/VMs` (VirtualBox). No tocar ninguna otra VM del equipo.
 - macOS: solo GitHub Actions.
 
-## Estado (2026-11-12)
-Fase 1 entregada y fusionada a `main` (repositorio: github.com/vanni7/explorador-ultra), con puntos abiertos listados en `docs/INFORME_FASE_1.md` (sección E). El dueño probó la aplicación en Ubuntu/Wayland y pidió seguir adelante.
+## Estado (2026-11-23)
+Fases 1 a 5 entregadas (repositorio: github.com/vanni7/explorador-ultra), con puntos abiertos en cada `docs/INFORME_FASE_N.md` (sección E).
 
-**Siguiente:** Fase 2 — Búsqueda y rendimiento (`docs/PHASE_PLAN.md`), en una rama nueva `fase-2/...`. Antes de programar, leer §6 de `docs/SPEC.md`.
+**Siguiente:** Fase 6 — Optimización y distribución (`docs/PHASE_PLAN.md`), en una rama nueva `fase-6/...`.
 **El punto exacto donde seguir está siempre en la tabla «Punto de reanudación» de `docs/STATUS.md`**, que se actualiza (con commit y envío a GitHub) tras cada paso.
 
 ## Notas útiles

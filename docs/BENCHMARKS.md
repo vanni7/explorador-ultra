@@ -183,6 +183,17 @@ Lo que cambió para llegar ahí:
 
 Casi todo el tiempo es el hash completo de los candidatos grandes (instaladores repetidos de varios GB): las etapas de tamaño y hash parcial descartan el resto leyendo 12 kB por archivo.
 
+### Diario de NTFS frente a recorrer la unidad (Fase 5, paso 7, 23-nov)
+VM de Windows 11 (6 núcleos), unidad C: con unas 362 900 entradas, servicio instalado. `eu-bench journal C:/`: crea 20 archivos y pregunta qué cambió; después recorre la unidad leyendo el tamaño de cada entrada.
+
+| Pasada | Consulta al diario | Recorrido |
+|---|---:|---:|
+| 1 | 0 ms | 20 084 ms |
+| 2 | 0 ms | 10 612 ms |
+| 3 | 1 ms | 11 126 ms |
+
+Mide la consulta, no el arranque completo de la aplicación (que además relee las carpetas cambiadas). Disco virtual; sin caché fría real.
+
 ### No medido todavía (pendiente)
 - Tiempo de apertura real de una carpeta en Archivos de GNOME (no hay forma fiable de automatizarlo; `gio list` es una aproximación de su motor, no de su interfaz).
 - Caché fría, HDD, USB y unidades de red.
