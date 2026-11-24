@@ -20,6 +20,10 @@
 #include <QTimer>
 
 #include <algorithm>
+#ifdef Q_OS_WIN
+#include <windows.h>
+#include <psapi.h>
+#endif
 #include <atomic>
 
 using namespace eu;
@@ -32,9 +36,16 @@ QTextStream &out()
     return stream;
 }
 
-/// Memoria residente del proceso en MB (Linux; -1 donde no se sabe).
+/// Memoria residente del proceso en MB (Linux y Windows; -1 donde no se sabe).
 double residentMb()
 {
+#ifdef Q_OS_WIN
+    PROCESS_MEMORY_COUNTERS counters{};
+    if (GetProcessMemoryInfo(GetCurrentProcess(), &counters, sizeof(counters))) {
+        return double(counters.WorkingSetSize) / (1024.0 * 1024.0);
+    }
+    return -1;
+#else
     QFile status(QStringLiteral("/proc/self/status"));
     if (!status.open(QIODevice::ReadOnly)) {
         return -1;
@@ -45,6 +56,7 @@ double residentMb()
         }
     }
     return -1;
+#endif
 }
 
 /// Vigila el hilo de la interfaz: un temporizador de 1 ms anota el mayor hueco
@@ -149,6 +161,15 @@ int commandOpen(const QString &folder)
     pane->selectAll();
     spinUntil([] { return false; }, 300);
     out() << "Seleccionar todo: bloqueo máximo " << QString::number(stalls.worstMs(), 'f', 1) << " ms\n";
+    // Releer la carpeta con todo seleccionado (al cambiar algo dentro): la
+    // selección se recupera por nombre.
+    stalls.start();
+    clock.restart();
+    pane->refresh();
+    spinUntil([&] { return pane->model()->state() == ui::DirectoryModel::State::Ready; });
+    spinUntil([] { return false; }, 300);
+    out() << "Releer con todo seleccionado: " << clock.elapsed() << " ms, bloqueo máximo "
+          << QString::number(stalls.worstMs(), 'f', 1) << " ms, " << pane->selectedCount() << " seleccionados\n";
     out().flush();
     return ready ? 0 : 1;
 }
@@ -175,15 +196,43 @@ int commandCancel(const QString &folder)
     return 0;
 }
 
+/// Con EU_BENCH_EVENTOS=1 dice qué evento tuvo ocupado el hilo de la
+/// interfaz más de 20 ms (a quién iba y de qué tipo).
+class TimedApplication : public QApplication
+{
+public:
+    using QApplication::QApplication;
+    bool notify(QObject *receiver, QEvent *event) override
+    {
+        if (!m_enabled) {
+            return QApplication::notify(receiver, event);
+        }
+        QElapsedTimer clock;
+        clock.start();
+        const int type = event->type();
+        const bool result = QApplication::notify(receiver, event);
+        const qint64 ms = clock.elapsed();
+        if (ms > 20) {
+            qInfo("evento %d a %s (%s): %lld ms", type, receiver->metaObject()->className(),
+                  qPrintable(receiver->objectName()), ms);
+        }
+        return result;
+    }
+
+private:
+    bool m_enabled = qEnvironmentVariableIntValue("EU_BENCH_EVENTOS") == 1;
+};
+
 } // namespace
 
 int main(int argc, char *argv[])
 {
-    QApplication application(argc, argv);
+    TimedApplication application(argc, argv);
     // Ni la sesión ni los ajustes ni el historial del usuario: todo aparte.
     QStandardPaths::setTestModeEnabled(true);
     QCoreApplication::setOrganizationName(QStringLiteral("eu-bench-ui"));
     QCoreApplication::setApplicationName(QStringLiteral("eu-bench-ui"));
+    QSettings().clear();   // cada vuelta empieza sin la sesión de la anterior
     QSettings().setValue(QStringLiteral("index/asked"), true);   // sin el asistente del índice
     const QStringList arguments = QCoreApplication::arguments();
     const QString command = arguments.value(1);

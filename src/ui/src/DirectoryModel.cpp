@@ -1,5 +1,6 @@
 // Explorador Ultra — SPDX-License-Identifier: GPL-3.0-or-later
 #include "eu/ui/DirectoryModel.h"
+#include <QSet>
 
 #include "eu/archive/Archive.h"
 #include "eu/ui/Locations.h"
@@ -72,7 +73,8 @@ void DirectoryModel::retireCurrentTask()
 void DirectoryModel::setPath(const QString &path)
 {
     // El interior de un comprimido no es una ruta del disco: no se limpia.
-    m_path = isArchiveLocation(path) ? path : QDir::cleanPath(path);
+    m_inArchive = isArchiveLocation(path);
+    m_path = m_inArchive ? path : QDir::cleanPath(path);
     m_filter = search::Query();   // el filtro era para la carpeta anterior
     // Los tamaños calculados eran de la carpeta anterior.
     stopMeasuringFolders();
@@ -317,16 +319,23 @@ void DirectoryModel::refreshTags()
     if (!m_tagStore || m_entries.empty() || m_path.isEmpty()) {
         return;
     }
-    QStringList paths;
-    paths.reserve(qsizetype(m_entries.size()));
-    const QString prefix = m_path.endsWith(QLatin1Char('/')) ? m_path : m_path + QLatin1Char('/');
+    // Aquí solo se copian los nombres (compartidos, sin duplicar el texto):
+    // armar 100 000 rutas en el hilo de la interfaz lo bloqueaba ~20 ms.
+    QStringList names;
+    names.reserve(qsizetype(m_entries.size()));
     for (const fs::Entry &entry : m_entries) {
-        paths.append(prefix + entry.name);
+        names.append(entry.name);
     }
+    const QString prefix = m_path.endsWith(QLatin1Char('/')) ? m_path : m_path + QLatin1Char('/');
     const QPointer<DirectoryModel> self(this);
     const quint64 generation = ++m_tagsGeneration;
     m_scheduler.submit(tasks::Category::Metadata, tasks::Priority::Background,
-                       [self, generation, paths, store = m_tagStore](const tasks::CancelToken &) {
+                       [self, generation, prefix, names, store = m_tagStore](const tasks::CancelToken &) {
+        QStringList paths;
+        paths.reserve(names.size());
+        for (const QString &name : names) {
+            paths.append(prefix + name);
+        }
         const QHash<QString, QList<tags::Tag>> found = store->tagsFor(paths);
         if (found.isEmpty()) {
             return;
@@ -558,6 +567,28 @@ void DirectoryModel::setSizeUnits(core::SizeUnits units)
     m_sizeUnits = units;
 }
 
+QList<int> DirectoryModel::rowsOfNames(const QStringList &names) const
+{
+    QList<int> rows;
+    if (names.isEmpty()) {
+        return rows;
+    }
+    if (names.size() == 1) {
+        const int row = rowOfName(names.first());
+        if (row >= 0) {
+            rows.append(row);
+        }
+        return rows;
+    }
+    const QSet<QString> wanted(names.cbegin(), names.cend());
+    for (size_t row = 0; row < m_entries.size(); ++row) {
+        if (wanted.contains(m_entries[row].name)) {
+            rows.append(int(row));
+        }
+    }
+    return rows;
+}
+
 int DirectoryModel::rowOfName(const QString &name) const
 {
     for (size_t row = 0; row < m_entries.size(); ++row) {
@@ -570,7 +601,13 @@ int DirectoryModel::rowOfName(const QString &name) const
 
 QString DirectoryModel::filePath(int row) const
 {
-    return QDir(m_path).filePath(m_entries[size_t(row)].name);
+    // Sin construir un QDir por archivo (se llama miles de veces al copiar o
+    // contar una selección grande).
+    const QString &name = m_entries[size_t(row)].name;
+    if (m_path.isEmpty()) {
+        return name;
+    }
+    return m_path.endsWith(QLatin1Char('/')) ? m_path + name : m_path + QLatin1Char('/') + name;
 }
 
 int DirectoryModel::rowCount(const QModelIndex &parent) const
@@ -715,7 +752,7 @@ Qt::ItemFlags DirectoryModel::flags(const QModelIndex &index) const
         return Qt::NoItemFlags;
     }
     // Dentro de un comprimido no se arrastra ni se renombra: se extrae.
-    if (isArchiveLocation(m_path)) {
+    if (m_inArchive) {
         return Qt::ItemIsEnabled | Qt::ItemIsSelectable;
     }
     Qt::ItemFlags result = Qt::ItemIsEnabled | Qt::ItemIsSelectable | Qt::ItemIsDragEnabled;

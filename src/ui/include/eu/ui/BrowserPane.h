@@ -261,6 +261,10 @@ private:
     void rememberSelection();
     void restoreSelection();
     bool applyPendingSelection();
+    /// Filas seleccionadas de la carpeta, en orden (rápido con miles).
+    QList<int> selectedRowNumbers() const;
+    /// Selecciona esas filas (ordenadas) de una vez, por tramos.
+    void selectRows(const QList<int> &sortedRows, bool clearFirst);
     /// La columna Nombre ocupa lo que dejan las demás, pero nunca menos de un
     /// ancho legible (si no cabe, aparece la barra horizontal).
     void fitNameColumn();

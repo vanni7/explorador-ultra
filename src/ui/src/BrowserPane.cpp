@@ -704,7 +704,7 @@ BrowserPane::CurrentItem BrowserPane::currentItem() const
         return item;
     }
     const QModelIndex current = m_view->selectionModel()->currentIndex();
-    item.selectedCount = int(m_view->selectionModel()->selectedRows().size());
+    item.selectedCount = selectedCount();
     if (!current.isValid() || current.row() >= m_model->rowCount() || item.selectedCount == 0
         || m_model->state() != DirectoryModel::State::Ready) {
         return item;
@@ -1049,13 +1049,39 @@ void BrowserPane::focusContent()
     }
 }
 
+QList<int> BrowserPane::selectedRowNumbers() const
+{
+    // Se leen los tramos de la selección: selectedRows() pregunta fila por
+    // fila y columna por columna, y con 100 000 seleccionadas cada consulta
+    // costaba decenas de milisegundos (y se hacen varias por cambio).
+    QList<QPair<int, int>> spans;
+    const int rows = m_model->rowCount();
+    for (const QItemSelectionRange &range : m_view->selectionModel()->selection()) {
+        if (range.isValid() && range.parent() == QModelIndex() && range.top() < rows) {
+            spans.append({range.top(), std::min(range.bottom(), rows - 1)});
+        }
+    }
+    std::sort(spans.begin(), spans.end());
+    QList<int> result;
+    int next = 0;   // primera fila aún no añadida (los tramos pueden solaparse)
+    for (const auto &[top, bottom] : std::as_const(spans)) {
+        for (int row = std::max(top, next); row <= bottom; ++row) {
+            result.append(row);
+        }
+        next = std::max(next, bottom + 1);
+    }
+    return result;
+}
+
 int BrowserPane::selectedCount() const
 {
     if (showsVolumes()) {
         return 0;   // una unidad no es un elemento sobre el que operar
     }
-    const QTreeView *view = showsSearch() ? m_resultsView : m_view;
-    return int(view->selectionModel()->selectedRows().size());
+    if (showsSearch()) {
+        return int(m_resultsView->selectionModel()->selectedRows().size());
+    }
+    return int(selectedRowNumbers().size());
 }
 
 void BrowserPane::selectAll()
@@ -1653,23 +1679,32 @@ void BrowserPane::selectWhenAvailable(const QStringList &names, bool editFirst)
     }
 }
 
+void BrowserPane::selectRows(const QList<int> &sortedRows, bool clearFirst)
+{
+    // Una sola selección hecha de tramos seguidos: seleccionar fila a fila
+    // avisa a todos en cada una y, con miles de filas, congela la ventana.
+    QItemSelection ranges;
+    const int lastColumn = m_model->columnCount() - 1;
+    for (qsizetype i = 0; i < sortedRows.size();) {
+        qsizetype j = i;
+        while (j + 1 < sortedRows.size() && sortedRows[j + 1] == sortedRows[j] + 1) {
+            ++j;
+        }
+        ranges.append(QItemSelectionRange(m_model->index(sortedRows[i], 0), m_model->index(sortedRows[j], lastColumn)));
+        i = j + 1;
+    }
+    m_view->selectionModel()->select(ranges, (clearFirst ? QItemSelectionModel::ClearAndSelect : QItemSelectionModel::Select)
+                                                 | QItemSelectionModel::Rows);
+}
+
 bool BrowserPane::applyPendingSelection()
 {
-    QList<int> rows;
-    for (const QString &name : std::as_const(m_pendingNames)) {
-        const int row = m_model->rowOfName(name);
-        if (row >= 0) {
-            rows.append(row);
-        }
-    }
+    const QList<int> rows = m_model->rowsOfNames(m_pendingNames);
     if (rows.isEmpty()) {
         return false;
     }
     QItemSelectionModel *selection = m_view->selectionModel();
-    selection->clearSelection();
-    for (const int row : std::as_const(rows)) {
-        selection->select(m_model->index(row, 0), QItemSelectionModel::Select | QItemSelectionModel::Rows);
-    }
+    selectRows(rows, true);
     const QModelIndex first = m_model->index(rows.first(), int(Column::Name));
     selection->setCurrentIndex(first, QItemSelectionModel::NoUpdate);
     fileView()->scrollTo(first);
@@ -1757,9 +1792,8 @@ void BrowserPane::rememberSelection()
         return;
     }
     m_selectedNames.clear();
-    const QModelIndexList rows = m_view->selectionModel()->selectedRows();
-    for (const QModelIndex &index : rows) {
-        m_selectedNames.append(m_model->entryAt(index.row()).name);
+    for (const int row : selectedRowNumbers()) {
+        m_selectedNames.append(m_model->entryAt(row).name);
     }
     const QModelIndex current = m_view->currentIndex();
     m_currentName = current.isValid() ? m_model->entryAt(current.row()).name : QString();
@@ -1783,12 +1817,7 @@ void BrowserPane::restoreSelection()
         }
     }
     QItemSelectionModel *selection = m_view->selectionModel();
-    for (const QString &name : std::as_const(m_selectedNames)) {
-        const int row = m_model->rowOfName(name);
-        if (row >= 0) {
-            selection->select(m_model->index(row, 0), QItemSelectionModel::Select | QItemSelectionModel::Rows);
-        }
-    }
+    selectRows(m_model->rowsOfNames(m_selectedNames), false);
     const int currentRow = m_currentName.isEmpty() ? -1 : m_model->rowOfName(m_currentName);
     if (currentRow >= 0) {
         selection->setCurrentIndex(m_model->index(currentRow, 0), QItemSelectionModel::NoUpdate);
@@ -1810,9 +1839,8 @@ QStringList BrowserPane::selectedPaths() const
         }
         return paths;
     }
-    const QModelIndexList rows = m_view->selectionModel()->selectedRows();
-    for (const QModelIndex &index : rows) {
-        paths.append(m_model->filePath(index.row()));
+    for (const int row : selectedRowNumbers()) {
+        paths.append(m_model->filePath(row));
     }
     return paths;
 }
@@ -1959,18 +1987,15 @@ QString BrowserPane::statusText() const
         text += tr(" · calculando el tamaño de las carpetas…");
     }
 
-    const QModelIndexList rows = m_view->selectionModel()->selectedRows();
+    const QList<int> rows = selectedRowNumbers();
     if (!rows.isEmpty()) {
         // Archivos por su tamaño; carpetas por lo medido (en la columna o
         // aparte). Mientras falte alguna, el total es un mínimo.
         qint64 bytes = 0;
         bool pending = false;
         bool incomplete = false;
-        for (const QModelIndex &index : rows) {
-            if (index.row() >= m_model->rowCount()) {
-                continue;
-            }
-            const fs::Entry &entry = m_model->entryAt(index.row());
+        for (const int row : rows) {
+            const fs::Entry &entry = m_model->entryAt(row);
             if (!entry.isDirectory) {
                 bytes += entry.size;
                 continue;
@@ -1978,8 +2003,8 @@ QString BrowserPane::statusText() const
             if (entry.isSymlink) {
                 continue;   // un enlace no ocupa lo que hay detrás
             }
-            const DirectoryModel::FolderSize *known = m_model->folderSizeAt(index.row());
-            const auto measured = m_selectionSizes.constFind(m_model->filePath(index.row()));
+            const DirectoryModel::FolderSize *known = m_model->folderSizeAt(row);
+            const auto measured = m_selectionSizes.constFind(m_model->filePath(row));
             if (known != nullptr && known->finished) {
                 bytes += known->size.bytes;
                 incomplete = incomplete || known->size.incomplete;
@@ -2037,13 +2062,13 @@ void BrowserPane::measureSelectedFolders()
         return;
     }
     QStringList folders;
-    for (const QModelIndex &index : m_view->selectionModel()->selectedRows()) {
-        if (index.row() >= m_model->rowCount()) {
+    for (const int row : selectedRowNumbers()) {
+        const fs::Entry &entry = m_model->entryAt(row);
+        if (!entry.isDirectory || entry.isSymlink) {
             continue;
         }
-        const fs::Entry &entry = m_model->entryAt(index.row());
-        const DirectoryModel::FolderSize *known = m_model->folderSizeAt(index.row());
-        const QString path = m_model->filePath(index.row());
+        const DirectoryModel::FolderSize *known = m_model->folderSizeAt(row);
+        const QString path = m_model->filePath(row);
         const auto measured = m_selectionSizes.constFind(path);
         if (entry.isDirectory && !entry.isSymlink && !(known != nullptr && known->finished)
             && !(measured != m_selectionSizes.constEnd() && measured->finished)) {
