@@ -305,8 +305,60 @@ Plan plan(const Comparison &comparison, const SyncOptions &options, const SyncSt
             action.deletionKept = true;
         };
 
+        // Cómo estaba en la última sincronización (si la hubo).
+        const SyncState::Entry *was = nullptr;
+        if (previous != nullptr) {
+            const auto found = previous->entries.constFind(item.relativePath);
+            if (found != previous->entries.cend()) {
+                was = &found.value();
+            }
+        }
+        const auto changed = [&](const Side &side, bool isLeft) {
+            if (was == nullptr || side.isDirectory != was->isDirectory) {
+                return true;
+            }
+            if (side.isDirectory) {
+                return false;
+            }
+            const qint64 before = isLeft ? was->leftModifiedMs : was->rightModifiedMs;
+            return side.size != was->size || std::llabs(side.modifiedMs - before) > timeToleranceMs;
+        };
+        const bool oneSide = item.state == State::LeftOnly || item.state == State::RightOnly;
+        const bool deletedOnLeft = item.state == State::RightOnly;
+        // Se borró en un lado: estaba en los dos y el que queda no cambió.
+        const bool deleted = oneSide && was != nullptr
+            && !changed(deletedOnLeft ? item.right : item.left, !deletedOnLeft);
+        const auto applyDeletion = [&] {
+            action.deletion = true;
+            action.deletedOnLeft = deletedOnLeft;
+            DeletionChoice choice = options.propagateDeletions ? DeletionChoice::Propagate : DeletionChoice::Keep;
+            if (options.direction != Direction::Both) {
+                const bool inTarget = (options.direction == Direction::LeftToRight) != deletedOnLeft;
+                if (inTarget) {
+                    choice = DeletionChoice::Restore;
+                }
+            }
+            choice = options.deletionChoices.value(item.relativePath, choice);
+            const QString where = deletedOnLeft ? tr("Se borró a la izquierda") : tr("Se borró a la derecha");
+            switch (choice) {
+            case DeletionChoice::Propagate:
+                action.kind = deletedOnLeft ? ActionKind::TrashRight : ActionKind::TrashLeft;
+                action.reason = where + tr(": también se quita del otro lado (a la papelera)");
+                break;
+            case DeletionChoice::Restore:
+                copyFrom(deletedOnLeft == false, where + tr(": se recupera desde el otro lado"));
+                break;
+            case DeletionChoice::Keep:
+                keepDeletion(where + tr(": se deja como está"));
+                ++result.deletionsNotPropagated;
+                break;
+            }
+        };
+
         if (item.state == State::TypeConflict) {
             skip(tr("Un archivo en un lado y una carpeta en el otro"), true);
+        } else if (deleted) {
+            applyDeletion();
         } else if (options.direction != Direction::Both) {
             const bool fromLeft = options.direction == Direction::LeftToRight;
             const Side &source = fromLeft ? item.left : item.right;
@@ -338,23 +390,6 @@ Plan plan(const Comparison &comparison, const SyncOptions &options, const SyncSt
             }
         } else {
             // Bidireccional: qué cambió desde la última vez en cada lado.
-            const SyncState::Entry *was = nullptr;
-            if (previous != nullptr) {
-                const auto found = previous->entries.constFind(item.relativePath);
-                if (found != previous->entries.cend()) {
-                    was = &found.value();
-                }
-            }
-            const auto changed = [&](const Side &side, bool isLeft) {
-                if (was == nullptr || side.isDirectory != was->isDirectory) {
-                    return true;
-                }
-                if (side.isDirectory) {
-                    return false;
-                }
-                const qint64 before = isLeft ? was->leftModifiedMs : was->rightModifiedMs;
-                return side.size != was->size || std::llabs(side.modifiedMs - before) > timeToleranceMs;
-            };
             const auto resolve = [&](const QString &why) {
                 action.conflict = true;
                 const bool leftNewer = item.state == State::LeftNewer;
@@ -382,20 +417,12 @@ Plan plan(const Comparison &comparison, const SyncOptions &options, const SyncSt
             };
             if (item.state == State::LeftOnly || item.state == State::RightOnly) {
                 const bool onLeft = item.state == State::LeftOnly;
-                const Side &present = onLeft ? item.left : item.right;
                 if (was == nullptr) {
                     copyFrom(onLeft, onLeft ? tr("Nuevo a la izquierda") : tr("Nuevo a la derecha"));
-                } else if (changed(present, onLeft)) {
+                } else {
+                    // (Si el que queda no cambió, ya se trató arriba como borrado.)
                     resolve(onLeft ? tr("Se borró a la derecha y cambió a la izquierda")
                                    : tr("Se borró a la izquierda y cambió a la derecha"));
-                } else if (options.propagateDeletions) {
-                    action.kind = onLeft ? ActionKind::TrashLeft : ActionKind::TrashRight;
-                    action.reason = onLeft ? tr("Se borró a la derecha: a la papelera")
-                                           : tr("Se borró a la izquierda: a la papelera");
-                } else {
-                    keepDeletion(onLeft ? tr("Se borró a la derecha: no se propagan borrados")
-                                        : tr("Se borró a la izquierda: no se propagan borrados"));
-                    ++result.deletionsNotPropagated;
                 }
             } else {
                 const bool leftChanged = changed(item.left, true);

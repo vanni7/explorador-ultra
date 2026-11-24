@@ -106,6 +106,13 @@ enum class ConflictPolicy {
     RightWins,
 };
 
+/// Qué hacer con algo que se borró en un lado desde la última sincronización.
+enum class DeletionChoice {
+    Propagate,     ///< Quitarlo también del otro lado (a la papelera propia).
+    Restore,       ///< Recuperarlo copiándolo desde el lado que aún lo tiene.
+    Keep,          ///< Dejar los dos lados como están (y recordar el borrado).
+};
+
 struct SyncOptions
 {
     Direction direction = Direction::LeftToRight;
@@ -113,6 +120,12 @@ struct SyncOptions
     /// Quitar (a la papelera propia) lo que ya no está en el otro lado. Sin
     /// esto nunca se propaga un borrado (SPEC §16).
     bool propagateDeletions = false;
+    /// Decisión por ruta para los borrados detectados (Action::deletion);
+    /// manda sobre `propagateDeletions`. Sin decisión: en los dos sentidos se
+    /// propaga o se deja según `propagateDeletions`; en un sentido, lo borrado
+    /// en el origen igual, y lo borrado en el destino se recupera (es lo que
+    /// pide un espejo).
+    QHash<QString, DeletionChoice> deletionChoices;
 };
 
 enum class ActionKind {
@@ -134,6 +147,10 @@ struct Action
     /// Bidireccional: se borró en un lado y no se propaga. Su entrada del
     /// estado anterior se conserva (si no, la próxima vez parecería nuevo).
     bool deletionKept = false;
+    /// Estaba en los dos lados en la última sincronización, sigue igual en uno
+    /// y en el otro ya no está: se borró ahí (se puede decidir con deletionChoices).
+    bool deletion = false;
+    bool deletedOnLeft = false;   ///< Con `deletion`: en qué lado se borró.
     QString reason;            ///< Por qué se hace o se omite, para enseñarlo.
 };
 
@@ -165,8 +182,9 @@ struct SyncState
     bool isEmpty() const { return entries.isEmpty(); }
 };
 
-/// Decide qué hacer. `previous` solo se usa en bidireccional (puede ser null:
-/// primera vez, y entonces lo distinto en los dos lados es conflicto).
+/// Decide qué hacer. `previous` es el estado de la última sincronización del
+/// par (puede ser null: primera vez). En bidireccional distingue lo cambiado
+/// en un lado o en los dos; en cualquier sentido, lo borrado de lo nuevo.
 Plan plan(const Comparison &comparison, const SyncOptions &options, const SyncState *previous,
           qint64 timeToleranceMs = 2000);
 

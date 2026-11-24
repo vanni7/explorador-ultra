@@ -6,7 +6,9 @@
 
 #include <QDialog>
 
+#include <QHash>
 #include <functional>
+#include <optional>
 
 class QCheckBox;
 class QComboBox;
@@ -50,7 +52,14 @@ public:
     QLabel *summary() const { return m_summary; }
     void setDirection(sync::Direction direction);
     void setConflictPolicy(sync::ConflictPolicy policy);
+    /// true: «Quitarlo también del otro lado»; false: «Dejarlo como está».
     void setPropagateDeletions(bool on);
+    /// Vuelve a «Preguntarme qué hacer con cada uno» (lo de fábrica).
+    void setAskAboutDeletions();
+    /// Qué responder, en las pruebas, a la pregunta por lo borrado desde la
+    /// última sincronización (sin la ventana). Vacío = cancelar.
+    using DeletionChooser = std::function<std::optional<QHash<QString, sync::DeletionChoice>>(const QList<sync::Action> &)>;
+    void setDeletionChooserForTesting(DeletionChooser chooser) { m_deletionChooser = std::move(chooser); }
     void setCriterion(sync::Criterion criterion);
     /// Sin la ventana de confirmación (pruebas).
     void setConfirmForTesting(std::function<bool()> confirm) { m_confirm = std::move(confirm); }
@@ -67,6 +76,10 @@ private:
     void updateButtons();
     void updateSummary();
     sync::SyncOptions syncOptions() const;
+    /// Pregunta qué hacer con cada borrado detectado. nullopt si se cancela.
+    std::optional<QHash<QString, sync::DeletionChoice>> askDeletions(const QList<sync::Action> &deletions);
+    /// Elegir carpeta con las unidades montadas a la vista.
+    QString chooseFolder(const QString &start);
     QString leftPath() const;
     QString rightPath() const;
     bool pathsAreValid(QString *problem) const;
@@ -86,6 +99,9 @@ private:
     sync::Plan m_appliedPlan;          ///< Lo que se aplicó: para guardar el estado tras volver a comparar.
     bool m_saveStateAfterCompare = false;
     std::function<bool()> m_confirm;
+    DeletionChooser m_deletionChooser;
+    /// Lo que se respondió sobre los borrados de esta comparación.
+    QHash<QString, sync::DeletionChoice> m_deletionChoices;
 
     QLineEdit *m_leftEdit = nullptr;
     QLineEdit *m_rightEdit = nullptr;
@@ -102,7 +118,7 @@ private:
     QRadioButton *m_toLeft = nullptr;
     QRadioButton *m_both = nullptr;
     QComboBox *m_conflicts = nullptr;
-    QCheckBox *m_deletions = nullptr;
+    QComboBox *m_deletions = nullptr;   ///< Qué hacer con lo borrado en un lado (o preguntar).
     QCheckBox *m_verify = nullptr;
     QPushButton *m_simulateButton = nullptr;
     QPushButton *m_syncButton = nullptr;

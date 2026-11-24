@@ -256,6 +256,35 @@ private slots:
         options.propagateDeletions = true;
         plan = sync::plan(comparison, options, &before);
         QCOMPARE(actionOf(plan, QStringLiteral("b.txt"))->kind, ActionKind::TrashLeft);
+        QVERIFY(actionOf(plan, QStringLiteral("b.txt"))->deletion);
+        QVERIFY(!actionOf(plan, QStringLiteral("b.txt"))->deletedOnLeft);
+        // Decidido por ruta: recuperarlo desde el lado que aún lo tiene.
+        options.deletionChoices.insert(QStringLiteral("b.txt"), DeletionChoice::Restore);
+        plan = sync::plan(comparison, options, &before);
+        QCOMPARE(actionOf(plan, QStringLiteral("b.txt"))->kind, ActionKind::CopyToRight);
+        options.deletionChoices.insert(QStringLiteral("b.txt"), DeletionChoice::Keep);
+        plan = sync::plan(comparison, options, &before);
+        QCOMPARE(actionOf(plan, QStringLiteral("b.txt"))->kind, ActionKind::Skip);
+        QVERIFY(actionOf(plan, QStringLiteral("b.txt"))->deletionKept);
+
+        // En un sentido también se reconoce el borrado. Izquierda → derecha:
+        // lo borrado en el destino se recupera salvo que se decida otra cosa,
+        // y lo borrado en el origen solo se propaga si se pide.
+        options = SyncOptions();
+        plan = sync::plan(comparison, options, &before);
+        QCOMPARE(actionOf(plan, QStringLiteral("b.txt"))->kind, ActionKind::CopyToRight);
+        QVERIFY(actionOf(plan, QStringLiteral("b.txt"))->deletion);
+        options.deletionChoices.insert(QStringLiteral("b.txt"), DeletionChoice::Propagate);
+        plan = sync::plan(comparison, options, &before);
+        QCOMPARE(actionOf(plan, QStringLiteral("b.txt"))->kind, ActionKind::TrashLeft);
+        options = SyncOptions();
+        options.direction = Direction::RightToLeft;
+        plan = sync::plan(comparison, options, &before);
+        QCOMPARE(actionOf(plan, QStringLiteral("b.txt"))->kind, ActionKind::Skip);
+        QVERIFY(actionOf(plan, QStringLiteral("b.txt"))->deletionKept);
+        options.propagateDeletions = true;
+        plan = sync::plan(comparison, options, &before);
+        QCOMPARE(actionOf(plan, QStringLiteral("b.txt"))->kind, ActionKind::TrashLeft);
 
         // El estado se guarda y se lee igual.
         const QString file = stateFile(m_dir.path(), l, r);
