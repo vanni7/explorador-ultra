@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Name=Explorador Ultra
+GenericName=Administrador de archivos
+Comment=Explorar, buscar, organizar y sincronizar archivos
+Exec=explorador-ultra %U
+Icon=explorador-ultra
+Terminal=false
+Categories=Utility;Core;System;FileTools;FileManager;Qt;
+MimeType=inode/directory;
+Keywords=archivos;carpetas;explorador;buscar;files;folders;
+StartupWMClass=explorador-ultra
