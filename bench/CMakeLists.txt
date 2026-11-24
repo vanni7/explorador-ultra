@@ -5,7 +5,7 @@ eu_target_defaults(eu-bench)
 
 # Mediciones con la ventana real (Fase 6).
 qt_add_executable(eu-bench-ui bench_ui.cpp)
-target_link_libraries(eu-bench-ui PRIVATE eu::ui eu::tasks eu::fs Qt6::Widgets)
+target_link_libraries(eu-bench-ui PRIVATE eu::ui eu::core eu::tasks eu::fs Qt6::Widgets)
 eu_target_defaults(eu-bench-ui)
 if(WIN32)
     target_link_libraries(eu-bench-ui PRIVATE psapi)
