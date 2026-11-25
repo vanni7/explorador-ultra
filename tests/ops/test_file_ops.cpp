@@ -170,6 +170,31 @@ private slots:
         QCOMPARE(readFile(source), content);   // el origen queda intacto
     }
 
+    void readOnlyCopyKeepsItsDate()
+    {
+        // Con los permisos de solo lectura puestos antes que la fecha, el
+        // temporal ya no se podía abrir para fecharlo: la copia quedaba con la
+        // de hoy y, al sincronizar, parecía más nueva que el original.
+        QTemporaryDir directory;
+        const QString source = directory.filePath(QStringLiteral("solo lectura.exe"));
+        writeFile(source, QByteArray(4096, 'r'));
+        QFile stamper(source);
+        QVERIFY(stamper.open(QIODevice::ReadWrite));
+        const QDateTime oldDate = QDateTime::fromSecsSinceEpoch(1'600'000'000, QTimeZone::UTC);
+        QVERIFY(stamper.setFileTime(oldDate, QFileDevice::FileModificationTime));
+        stamper.close();
+        QVERIFY(QFile::setPermissions(source, QFileDevice::ReadOwner | QFileDevice::ReadGroup | QFileDevice::ReadOther));
+
+        const QString target = directory.filePath(QStringLiteral("copia.exe"));
+        const core::Status status = copyFile(source, target, tasks::CancelToken());
+        QVERIFY2(status.ok(), status.ok() ? "" : qPrintable(status.error().message));
+        QCOMPARE(QFileInfo(target).lastModified(QTimeZone::UTC).toSecsSinceEpoch(), oldDate.toSecsSinceEpoch());
+        QVERIFY(!QFileInfo(target).isWritable());   // y sigue siendo de solo lectura
+        // Para que QTemporaryDir pueda borrarlos en Windows.
+        QFile::setPermissions(source, QFileDevice::ReadOwner | QFileDevice::WriteOwner);
+        QFile::setPermissions(target, QFileDevice::ReadOwner | QFileDevice::WriteOwner);
+    }
+
     void hashesHaveTheKnownValues()
     {
         QTemporaryDir directory;

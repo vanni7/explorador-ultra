@@ -3,6 +3,7 @@
 
 #include "eu/journal/Journal.h"
 #include "eu/ops/Engine.h"
+#include "eu/ops/FileOps.h"
 
 #include <QDateTime>
 #include <QDir>
@@ -159,6 +160,17 @@ private slots:
         // Dos árboles iguales.
         const Comparison same = compare(m_left, m_left, {}, m_noCancel);
         QVERIFY(same.sameTrees());
+
+        // Los temporales de una copia en curso no cuentan: una segunda
+        // sincronización los copiaba al otro lado y fallaba al desaparecer.
+        writeFile(m_right + QStringLiteral("/a medias.exe") + ops::partialSuffix(), "a medi", base);
+        writeFile(m_right + QStringLiteral("/a medias.exe") + ops::checkpointSuffix(), "{}", base);
+        comparison = compare(m_left, m_right, {}, m_noCancel);
+        for (const Item &item : std::as_const(comparison.items)) {
+            QVERIFY2(!item.relativePath.startsWith(QStringLiteral("a medias")), qPrintable(item.relativePath));
+        }
+        QFile::remove(m_right + QStringLiteral("/a medias.exe") + ops::partialSuffix());
+        QFile::remove(m_right + QStringLiteral("/a medias.exe") + ops::checkpointSuffix());
     }
 
     void oneWayPlans()
