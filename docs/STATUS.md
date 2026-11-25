@@ -1,6 +1,6 @@
 # Estado del proyecto
 
-Última actualización: 2026-11-24 · Fase actual: **6 (en curso, rama `fase-6/optimizacion`; empezó el 24-nov por las mediciones)**; la Fase 4 se entregó el 17-nov con puntos abiertos (ver `INFORME_FASE_4.md`); la Fase 3, el 16-nov (`INFORME_FASE_3.md`); la Fase 2, el 14-nov (`INFORME_FASE_2.md`)
+Última actualización: 2026-11-25 · **Fases 1 a 6 entregadas; primera versión v0.1.0** (Fase 6 el 25-nov, ver `INFORME_FASE_6.md`; Fase 5 el 23-nov, `INFORME_FASE_5.md`); la Fase 4 se entregó el 17-nov con puntos abiertos (ver `INFORME_FASE_4.md`); la Fase 3, el 16-nov (`INFORME_FASE_3.md`); la Fase 2, el 14-nov (`INFORME_FASE_2.md`)
 
 Estados: **Terminada** (cumple §26) · **Parcial** · **Pendiente** · **Bloqueada**.
 
@@ -12,7 +12,7 @@ Fase 6 — Optimización y distribución, rama `fase-6/optimizacion` (sale de `m
 | 1 | Medir las metas de §4 con la ventana real (Ubuntu y Windows) | **Hecho** (24-nov): `eu-bench-ui` (abrir 100 000 archivos, bloqueo de la interfaz, memoria, ordenar, releer con todo seleccionado, cancelar; `EU_BENCH_EVENTOS=1` dice qué evento bloquea; vigilante que corta a los 20 s). Resultados en `BENCHMARKS.md`: se cumplen todas las metas medidas salvo el objetivo de 16 ms (19–48 ms al abrir) y aplicar un orden o releer con 100 000 seleccionados (44–85 ms). **Fallo encontrado y corregido**: con muchos seleccionados, releer la carpeta congelaba la ventana (coste cuadrático); también se pasaron a segundo plano las rutas de las etiquetas (21 ms) y la lista vieja. De paso: `test_core_crash_report` fallaba ~1 de cada 10 (el informe leía fuera de la pila). **Falta**: caché fría, HDD/USB con la ventana, macOS |
 | 2 | Paquetes: instalación autosuficiente, .deb, AppImage, instalador de Windows, .dmg, en la CI | **Hecho en la CI** (24-nov): `cmake/EuPackaging.cmake` (Qt desplegado al lado; en Linux Wayland y offscreen, sin los controladores SQL que no se usan), `-DEU_PACKAGE_DEB=ON` + cpack (en `/opt`, dependencias con dpkg-shlibdeps), `packaging/windows/explorador-ultra.iss` (Inno Setup en español; el servicio se copia pero no se instala, y se quita al desinstalar), flujo `.github/workflows/paquetes.yml` (etiquetas `v*` y ramas `fase-6/**`; cada paquete se prueba arrancando sin el Qt de la compilación; con etiqueta deja un borrador de versión). Cada paquete se prueba en la CI arrancando la app y pidiendo una miniatura al auxiliar. A mano: .deb desempaquetado y AppImage en Ubuntu 26.04; instalador en la VM (asistente en español, arranque, miniaturas). **Fallos encontrados al probar el instalado y corregidos**: faltaba la plataforma offscreen (el auxiliar de miniaturas no arrancaba: un aviso por foto), el .exe y el .app no llevaban icono, y un cierre del auxiliar marcaba la foto como ilegible para siempre (ahora solo en la sesión; `ErrorCode::Crashed`). **Falta**: que el dueño instale el .deb y pruebe el AppImage en su escritorio; el .dmg en un Mac (no hay) |
 | 3 | Documentación: README, licencias de terceros, guía de usuario, guías de SmartScreen, Gatekeeper y «Acceso total al disco» | **Hecho** (24-nov): `README.md`, `THIRD_PARTY_LICENSES.md`, `docs/GUIA_DE_USUARIO.md`, `docs/DISTRIBUCION.md` |
-| 4 | Verificación final, informe, fusión a `main` y primera versión etiquetada | Pendiente |
+| 4 | Verificación final, informe, fusión a `main` y primera versión etiquetada | **Hecho** (25-nov): el dueño instaló el .deb; versión 0.1.0, informe en `INFORME_FASE_6.md`, fusión a `main` con la CI verde y etiqueta `v0.1.0` (borrador de versión en GitHub para que el dueño lo publique). **Siguiente**: lo decide el dueño (puntos abiertos en la sección E del informe) |
 
 ## Fase 5 (entregada el 23-nov; ver `INFORME_FASE_5.md`)
 Fase 5 — Funciones profesionales, rama `fase-5/profesional` (salió de `fase-4/docx-epub`, que se fusiona a `main` en cuanto su CI esté verde; después se fusiona `main` en esta rama). Plan y criterios en `PHASE_PLAN.md` y SPEC §5.3, §5.6, §5.7, §16, §18–§20. Cada paso terminado queda en un commit ya enviado a GitHub; lo que no esté en `git log` no está hecho.
@@ -154,5 +154,5 @@ Rama `fase-1/core`. "CI completa" = Ubuntu 22.04/24.04, ASan, Windows, macOS Int
 ### Dónde quedó
 Ver la tabla «Punto de reanudación» al principio de este archivo: se actualiza tras cada paso.
 
-## Fases 2 a 6
-Todas **Pendientes**. Plan y criterios en `docs/PHASE_PLAN.md`.
+## Plan
+Fases 1 a 6 entregadas. Plan y criterios en `docs/PHASE_PLAN.md`.

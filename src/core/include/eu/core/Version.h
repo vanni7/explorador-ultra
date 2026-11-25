@@ -5,7 +5,7 @@
 
 namespace eu::core {
 
-/// Versión de la aplicación tal como la define CMake (por ejemplo "0.0.1").
+/// Versión de la aplicación tal como la define CMake (por ejemplo "0.1.0").
 QString versionString();
 
 /// Nombre visible de la aplicación.

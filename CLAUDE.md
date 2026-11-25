@@ -17,6 +17,7 @@ Otros presets: `debug`, `asan` (ASan+UBSan), `tsan`.
 ./build/release/bin/eu-bench mktree <carpeta-temporal> 100000
 ./build/release/bin/eu-bench listing|sort <carpeta>
 ./build/release/bin/eu-bench copy <archivo> <carpetaDestino>
+./build/release/bin/eu-bench-ui open|cancel <carpeta>   # con la ventana real
 ```
 Los resultados solo se anotan en `docs/BENCHMARKS.md` si se midieron de verdad.
 
@@ -35,10 +36,10 @@ Los resultados solo se anotan en `docs/BENCHMARKS.md` si se midieron de verdad.
 - VM de Windows del proyecto: `EU-Win11-Build` en `~/VMs` (VirtualBox). No tocar ninguna otra VM del equipo.
 - macOS: solo GitHub Actions.
 
-## Estado (2026-11-23)
-Fases 1 a 5 entregadas (repositorio: github.com/vanni7/explorador-ultra), con puntos abiertos en cada `docs/INFORME_FASE_N.md` (sección E).
+## Estado (2026-11-25)
+Fases 1 a 6 entregadas (repositorio: github.com/vanni7/explorador-ultra), con puntos abiertos en cada `docs/INFORME_FASE_N.md` (sección E). Primera versión: **v0.1.0**.
 
-**Siguiente:** Fase 6 — Optimización y distribución (`docs/PHASE_PLAN.md`), en una rama nueva `fase-6/...`.
+**Siguiente:** lo decide el dueño. Para sacar otra versión: subir `VERSION` en `CMakeLists.txt`, fusionar a `main` con la CI verde y `git tag vX.Y.Z && git push origin vX.Y.Z`; el flujo `paquetes.yml` deja un borrador de versión con los paquetes (`docs/DISTRIBUCION.md`).
 **El punto exacto donde seguir está siempre en la tabla «Punto de reanudación» de `docs/STATUS.md`**, que se actualiza (con commit y envío a GitHub) tras cada paso.
 
 ## Notas útiles

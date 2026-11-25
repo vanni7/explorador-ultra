@@ -1,7 +1,7 @@
 ; Instalador de Windows de Explorador Ultra (Inno Setup 6). SPEC §23.
 ; Parte de la instalación de CMake (cmake --install … --prefix <dist>) y la
 ; empaqueta. Uso:
-;   iscc /DAppVersion=0.0.1 /DSourceDir=C:\ruta\dist explorador-ultra.iss
+;   iscc /DAppVersion=0.1.0 /DSourceDir=C:\ruta\dist explorador-ultra.iss
 ; El servicio opcional de NTFS (eu-indexsvc.exe) se copia pero no se instala:
 ; se instala desde la propia aplicación (ventana del índice), con permiso de
 ; administrador, y al desinstalar la aplicación se quita si quedó instalado.
