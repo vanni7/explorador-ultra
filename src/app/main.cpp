@@ -68,7 +68,8 @@ int main(int argc, char *argv[])
     QTranslator qtTranslator;
     for (const QString &folder : {QLibraryInfo::path(QLibraryInfo::TranslationsPath),
                                   QCoreApplication::applicationDirPath() + QStringLiteral("/translations")}) {
-        if (qtTranslator.load(QStringLiteral("qtbase_es"), folder)) {
+        // qtbase_es en una instalación de Qt; qt_es (todos juntos) en la app desplegada.
+        if (qtTranslator.load(QStringLiteral("qtbase_es"), folder) || qtTranslator.load(QStringLiteral("qt_es"), folder)) {
             QApplication::installTranslator(&qtTranslator);
             break;
         }

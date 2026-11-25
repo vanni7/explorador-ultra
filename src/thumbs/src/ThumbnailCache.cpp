@@ -126,11 +126,11 @@ void ThumbnailCache::store(const ThumbnailRequest &request, const QImage &image)
     }
 }
 
-void ThumbnailCache::storeFailure(const ThumbnailRequest &request)
+void ThumbnailCache::storeFailure(const ThumbnailRequest &request, bool persistent)
 {
     const QString key = keyOf(request);
     insertMemory(key, Entry{State::Failed, {}});
-    if (m_directory.isEmpty()) {
+    if (m_directory.isEmpty() || !persistent) {
         return;
     }
     const QString path = diskPath(key, QStringLiteral(".fallo"));

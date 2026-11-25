@@ -194,6 +194,25 @@ VM de Windows 11 (6 núcleos), unidad C: con unas 362 900 entradas, servicio ins
 
 Mide la consulta, no el arranque completo de la aplicación (que además relee las carpetas cambiadas). Disco virtual; sin caché fría real.
 
+### Ventana real con 100 000 archivos (Fase 6, 24-nov)
+`eu-bench-ui open <carpeta>` abre la carpeta en una `MainWindow` de verdad (plataforma `offscreen`, ajustes aislados y vacíos en cada vuelta) y mide con un temporizador de 1 ms el mayor hueco del bucle de eventos (= bloqueo de la interfaz); con `EU_BENCH_EVENTOS=1` dice qué evento pasó de 20 ms. Carpeta de `eu-bench mktree` (100 000 archivos vacíos, nombres variados), caché caliente, tres vueltas. Ubuntu 26.04 en el SSD del equipo; Windows 11 en la VM (4 núcleos virtuales, disco virtual en el SSD del anfitrión):
+
+| Medida | Ubuntu | Windows (VM) | Meta (SPEC §4) |
+|---|---|---|---|
+| Primeros elementos en la lista | 121–136 ms | 158–175 ms | < 300 ms ✔ |
+| Listado completo | 509–571 ms | 625–629 ms | < 3 s ✔ |
+| Bloqueo máximo de la interfaz al abrir | 19–29 ms | 38–48 ms | < 50 ms ✔ (objetivo 16 ms ✘) |
+| Memoria de la pestaña con 100 000 elementos | +39–41 MB | +41–42 MB | < 300 MB ✔ |
+| Ordenar por tamaño, fecha o nombre (parte inmediata; el orden se calcula aparte) | 7–14 ms | 6–12 ms | — |
+| Aplicar el orden calculado (reemplaza la lista) | 44–50 ms | 61–85 ms | < 50 ms: justo en Ubuntu, ✘ en la VM |
+| Releer la carpeta con los 100 000 seleccionados | 0,8–0,9 s, bloqueo 56–72 ms | 0,9–1,0 s, bloqueo 71–84 ms | < 50 ms ✘ |
+
+`eu-bench-ui cancel <carpeta>`: medir el tamaño de una carpeta grande y cancelar a los 300 ms, cinco veces: la tarea terminó entre 0,1 y 1,6 ms después (Ubuntu, carpeta personal) y entre 3,5 y 4,6 ms (Windows, `C:\Windows`). Meta < 500 ms ✔.
+
+**Fallo encontrado al medir (corregido, `f459f15`)**: con muchos elementos seleccionados, releer la carpeta (lo que pasa al cambiar algo dentro, o al volver a abrir una sesión guardada así) **congelaba la ventana** durante minutos: la selección se recuperaba nombre a nombre (`rowOfName` recorre la lista: coste cuadrático) y fila a fila (cada `select` avisaba a la barra de estado, que volvía a contar toda la selección con `selectedRows()`, que pregunta fila por fila y columna por columna). Ahora los nombres se buscan de una pasada, se selecciona por tramos y la selección se cuenta y recorre leyendo sus tramos. También: las rutas para buscar etiquetas se arman en segundo plano (eran 21 de los 24 ms del bloqueo al abrir en Ubuntu), `flags()` y `filePath()` ya no comparan textos ni construyen un `QDir` por archivo, y la lista vieja se libera en segundo plano. Los bloqueos de 20–30 ms que quedan al abrir son el reinicio del modelo con 100 000 filas; bajar de ahí pediría insertar por partes en vez de reiniciar.
+
+No medido aún: caché fría (vaciarla pide permisos de administrador), discos mecánicos y USB con la ventana real, macOS.
+
 ### No medido todavía (pendiente)
 - Tiempo de apertura real de una carpeta en Archivos de GNOME (no hay forma fiable de automatizarlo; `gio list` es una aproximación de su motor, no de su interfaz).
 - Caché fría, HDD, USB y unidades de red.

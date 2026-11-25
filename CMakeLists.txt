@@ -3,7 +3,7 @@
 cmake_minimum_required(VERSION 3.22)
 
 project(ExploradorUltra
-    VERSION 0.0.1
+    VERSION 0.1.0
     DESCRIPTION "Administrador de archivos rápido y multiplataforma"
     LANGUAGES CXX)
 
@@ -56,6 +56,7 @@ add_subdirectory(src/trash)
 add_subdirectory(src/sync)
 add_subdirectory(src/ui)
 add_subdirectory(src/app)
+include(EuPackaging)
 
 if(EU_BUILD_TESTS)
     enable_testing()

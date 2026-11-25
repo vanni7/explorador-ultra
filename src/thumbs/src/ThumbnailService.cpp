@@ -54,7 +54,14 @@ ThumbnailCache::Entry ThumbnailService::request(const ThumbnailRequest &request)
                 if (image.ok()) {
                     cache->store(request, image.value());
                 } else if (image.error().code != core::ErrorCode::Cancelled) {
-                    cache->storeFailure(request);
+                    // Se recuerda para siempre solo si el lector dijo que no
+                    // puede con el archivo. Si el auxiliar se cerró o se colgó,
+                    // puede ser cosa del entorno (en un paquete le faltaba su
+                    // plataforma y cada foto quedaba marcada como ilegible):
+                    // entonces solo vale para esta sesión.
+                    const core::ErrorCode code = image.error().code;
+                    cache->storeFailure(request,
+                                        code != core::ErrorCode::Crashed && code != core::ErrorCode::Timeout);
                 }
             }
             QMetaObject::invokeMethod(qApp, [self, key, id] {

@@ -70,7 +70,7 @@ public:
             }
             if (m_process->state() != QProcess::Running) {
                 stop();
-                return core::Error{core::ErrorCode::Corrupted,
+                return core::Error{core::ErrorCode::Crashed,
                                    tr("El archivo hizo cerrarse al lector de miniaturas"), path, 0};
             }
             if (timer.elapsed() > s_timeoutMs.load()) {

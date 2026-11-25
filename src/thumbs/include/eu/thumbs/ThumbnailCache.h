@@ -44,7 +44,8 @@ public:
     /// Memoria y, si no está, disco (y entonces la sube a memoria).
     Entry load(const ThumbnailRequest &request);
     void store(const ThumbnailRequest &request, const QImage &image);
-    void storeFailure(const ThumbnailRequest &request);
+    /// `persistent`: también en disco (si no, solo hasta cerrar la aplicación).
+    void storeFailure(const ThumbnailRequest &request, bool persistent = true);
 
     void setMemoryBudget(qint64 bytes);
     qint64 memoryBudget() const;

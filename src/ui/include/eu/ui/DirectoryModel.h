@@ -105,6 +105,9 @@ public:
     /// Elemento de una fila. `row` debe ser válido.
     const fs::Entry &entryAt(int row) const { return m_entries[size_t(row)]; }
     /// Fila de un nombre, o -1 si no está.
+    /// Filas de varios nombres de una sola pasada (los que no están se omiten),
+    /// en orden de fila. Con miles de nombres, rowOfName uno a uno es cuadrático.
+    QList<int> rowsOfNames(const QStringList &names) const;
     int rowOfName(const QString &name) const;
     /// Ruta completa de una fila.
     QString filePath(int row) const;
@@ -169,6 +172,7 @@ private:
     quint64 m_generation = 0;   ///< Identifica la carga vigente; lo que llegue de otra se descarta.
 
     QString m_path;
+    bool m_inArchive = false;   ///< m_path es una carpeta de dentro de un comprimido.
     std::shared_ptr<tags::TagStore> m_tagStore;
     QHash<QString, QList<tags::Tag>> m_tags;   ///< Por nombre.
     quint64 m_tagsGeneration = 0;

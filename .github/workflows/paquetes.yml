@@ -1,0 +1,290 @@
+# Paquetes de Explorador Ultra (SPEC §23, Fase 6): .deb y AppImage (Linux),
+# instalador de Windows (Inno Setup) y .dmg (macOS). Se hacen en cada versión
+# etiquetada (v*) y, a mano, desde la pestaña Actions. Cada paquete se prueba
+# arrancando la aplicación ya empaquetada, sin el Qt con el que se compiló.
+name: Paquetes
+
+on:
+  push:
+    tags: ["v*"]
+    # Mientras se prepara la distribución (Fase 6), también en su rama.
+    branches: ["fase-6/**"]
+  workflow_dispatch:
+
+concurrency:
+  group: paquetes-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  QT_VERSION: "6.12.0"
+
+jobs:
+  linux:
+    name: Linux (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        # El AppImage se hace en la más antigua: funciona en las posteriores.
+        include:
+          - { os: ubuntu-22.04, appimage: true }
+          - { os: ubuntu-24.04, appimage: false }
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Versión del paquete
+        shell: bash
+        run: |
+          if [ "$GITHUB_REF_TYPE" = tag ]; then v="${GITHUB_REF_NAME#v}"; else v="0.1.0-prueba-${GITHUB_SHA::7}"; fi
+          echo "EU_VERSION=$v" >> "$GITHUB_ENV"
+
+      - name: Dependencias del sistema
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build libgl1-mesa-dev libxkbcommon-dev \
+            libxkbcommon-x11-0 libxcb-cursor0 libxcb-icccm4 libxcb-image0 \
+            libxcb-keysyms1 libxcb-render-util0 libxcb-xinerama0 libxcb-xkb1 libfontconfig1 \
+            pkg-config libavformat-dev libavcodec-dev libswscale-dev libavutil-dev \
+            libarchive-dev libraw-dev libexiv2-dev libssl-dev dpkg-dev desktop-file-utils
+
+      - name: Instalar Qt
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: ${{ env.QT_VERSION }}
+          modules: 'qtmultimedia qtpdf qtimageformats'
+          cache: true
+
+      - name: Compilar
+        run: |
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_PREFIX_PATH="$QT_ROOT_DIR" \
+            -DEU_BUILD_TESTS=OFF -DEU_BUILD_BENCH=OFF -DEU_PACKAGE_DEB=ON
+          cmake --build build
+
+      - name: Paquete .deb
+        run: |
+          (cd build && cpack)
+          deb=$(ls build/*.deb)
+          release=$(. /etc/os-release && echo "$VERSION_ID")
+          mkdir -p paquetes
+          cp "$deb" "paquetes/explorador-ultra_${EU_VERSION}_ubuntu${release}_amd64.deb"
+          dpkg-deb -f "$deb" Depends
+          desktop-file-validate packaging/linux/explorador-ultra.desktop
+
+      - name: Probar el .deb instalado
+        run: |
+          sudo apt-get install -y ./paquetes/*.deb
+          # Sin el Qt de la compilación: solo lo que trae el paquete.
+          env -u LD_LIBRARY_PATH -u QT_PLUGIN_PATH QT_QPA_PLATFORM=offscreen /usr/bin/explorador-ultra --smoke-test
+          # Y el auxiliar de miniaturas (su propio proceso, con su plataforma sin pantalla).
+          respuesta=$(printf '{"path":"%s","size":1,"mtime":1,"maxSide":64,"dir":false,"out":"%s"}\n' \
+            "$PWD/assets/icon/png/explorador-ultra-256.png" "$RUNNER_TEMP/mini.png" \
+            | env -u LD_LIBRARY_PATH -u QT_PLUGIN_PATH -u QT_QPA_PLATFORM /opt/explorador-ultra/bin/eu-thumbnailer)
+          echo "$respuesta"; grep -q '"ok":true' <<< "$respuesta"
+          sudo apt-get remove -y explorador-ultra
+
+      - name: AppImage
+        if: matrix.appimage
+        env:
+          APPIMAGE_EXTRACT_AND_RUN: "1"
+        run: |
+          cmake -DEU_PACKAGE_DEB=OFF build
+          DESTDIR="$PWD/AppDir" cmake --install build --prefix /usr
+          wget -q https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-x86_64.AppImage
+          chmod +x linuxdeploy-x86_64.AppImage
+          # Qt ya está dentro (cmake --install); linuxdeploy añade lo demás que
+          # se usa (libarchive, FFmpeg, LibRaw, Exiv2…) y lo empaqueta.
+          export VERSION="$EU_VERSION"
+          ./linuxdeploy-x86_64.AppImage --appdir AppDir \
+            -e AppDir/usr/bin/explorador-ultra -e AppDir/usr/bin/eu-thumbnailer \
+            -d AppDir/usr/share/applications/explorador-ultra.desktop \
+            -i AppDir/usr/share/icons/hicolor/256x256/apps/explorador-ultra.png \
+            --deploy-deps-only AppDir/usr/plugins \
+            --output appimage
+          mv Explorador_Ultra*.AppImage "paquetes/ExploradorUltra-${EU_VERSION}-x86_64.AppImage"
+
+      - name: Probar el AppImage
+        if: matrix.appimage
+        env:
+          APPIMAGE_EXTRACT_AND_RUN: "1"
+          QT_QPA_PLATFORM: offscreen
+        run: env -u LD_LIBRARY_PATH -u QT_PLUGIN_PATH ./paquetes/*.AppImage --smoke-test
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: paquetes-${{ matrix.os }}
+          path: paquetes/*
+
+  windows:
+    name: Windows
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Versión del paquete
+        shell: bash
+        run: |
+          if [ "$GITHUB_REF_TYPE" = tag ]; then v="${GITHUB_REF_NAME#v}"; else v="0.1.0-prueba-${GITHUB_SHA::7}"; fi
+          echo "EU_VERSION=$v" >> "$GITHUB_ENV"
+
+      - name: Compilador MSVC en el PATH
+        uses: ilammy/msvc-dev-cmd@v1
+
+      - name: Caché de Qt
+        id: qt-windows-cache
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/qt/${{ env.QT_VERSION }}
+          key: qt-windows-${{ env.QT_VERSION }}-msvc2022_64-${{ hashFiles('tools/windows/fetch_qt_windows.py') }}
+
+      - name: Descargar Qt
+        if: steps.qt-windows-cache.outputs.cache-hit != 'true'
+        shell: bash
+        run: python tools/windows/fetch_qt_windows.py "$RUNNER_TEMP/qt" "$QT_VERSION"
+
+      - name: Rutas de Qt
+        shell: bash
+        run: |
+          qt="$(cygpath -m "$RUNNER_TEMP")/qt/$QT_VERSION/msvc2022_64"
+          echo "QT_ROOT_DIR=$qt" >> "$GITHUB_ENV"
+
+      - name: Caché de vcpkg
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/vcpkg-cache
+          key: vcpkg-windows-${{ hashFiles('tools/windows/instalar-vcpkg.cmd', 'tools/windows/vcpkg-triplets/*') }}
+
+      - name: Bibliotecas de vcpkg
+        shell: cmd
+        run: |
+          if not exist "%RUNNER_TEMP%\vcpkg-cache" mkdir "%RUNNER_TEMP%\vcpkg-cache"
+          set VCPKG_DEFAULT_BINARY_CACHE=%RUNNER_TEMP%\vcpkg-cache
+          call tools\windows\instalar-vcpkg.cmd "%RUNNER_TEMP%\vcpkg" || exit /b 1
+          echo EU_CMAKE_ARGS=-DCMAKE_TOOLCHAIN_FILE=%RUNNER_TEMP:\=/%/vcpkg/scripts/buildsystems/vcpkg.cmake -DVCPKG_TARGET_TRIPLET=x64-windows-release>> "%GITHUB_ENV%"
+
+      - name: Compilar e instalar
+        shell: bash
+        run: |
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_PREFIX_PATH="$QT_ROOT_DIR" \
+            -DEU_BUILD_TESTS=OFF -DEU_BUILD_BENCH=OFF $EU_CMAKE_ARGS
+          cmake --build build
+          cmake --install build --prefix dist
+          # Las DLL de vcpkg (libarchive y lo suyo) que la compilación dejó
+          # junto al programa, y el entorno de ejecución de C++.
+          for dll in build/bin/*.dll; do
+            name=$(basename "$dll")
+            [ -f "dist/bin/$name" ] || cp "$dll" dist/bin/
+          done
+          cp "$(cygpath -u "$VCToolsRedistDir")"/x64/Microsoft.VC*.CRT/*.dll dist/bin/
+          ls dist/bin
+
+      - name: Probar lo instalado (sin Qt en el PATH)
+        shell: bash
+        run: |
+          # «offscreen» va en el paquete (la usa el auxiliar de miniaturas).
+          test -f dist/plugins/platforms/qoffscreen.dll
+          PATH="/c/Windows/system32:/c/Windows" QT_QPA_PLATFORM=offscreen dist/bin/explorador-ultra.exe --smoke-test
+          # Y el auxiliar de miniaturas (su propio proceso, con su plataforma sin pantalla).
+          respuesta=$(printf '{"path":"%s","size":1,"mtime":1,"maxSide":64,"dir":false,"out":"%s"}\n' \
+            "$(cygpath -m "$PWD/assets/icon/png/explorador-ultra-256.png")" "$(cygpath -m "$RUNNER_TEMP/mini.png")" \
+            | PATH="/c/Windows/system32:/c/Windows" dist/bin/eu-thumbnailer.exe)
+          echo "$respuesta"; grep -q '"ok":true' <<< "$respuesta"
+
+      - name: Instalador (Inno Setup)
+        # Desde PowerShell: Git Bash convertiría los «/D…» en rutas.
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force paquetes | Out-Null
+          & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" "/DAppVersion=$env:EU_VERSION" `
+            "/DSourceDir=$PWD\dist" "/DOutputDir=$PWD\paquetes" packaging\windows\explorador-ultra.iss
+          if ($LASTEXITCODE -ne 0) { throw "Inno Setup falló ($LASTEXITCODE)" }
+
+      - name: Probar el instalador
+        shell: pwsh
+        run: |
+          $setup = Get-ChildItem paquetes\*.exe | Select-Object -First 1
+          Start-Process $setup.FullName -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART','/DIR=C:\EU-prueba' -Wait
+          $env:Path = "C:\Windows\system32;C:\Windows"
+          $env:QT_QPA_PLATFORM = "offscreen"
+          $p = Start-Process C:\EU-prueba\bin\explorador-ultra.exe -ArgumentList '--smoke-test' -Wait -PassThru
+          if ($p.ExitCode -ne 0) { throw "La aplicación instalada no arrancó (código $($p.ExitCode))" }
+          Start-Process C:\EU-prueba\unins000.exe -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES' -Wait
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: paquetes-windows
+          path: paquetes/*.exe
+
+  macos:
+    name: macOS (${{ matrix.arch }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: macos-15-intel, arch: Intel }
+          - { os: macos-15, arch: AppleSilicon }
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Versión del paquete
+        shell: bash
+        run: |
+          if [ "$GITHUB_REF_TYPE" = tag ]; then v="${GITHUB_REF_NAME#v}"; else v="0.1.0-prueba-${GITHUB_SHA::7}"; fi
+          echo "EU_VERSION=$v" >> "$GITHUB_ENV"
+
+      - name: Ninja
+        run: brew install ninja
+
+      - name: Instalar Qt
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: ${{ env.QT_VERSION }}
+          modules: 'qtmultimedia qtpdf qtimageformats'
+          cache: true
+
+      - name: Compilar
+        run: |
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_PREFIX_PATH="$QT_ROOT_DIR" \
+            -DEU_BUILD_TESTS=OFF -DEU_BUILD_BENCH=OFF
+          cmake --build build
+
+      - name: Probar lo instalado
+        run: |
+          cmake --install build --prefix dist
+          app=dist/explorador-ultra.app
+          test -f "$app/Contents/PlugIns/platforms/libqoffscreen.dylib"
+          env -u DYLD_LIBRARY_PATH -u DYLD_FRAMEWORK_PATH QT_QPA_PLATFORM=offscreen \
+            "$app/Contents/MacOS/explorador-ultra" --smoke-test
+          # Y el auxiliar de miniaturas (su propio proceso, con su plataforma sin pantalla).
+          respuesta=$(printf '{"path":"%s","size":1,"mtime":1,"maxSide":64,"dir":false,"out":"%s"}\n' \
+            "$PWD/assets/icon/png/explorador-ultra-256.png" "$RUNNER_TEMP/mini.png" \
+            | env -u DYLD_LIBRARY_PATH -u DYLD_FRAMEWORK_PATH -u QT_QPA_PLATFORM "$app/Contents/MacOS/eu-thumbnailer")
+          echo "$respuesta"; grep -q '"ok":true' <<< "$respuesta"
+
+      - name: .dmg
+        run: |
+          (cd build && cpack -G DragNDrop)
+          mkdir -p paquetes
+          cp build/*.dmg "paquetes/ExploradorUltra-${EU_VERSION}-macOS-${{ matrix.arch }}.dmg"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: paquetes-macos-${{ matrix.arch }}
+          path: paquetes/*.dmg
+
+  publicar:
+    name: Publicar la versión
+    if: github.ref_type == 'tag'
+    needs: [linux, windows, macos]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: paquetes
+          merge-multiple: true
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: paquetes/*
+          draft: true
