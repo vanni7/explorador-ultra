@@ -129,6 +129,10 @@ public:
     /// (reemplazando a la papelera) y envíos a la papelera. Una operación.
     quint64 synchronize(const QList<QPair<QString, QString>> &copies, const QStringList &toTrash,
                         const QString &description, bool verify, const QStringList &roots);
+    /// true si hay una sincronización en curso (o esperando turno) sobre alguna
+    /// de estas carpetas, sobre una de dentro o sobre una que las contiene.
+    /// Comparar mientras tanto vería copias a medias.
+    bool isSynchronizing(const QStringList &folders) const;
     quint64 copy(const QStringList &sources, const QString &destinationDirectory, const ops::TransferOptions &policy);
     quint64 move(const QStringList &sources, const QString &destinationDirectory, const ops::TransferOptions &policy);
     /// Extrae de `archivePath` lo que hay en `innerPaths` (vacío: todo) en una
@@ -214,6 +218,7 @@ private:
     QHash<quint64, tasks::TaskHandle> m_running;
     QHash<quint64, ActionResult> m_initial;   ///< Para dar por terminada una que no llegó a empezar.
     QHash<quint64, std::shared_ptr<std::atomic<bool>>> m_ran;
+    QHash<quint64, QStringList> m_syncRoots;   ///< Carpetas de cada sincronización en curso.
     std::vector<std::unique_ptr<Transfer>> m_transfers;   ///< En el orden de la cola.
     bool m_sequential = true;
     /// Se pone al cerrar: lo cancelado entonces queda «interrumpido» para reanudarlo.

@@ -1,6 +1,6 @@
 # Estado del proyecto
 
-Última actualización: 2026-11-25 · **Fases 1 a 6 entregadas; primera versión v0.1.0** (Fase 6 el 25-nov, ver `INFORME_FASE_6.md`; Fase 5 el 23-nov, `INFORME_FASE_5.md`); la Fase 4 se entregó el 17-nov con puntos abiertos (ver `INFORME_FASE_4.md`); la Fase 3, el 16-nov (`INFORME_FASE_3.md`); la Fase 2, el 14-nov (`INFORME_FASE_2.md`)
+Última actualización: 2026-11-25 · **Fases 1 a 6 entregadas; versión actual v0.1.1** (v0.1.0 + arreglo de la sincronización, ver `INFORME_FASE_6.md` D2) (Fase 6 el 25-nov, ver `INFORME_FASE_6.md`; Fase 5 el 23-nov, `INFORME_FASE_5.md`); la Fase 4 se entregó el 17-nov con puntos abiertos (ver `INFORME_FASE_4.md`); la Fase 3, el 16-nov (`INFORME_FASE_3.md`); la Fase 2, el 14-nov (`INFORME_FASE_2.md`)
 
 Estados: **Terminada** (cumple §26) · **Parcial** · **Pendiente** · **Bloqueada**.
 

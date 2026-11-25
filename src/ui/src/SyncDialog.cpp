@@ -470,6 +470,18 @@ bool SyncDialog::pathsAreValid(QString *problem) const
     return true;
 }
 
+bool SyncDialog::otherSyncRunning()
+{
+    // Una sincronización anterior (quizá de otra ventana ya cerrada) sigue
+    // copiando aquí: la comparación vería archivos a medias y el plan saldría mal.
+    if (m_runningSync != 0 || m_actions == nullptr || !m_actions->isSynchronizing({leftPath(), rightPath()})) {
+        return false;
+    }
+    m_progress->setText(tr("Hay una sincronización en curso en estas carpetas. Espera a que termine "
+                           "(se ve en Transferencias, Ctrl+J) y vuelve a comparar."));
+    return true;
+}
+
 bool SyncDialog::isBusy() const
 {
     return m_comparing || m_runningSync != 0;
@@ -480,6 +492,9 @@ void SyncDialog::startCompare()
     QString problem;
     if (!pathsAreValid(&problem)) {
         m_progress->setText(problem);
+        return;
+    }
+    if (otherSyncRunning()) {
         return;
     }
     if (m_task.isValid()) {
@@ -642,6 +657,10 @@ void SyncDialog::simulate()
 void SyncDialog::synchronize()
 {
     if (!m_planValid || !m_plan.hasChanges() || isBusy() || m_actions == nullptr || !m_actions->isAvailable()) {
+        return;
+    }
+    if (otherSyncRunning()) {
+        invalidatePlan();   // lo comparado ya no vale: hay que comparar al terminar la otra
         return;
     }
     const int toRight = m_plan.count(sync::ActionKind::CopyToRight);

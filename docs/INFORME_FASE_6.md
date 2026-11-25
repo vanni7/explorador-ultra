@@ -35,6 +35,12 @@ Fecha: 2026-11-25 · Estado: **entregada con puntos abiertos**. Las metas de ren
 | `test_core_crash_report` fallaba ~1 de cada 10 veces: el informe leía fuera de la pila | Al medir | Corregido (0 de 60) |
 | La copia al portapapeles de la sesión remota no llegaba al escritorio | El dueño (entorno de trabajo, no la app) | Corregido fuera del proyecto |
 
+## D2. Versión 0.1.1 (25-nov)
+| Aviso del dueño | Qué era | Qué se hizo |
+|---|---|---|
+| Al sincronizar dos discos: «El archivo o la carpeta no existe … .eu-parcial» | Se empezó una segunda sincronización de las mismas carpetas mientras la primera seguía copiando (desde otra ventana). La comparación tomó el temporal de una copia en curso por un archivo real | La comparación ignora los temporales `.eu-parcial` y `.eu-punto`, y no se compara ni sincroniza un par mientras otra sincronización trabaja en él (`FileActions::isSynchronizing`) |
+| (Encontrado al investigarlo) | Las copias de archivos de **solo lectura** quedaban con la fecha del día: los permisos se ponían antes que la fecha. Al sincronizar en los dos sentidos parecían más nuevas y se copiaban de vuelta, reemplazando el original (a la papelera, con el mismo contenido) | La fecha se pone antes que los permisos. Las fechas de los 4 archivos afectados se restauraron a mano |
+
 ## E. Lo que queda abierto
 1. **Medir con caché fría, en disco mecánico y en USB** con la ventana real, y en macOS.
 2. **Bajar los bloqueos de 44–85 ms** al aplicar un orden o releer con todo seleccionado: pediría insertar las filas por partes en vez de reiniciar el modelo.

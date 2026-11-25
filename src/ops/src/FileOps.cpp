@@ -631,9 +631,11 @@ core::Status copyFileOnce(const QString &source, const QString &target, const ta
         }
     }
 
-    // Se conservan permisos y fecha de modificación del original. La fecha
-    // sirve además para reconocer la copia al deshacer.
-    QFile::setPermissions(partialPath, input.permissions());
+    // Se conservan fecha de modificación y permisos del original. La fecha
+    // sirve además para reconocer la copia al deshacer y para comparar al
+    // sincronizar. Va antes que los permisos: con los de un original de solo
+    // lectura ya no se podría abrir el temporal para ponerle la fecha (la copia
+    // quedaba con la de hoy y parecía más reciente que el original).
     QFile stamped(partialPath);
     if (stamped.open(QIODevice::ReadWrite)) {
         // La fecha se lee y se escribe en UTC. Con la hora local, en Windows y en
@@ -642,6 +644,7 @@ core::Status copyFileOnce(const QString &source, const QString &target, const ta
         stamped.setFileTime(QFileInfo(source).lastModified(QTimeZone::UTC), QFileDevice::FileModificationTime);
         stamped.close();
     }
+    QFile::setPermissions(partialPath, input.permissions());
 
     const core::Status renamed = renameNoReplace(partialPath, target);
     if (!renamed.ok()) {

@@ -125,6 +125,33 @@ private slots:
         QVERIFY(result.nothingToUndo);
     }
 
+    void synchronizingFoldersAreKnownWhileItRuns()
+    {
+        // Mientras una sincronización copia, otra ventana no debe comparar esas
+        // carpetas (vería temporales y copias a medias).
+        QTemporaryDir data;
+        QTemporaryDir work;
+        FileActions actions(m_scheduler, openJournal(data));
+        Collector collector(actions);
+        const QString left = work.filePath(QStringLiteral("izquierda"));
+        const QString right = work.filePath(QStringLiteral("derecha"));
+        QVERIFY(QDir().mkpath(left) && QDir().mkpath(right));
+        QFile file(left + QStringLiteral("/a.txt"));
+        QVERIFY(file.open(QIODevice::WriteOnly) && file.write("hola") == 4);
+        file.close();
+        QVERIFY(!actions.isSynchronizing({left, right}));
+        const quint64 id = actions.synchronize({{left + QStringLiteral("/a.txt"), right + QStringLiteral("/a.txt")}}, {},
+                                               QStringLiteral("Sincronizar"), false, {left, right});
+        QVERIFY(actions.isSynchronizing({right}));
+        QVERIFY(actions.isSynchronizing({right + QStringLiteral("/sub"), work.filePath(QStringLiteral("otra"))}));
+        QVERIFY(actions.isSynchronizing({work.path()}));   // una que las contiene
+        QVERIFY(!actions.isSynchronizing({work.filePath(QStringLiteral("derecha2"))}));
+        ActionResult result;
+        QVERIFY(collector.waitFor(id, &result));
+        QVERIFY2(result.outcome.ok(), qPrintable(describe(result)));
+        QVERIFY(!actions.isSynchronizing({left, right}));
+    }
+
     void invalidNameIsReportedAndNothingChanges()
     {
         QTemporaryDir data;

@@ -35,7 +35,7 @@ jobs:
       - name: Versión del paquete
         shell: bash
         run: |
-          if [ "$GITHUB_REF_TYPE" = tag ]; then v="${GITHUB_REF_NAME#v}"; else v="0.1.0-prueba-${GITHUB_SHA::7}"; fi
+          if [ "$GITHUB_REF_TYPE" = tag ]; then v="${GITHUB_REF_NAME#v}"; else v="0.1.1-prueba-${GITHUB_SHA::7}"; fi
           echo "EU_VERSION=$v" >> "$GITHUB_ENV"
 
       - name: Dependencias del sistema
@@ -123,7 +123,7 @@ jobs:
       - name: Versión del paquete
         shell: bash
         run: |
-          if [ "$GITHUB_REF_TYPE" = tag ]; then v="${GITHUB_REF_NAME#v}"; else v="0.1.0-prueba-${GITHUB_SHA::7}"; fi
+          if [ "$GITHUB_REF_TYPE" = tag ]; then v="${GITHUB_REF_NAME#v}"; else v="0.1.1-prueba-${GITHUB_SHA::7}"; fi
           echo "EU_VERSION=$v" >> "$GITHUB_ENV"
 
       - name: Compilador MSVC en el PATH
@@ -229,7 +229,7 @@ jobs:
       - name: Versión del paquete
         shell: bash
         run: |
-          if [ "$GITHUB_REF_TYPE" = tag ]; then v="${GITHUB_REF_NAME#v}"; else v="0.1.0-prueba-${GITHUB_SHA::7}"; fi
+          if [ "$GITHUB_REF_TYPE" = tag ]; then v="${GITHUB_REF_NAME#v}"; else v="0.1.1-prueba-${GITHUB_SHA::7}"; fi
           echo "EU_VERSION=$v" >> "$GITHUB_ENV"
 
       - name: Ninja

@@ -96,6 +96,8 @@ private:
     quint64 m_generation = 0;
     bool m_comparing = false;
     quint64 m_runningSync = 0;
+    /// true (y lo dice) si otra sincronización sigue trabajando en estas carpetas.
+    bool otherSyncRunning();
     sync::Plan m_appliedPlan;          ///< Lo que se aplicó: para guardar el estado tras volver a comparar.
     bool m_saveStateAfterCompare = false;
     std::function<bool()> m_confirm;

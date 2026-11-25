@@ -221,6 +221,7 @@ void FileActions::onProgress(quint64 id, const ops::Progress &progress)
 void FileActions::onFinished(const ActionResult &result)
 {
     m_running.remove(result.id);
+    m_syncRoots.remove(result.id);
     m_ran.remove(result.id);
     m_initial.remove(result.id);
     if (Transfer *transfer = transferById(result.id)) {
@@ -301,11 +302,36 @@ quint64 FileActions::synchronize(const QList<QPair<QString, QString>> &copies, c
 {
     ops::CopyOptions copyOptions;
     copyOptions.verify = verify;
-    return start(ActionKind::Sync, roots.value(1), tasks::Category::Transfer,
-                 [copies, toTrash, description, copyOptions](const Context &context, ActionResult &result) {
+    const quint64 id = start(ActionKind::Sync, roots.value(1), tasks::Category::Transfer,
+                             [copies, toTrash, description, copyOptions](const Context &context, ActionResult &result) {
         result.outcome = ops::Engine(context.journal)
                              .synchronize(copies, toTrash, description, copyOptions, context.cancel, context.progress);
     }, roots);
+    QStringList cleaned;
+    for (const QString &root : roots) {
+        cleaned.append(QDir::cleanPath(root));
+    }
+    m_syncRoots.insert(id, cleaned);
+    return id;
+}
+
+bool FileActions::isSynchronizing(const QStringList &folders) const
+{
+    const auto inside = [](const QString &inner, const QString &outer) {
+        const QString prefix = outer.endsWith(QLatin1Char('/')) ? outer : outer + QLatin1Char('/');
+        return inner == outer || inner.startsWith(prefix);
+    };
+    for (const QStringList &roots : m_syncRoots) {
+        for (const QString &root : roots) {
+            for (const QString &folder : folders) {
+                const QString clean = QDir::cleanPath(folder);
+                if (inside(clean, root) || inside(root, clean)) {
+                    return true;
+                }
+            }
+        }
+    }
+    return false;
 }
 
 quint64 FileActions::rename(const QString &path, const QString &newName)

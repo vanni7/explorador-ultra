@@ -78,6 +78,12 @@ struct Walk
             if (entry.isHidden && !options.includeHidden) {
                 continue;
             }
+            // Los temporales de una copia en curso (de esta u otra operación) no
+            // son archivos del usuario: compararlos acabaría copiando algo a medias.
+            if (!entry.isDirectory
+                && (entry.name.endsWith(ops::partialSuffix()) || entry.name.endsWith(ops::checkpointSuffix()))) {
+                continue;
+            }
             entries.insert(entry.name, entry);
         }
         ++state.foldersRead;
