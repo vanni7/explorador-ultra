@@ -3032,6 +3032,91 @@ private slots:
         QCOMPARE(QFileInfo(zip).size(), before);
     }
 
+    void foldersCanBeAddedToAndRemovedFromFavorites()
+    {
+        QSettings().remove(Sidebar::favoritesSettingsKey());
+        QTemporaryDir data;
+        QTemporaryDir directory;
+        const QString root = QDir::cleanPath(directory.path());
+        const QString alfa = root + QStringLiteral("/alfa");
+        const QString beta = root + QStringLiteral("/beta");
+        const QString usb = root + QStringLiteral("/usb");
+        for (const QString &folder : {alfa, beta, usb}) {
+            QVERIFY(QDir().mkpath(folder));
+        }
+        QVERIFY(QDir().mkpath(alfa + QStringLiteral("/dentro")));
+        writeFile(root + QStringLiteral("/nota.txt"), 3);
+
+        {
+            MainWindow window(m_scheduler, openJournal(data));
+            BrowserPane *pane = window.openTab(root);
+            QVERIFY(waitReady(pane));
+            window.show();
+            QVERIFY(QTest::qWaitForWindowExposed(&window));
+            Sidebar *sidebar = window.sidebar();
+
+            // Agregar: aparece en el árbol, una sola vez, y solo carpetas.
+            QVERIFY(sidebar->addFavorite(alfa));
+            QVERIFY(!sidebar->addFavorite(alfa));
+            QVERIFY(!sidebar->addFavorite(root + QStringLiteral("/nota.txt")));
+            QVERIFY(sidebar->isCustomFavorite(alfa));
+            QVERIFY(!sidebar->positionOf(alfa).isNull());
+            // Los de fábrica son favoritos, pero no se quitan.
+            // La misma ruta que usa el árbol (en macOS, con el modo de pruebas de
+            // QStandardPaths, no coincide con QDir::homePath()).
+            const QString home = QDir::cleanPath(QStandardPaths::writableLocation(QStandardPaths::HomeLocation));
+            QVERIFY(sidebar->isFavorite(home));
+            QVERIFY(!sidebar->isCustomFavorite(home));
+            QVERIFY(!sidebar->removeFavorite(home));
+
+            // Soltar carpetas sobre el rótulo "Favoritos" las agrega (y no
+            // copia ni mueve nada); un archivo suelto no.
+            const QPoint label = sidebar->visualRect(sidebar->model()->index(0, 0)).center();
+            std::unique_ptr<QMimeData> mime(makeFileMimeData({beta, usb, root + QStringLiteral("/nota.txt")}, false));
+            QDragEnterEvent enter(QPointF(label), Qt::CopyAction | Qt::MoveAction | Qt::LinkAction, mime.get(),
+                                  Qt::LeftButton, Qt::NoModifier);
+            QApplication::sendEvent(sidebar->viewport(), &enter);
+            QDragMoveEvent move(QPointF(label), Qt::CopyAction | Qt::MoveAction | Qt::LinkAction, mime.get(),
+                                Qt::LeftButton, Qt::NoModifier);
+            QApplication::sendEvent(sidebar->viewport(), &move);
+            QVERIFY(move.isAccepted());
+            QDropEvent drop(QPointF(label), Qt::CopyAction | Qt::MoveAction | Qt::LinkAction, mime.get(),
+                            Qt::LeftButton, Qt::NoModifier);
+            QApplication::sendEvent(sidebar->viewport(), &drop);
+            QVERIFY(drop.isAccepted());
+            QCOMPARE(sidebar->customFavorites(), (QStringList{alfa, beta, usb}));
+            QVERIFY(QFileInfo(root + QStringLiteral("/nota.txt")).isFile());
+            QVERIFY(waitIdle(window));
+
+            // Quitar uno: sale del árbol, la carpeta sigue en el disco.
+            QVERIFY(sidebar->removeFavorite(beta));
+            QVERIFY(!sidebar->isFavorite(beta));
+            QVERIFY(sidebar->positionOf(beta).isNull());
+            QVERIFY(QFileInfo(beta).isDir());
+        }
+
+        // Se recuerdan al volver a abrir; el de un disco que no está queda
+        // como no disponible, sin perderse.
+        QCOMPARE(QSettings().value(Sidebar::favoritesSettingsKey()).toStringList(), (QStringList{alfa, usb}));
+        QVERIFY(QDir(usb).removeRecursively());
+        {
+            MainWindow window(m_scheduler, openJournal(data));
+            Sidebar *sidebar = window.sidebar();
+            QCOMPARE(sidebar->customFavorites(), (QStringList{alfa, usb}));
+            const auto tooltipOf = [sidebar](const QString &path) {
+                const QPoint position = sidebar->positionOf(path);
+                return position.isNull() ? QString() : sidebar->indexAt(position).data(Qt::ToolTipRole).toString();
+            };
+            window.show();
+            QVERIFY(QTest::qWaitForWindowExposed(&window));
+            QTRY_VERIFY(tooltipOf(usb).contains(QStringLiteral("No disponible")));
+            QVERIFY(!tooltipOf(alfa).contains(QStringLiteral("No disponible")));
+            QVERIFY(sidebar->removeFavorite(usb));
+            QVERIFY(sidebar->removeFavorite(alfa));
+        }
+        QVERIFY(!QSettings().contains(Sidebar::favoritesSettingsKey()));
+    }
+
     void severalArchivesAreExtractedAtOnce()
     {
         if (!eu::archive::isAvailable()) {

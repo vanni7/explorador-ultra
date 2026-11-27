@@ -18,6 +18,7 @@
 #include <QTimer>
 #include <QFileInfo>
 #include <QDirIterator>
+#include <QSettings>
 #include <QStandardPaths>
 #include <QStyle>
 
@@ -34,6 +35,8 @@ enum ItemRole {
     LoadedRole,                    ///< true si ya se leyeron sus subcarpetas.
     PlaceholderRole,               ///< Hijo ficticio para que aparezca la flecha de desplegar.
     RefreshingRole,                ///< Se está volviendo a leer una carpeta ya leída.
+    CustomRole,                    ///< Favorito agregado por el usuario (se guarda y se puede quitar).
+    MissingRole,                   ///< Favorito cuya carpeta no está (disco desconectado…).
 };
 
 QIcon themedIcon(const QString &name, QStyle::StandardPixmap fallback)
@@ -69,12 +72,17 @@ Sidebar::Sidebar(tasks::Scheduler &scheduler, fs::VolumeMonitor &volumes, QWidge
     m_model->appendRow(m_volumesSection);
 
     buildFavorites();
+    loadCustomFavorites();
     checkTopLevelArrows(m_favoritesSection);
     rebuildVolumes(volumes.volumes());
     expand(m_favoritesSection->index());
     expand(m_volumesSection->index());
 
     connect(&volumes, &fs::VolumeMonitor::volumesChanged, this, &Sidebar::rebuildVolumes);
+    // Al conectar o quitar un disco, los favoritos que viven en él aparecen
+    // o quedan como no disponibles.
+    connect(&volumes, &fs::VolumeMonitor::volumesChanged, this,
+            [this] { checkTopLevelArrows(m_favoritesSection); });
     connect(this, &QTreeView::expanded, this, [this](const QModelIndex &index) {
         loadChildren(m_model->itemFromIndex(index));
     });
@@ -123,6 +131,157 @@ void Sidebar::addPlace(const QString &name, const QString &path)
 {
     m_favoritesSection->appendRow(
         makeFolderItem(name, QDir::cleanPath(path), themedIcon(QStringLiteral("folder"), QStyle::SP_DirIcon)));
+}
+
+QString Sidebar::favoritesSettingsKey()
+{
+    return QStringLiteral("sidebar/favorites");
+}
+
+QStandardItem *Sidebar::makeFavoriteItem(const QString &path)
+{
+    // El nombre de la carpeta; la raíz de un disco se ve con su ruta ("/", "D:\\").
+    const QString name = QDir(path).dirName().isEmpty() ? QDir::toNativeSeparators(path) : QDir(path).dirName();
+    QStandardItem *item = makeFolderItem(name, path, themedIcon(QStringLiteral("folder"), QStyle::SP_DirIcon));
+    item->setData(true, CustomRole);
+    return item;
+}
+
+bool Sidebar::isFavorite(const QString &path) const
+{
+    const QString clean = QDir::cleanPath(path);
+    for (int row = 0; row < m_favoritesSection->rowCount(); ++row) {
+        if (m_favoritesSection->child(row)->data(PathRole).toString() == clean) {
+            return true;
+        }
+    }
+    return false;
+}
+
+bool Sidebar::isCustomFavorite(const QString &path) const
+{
+    const QString clean = QDir::cleanPath(path);
+    for (int row = 0; row < m_favoritesSection->rowCount(); ++row) {
+        const QStandardItem *item = m_favoritesSection->child(row);
+        if (item->data(CustomRole).toBool() && item->data(PathRole).toString() == clean) {
+            return true;
+        }
+    }
+    return false;
+}
+
+QStringList Sidebar::customFavorites() const
+{
+    QStringList paths;
+    for (int row = 0; row < m_favoritesSection->rowCount(); ++row) {
+        const QStandardItem *item = m_favoritesSection->child(row);
+        if (item->data(CustomRole).toBool()) {
+            paths.append(item->data(PathRole).toString());
+        }
+    }
+    return paths;
+}
+
+bool Sidebar::addFavorite(const QString &path)
+{
+    const QString clean = QDir::cleanPath(path);
+    if (clean.isEmpty() || isFavorite(clean) || !QFileInfo(clean).isDir()) {
+        return false;
+    }
+    m_favoritesSection->appendRow(makeFavoriteItem(clean));
+    expand(m_favoritesSection->index());
+    saveCustomFavorites();
+    checkTopLevelArrows(m_favoritesSection);
+    emit favoritesChanged();
+    return true;
+}
+
+bool Sidebar::removeFavorite(const QString &path)
+{
+    const QString clean = QDir::cleanPath(path);
+    for (int row = 0; row < m_favoritesSection->rowCount(); ++row) {
+        QStandardItem *item = m_favoritesSection->child(row);
+        if (item->data(CustomRole).toBool() && item->data(PathRole).toString() == clean) {
+            // Los nodos de dentro que esperaban su lectura ya no la esperan.
+            m_loadingItems.removeIf([item](QStandardItem *loading) {
+                for (QStandardItem *parent = loading; parent != nullptr; parent = parent->parent()) {
+                    if (parent == item) {
+                        return true;
+                    }
+                }
+                return false;
+            });
+            m_favoritesSection->removeRow(row);
+            saveCustomFavorites();
+            emit favoritesChanged();
+            return true;
+        }
+    }
+    return false;
+}
+
+void Sidebar::loadCustomFavorites()
+{
+    // Se cargan aunque su carpeta no esté ahora: se marcan como no
+    // disponibles (checkTopLevelArrows) y vuelven al conectar el disco.
+    const QStringList saved = QSettings().value(favoritesSettingsKey()).toStringList();
+    for (const QString &path : saved) {
+        const QString clean = QDir::cleanPath(path);
+        if (!clean.isEmpty() && !isFavorite(clean)) {
+            m_favoritesSection->appendRow(makeFavoriteItem(clean));
+        }
+    }
+}
+
+void Sidebar::saveCustomFavorites() const
+{
+    const QStringList paths = customFavorites();
+    QSettings settings;
+    if (paths.isEmpty()) {
+        settings.remove(favoritesSettingsKey());
+    } else {
+        settings.setValue(favoritesSettingsKey(), paths);
+    }
+}
+
+void Sidebar::setAvailable(QStandardItem *item, bool available)
+{
+    const bool wasMissing = item->data(MissingRole).toBool();
+    if (wasMissing == !available) {
+        return;
+    }
+    const QString path = item->data(PathRole).toString();
+    item->setData(!available, MissingRole);
+    if (available) {
+        item->setData(QVariant(), Qt::ForegroundRole);
+        item->setToolTip(QDir::toNativeSeparators(path));
+        setArrow(item, true);   // checkTopLevelArrows la quita si no tiene subcarpetas
+    } else {
+        item->setForeground(palette().brush(QPalette::Disabled, QPalette::Text));
+        item->setToolTip(tr("No disponible (¿disco desconectado?): %1").arg(QDir::toNativeSeparators(path)));
+        if (isExpanded(item->index())) {
+            collapse(item->index());
+        }
+        item->removeRows(0, item->rowCount());
+        item->setData(false, LoadedRole);
+    }
+}
+
+QStringList Sidebar::foldersToFavorite(const QMimeData *mime) const
+{
+    QStringList folders;
+    for (const QString &path : fileSelectionFrom(mime).paths) {
+        const QString clean = QDir::cleanPath(path);
+        if (QFileInfo(clean).isDir() && !isFavorite(clean) && !folders.contains(clean)) {
+            folders.append(clean);
+        }
+    }
+    return folders;
+}
+
+bool Sidebar::isOverFavoritesLabel(const QPoint &position) const
+{
+    return indexAt(position) == m_favoritesSection->index();
 }
 
 QString Sidebar::currentPlace() const
@@ -241,6 +400,18 @@ void Sidebar::dragEnterEvent(QDragEnterEvent *event)
 
 void Sidebar::dragMoveEvent(QDragMoveEvent *event)
 {
+    if (isOverFavoritesLabel(event->position().toPoint())) {
+        // Sobre el rótulo "Favoritos": soltar agrega las carpetas a Favoritos.
+        const bool any = !foldersToFavorite(event->mimeData()).isEmpty();
+        setDropTarget(any ? m_favoritesSection->index() : QModelIndex());
+        if (any) {
+            event->setDropAction(Qt::LinkAction);
+            event->accept();
+        } else {
+            event->ignore();
+        }
+        return;
+    }
     const DropPlan plan = planFor(event);
     setDropTarget(plan.valid ? indexAt(event->position().toPoint()) : QModelIndex());
     if (!plan.valid) {
@@ -259,6 +430,21 @@ void Sidebar::dragLeaveEvent(QDragLeaveEvent *event)
 
 void Sidebar::dropEvent(QDropEvent *event)
 {
+    if (isOverFavoritesLabel(event->position().toPoint())) {
+        setDropTarget(QModelIndex());
+        const QStringList folders = foldersToFavorite(event->mimeData());
+        if (folders.isEmpty()) {
+            event->ignore();
+            return;
+        }
+        // Se contesta "copiado" para que el origen nunca borre nada.
+        event->setDropAction(Qt::CopyAction);
+        event->accept();
+        for (const QString &folder : folders) {
+            addFavorite(folder);
+        }
+        return;
+    }
     const DropPlan plan = planFor(event);
     setDropTarget(QModelIndex());
     if (!plan.valid) {
@@ -330,21 +516,38 @@ void Sidebar::checkTopLevelArrows(QStandardItem *section)
     m_scheduler.submit(tasks::Category::Listing, tasks::Priority::Background,
                        [self, paths](const tasks::CancelToken &cancel) {
         QStringList leaves;
+        QStringList missing;   // se mira aquí: una carpeta de red caída puede tardar
         for (const QString &path : paths) {
             if (cancel.isCancelled()) {
                 return;
             }
-            if (!path.isEmpty() && QFileInfo(path).isDir() && !hasSubfolders(path)) {
+            if (path.isEmpty()) {
+                continue;
+            }
+            if (!QFileInfo(path).isDir()) {
+                missing.append(path);
+            } else if (!hasSubfolders(path)) {
                 leaves.append(path);
             }
         }
-        QMetaObject::invokeMethod(qApp, [self, leaves] {
+        QMetaObject::invokeMethod(qApp, [self, leaves, missing] {
             if (!self) {
                 return;
+            }
+            // Solo los favoritos agregados se marcan como no disponibles; los
+            // de fábrica (Música, Vídeos…) siempre están en el disco del sistema.
+            for (int row = 0; row < self->m_favoritesSection->rowCount(); ++row) {
+                QStandardItem *item = self->m_favoritesSection->child(row);
+                if (item->data(CustomRole).toBool()) {
+                    self->setAvailable(item, !missing.contains(item->data(PathRole).toString()));
+                }
             }
             for (QStandardItem *group : {self->m_favoritesSection, self->m_volumesSection}) {
                 for (int row = 0; row < group->rowCount(); ++row) {
                     QStandardItem *item = group->child(row);
+                    if (item->data(MissingRole).toBool()) {
+                        continue;
+                    }
                     if (leaves.contains(item->data(PathRole).toString()) && !item->data(LoadedRole).toBool()) {
                         self->setArrow(item, false);
                     }

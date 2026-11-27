@@ -412,6 +412,9 @@ private:
     QAction *m_smallerThumbnailsAction = nullptr;
     int m_thumbnailSize = 160;
     void syncViewActions();
+    /// Añade al menú "Agregar a Favoritos" / "Quitar de Favoritos" según
+    /// `paths` (`thisFolder`: es la carpeta que se está viendo).
+    void addFavoriteActions(QMenu *menu, const QStringList &paths, bool thisFolder = false);
     /// Comprime lo seleccionado en la carpeta actual.
     void compressSelection(BrowserPane *pane, archive::Format format);
     /// Nombre libre en `folder` para `stem` + `extension` ("x", "x (2)"…).

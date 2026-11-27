@@ -4,6 +4,7 @@ Explorador Ultra es un administrador de archivos para Linux, Windows y macOS. Es
 
 ## La ventana
 - **Árbol** (izquierda): Favoritos (carpeta personal, Escritorio, Documentos…) y Unidades. Un clic abre la carpeta y la despliega; las flechas ← → despliegan y recogen. Pulsar el rótulo **Unidades** muestra todas las unidades con su espacio libre.
+- **Agregar a Favoritos**: clic derecho sobre una carpeta (en la lista o en el árbol) → «Agregar a Favoritos»; con nada seleccionado, «Agregar esta carpeta a Favoritos». También se puede arrastrar una o varias carpetas sobre el rótulo **Favoritos**. Se quitan con clic derecho → «Quitar de Favoritos» (la carpeta no se borra; los favoritos de fábrica se quedan). Se recuerdan al cerrar; si su disco no está conectado, se ven en gris como «No disponible» y vuelven al conectarlo.
 - **Lista** (centro), en pestañas. Tres vistas: **Detalles** (Ctrl+1), **Miniaturas** (Ctrl+2) y **Columnas** (Ctrl+3). En Miniaturas, Ctrl + rueda (o Ctrl++ y Ctrl+-) cambia el tamaño.
 - **Vista previa** (derecha, Alt+P): datos del archivo y su contenido (imágenes, PDF, texto y código, documentos de oficina, hojas CSV, video y audio con sonido).
 - **Barra de ruta** (arriba): cada tramo lleva a esa carpeta; Ctrl+L o Alt+D para escribir una ruta.
