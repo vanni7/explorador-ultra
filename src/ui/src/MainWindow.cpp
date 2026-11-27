@@ -959,7 +959,22 @@ void MainWindow::showContextMenu(BrowserPane *pane, const QPoint &globalPosition
         menu.addAction(m_openAction);
         const QStringList selected = pane->selectedPaths();
         if (archive::isAvailable() && m_actions->isAvailable()) {
-            if (selected.size() == 1 && archive::isArchiveName(selected.first()) && QFileInfo(selected.first()).isFile()) {
+            QStringList archives;   // los comprimidos de la selección (puede haber otras cosas)
+            for (const QString &path : selected) {
+                if (archive::isArchiveName(path) && QFileInfo(path).isFile()) {
+                    archives.append(path);
+                }
+            }
+            if (selected.size() > 1 && !archives.isEmpty()) {
+                QAction *here = menu.addAction(
+                    tr("Extraer aquí (%n comprimido(s))", nullptr, int(archives.size())));
+                here->setToolTip(tr("Cada uno en su misma carpeta; lo que ya exista no se sobrescribe"));
+                connect(here, &QAction::triggered, this, [this, archives] { extractArchives(archives, false); });
+                QAction *newFolders = menu.addAction(
+                    tr("Extraer cada uno en una carpeta nueva (%n comprimido(s))", nullptr, int(archives.size())));
+                connect(newFolders, &QAction::triggered, this, [this, archives] { extractArchives(archives, true); });
+            }
+            if (selected.size() == 1 && archives.size() == 1) {
                 const QString archivePath = selected.first();
                 QAction *here = menu.addAction(tr("Extraer aquí"));
                 here->setToolTip(tr("En esta misma carpeta; lo que ya exista no se sobrescribe"));
@@ -1113,11 +1128,15 @@ void MainWindow::fillSortMenu(QMenu *sortMenu, BrowserPane *pane)
     }
 }
 
-QString MainWindow::freeName(const QString &folder, const QString &stem, const QString &extension)
+QString MainWindow::freeName(const QString &folder, const QString &stem, const QString &extension,
+                             const QSet<QString> &taken)
 {
     QString name = stem + extension;
-    for (int i = 2; QFileInfo::exists(folder + QLatin1Char('/') + name) || QFileInfo(folder + QLatin1Char('/') + name).isSymLink();
-         ++i) {
+    const auto used = [&](const QString &candidate) {
+        const QString path = folder + QLatin1Char('/') + candidate;
+        return taken.contains(path) || QFileInfo::exists(path) || QFileInfo(path).isSymLink();
+    };
+    for (int i = 2; used(name); ++i) {
         name = QStringLiteral("%1 (%2)%3").arg(stem).arg(i).arg(extension);
     }
     return name;
@@ -1126,8 +1145,132 @@ QString MainWindow::freeName(const QString &folder, const QString &stem, const Q
 void MainWindow::extractArchive(const QString &archivePath, const QStringList &innerPaths, const QString &innerFolder,
                                 bool intoNewFolder)
 {
-    if (!m_actions->isAvailable()) {
+    startExtraction(archivePath, innerPaths, innerFolder, intoNewFolder);
+}
+
+void MainWindow::extractArchives(const QStringList &archivePaths, bool intoNewFolders)
+{
+    if (archivePaths.isEmpty() || !m_actions->isAvailable()) {
         return;
+    }
+    if (archivePaths.size() == 1) {
+        startExtraction(archivePaths.first(), {}, QString(), intoNewFolders);
+        return;
+    }
+    // Las carpetas nuevas se eligen todas ahora, antes de que exista ninguna:
+    // "fotos.zip" y "fotos.7z" no pueden quedarse las dos con "fotos".
+    auto batch = std::make_shared<ExtractBatch>();
+    batch->here = !intoNewFolders;
+    QStringList unique;
+    for (const QString &path : archivePaths) {
+        const QString clean = QDir::cleanPath(path);
+        if (!unique.contains(clean)) {
+            unique.append(clean);
+        }
+    }
+    batch->archives = int(unique.size());
+    if (batch->here) {
+        // En la misma carpeta, de uno en uno: el primero que saca un nombre se
+        // lo queda y los siguientes lo omiten, como al extraer uno solo.
+        batch->queue = unique;
+        startNextInBatch(batch);
+        return;
+    }
+    QSet<QString> reserved;
+    for (const QString &path : std::as_const(unique)) {
+        const quint64 id = startExtraction(path, {}, QString(), true, &reserved);
+        if (id != 0) {
+            batch->pending.insert(id);
+            m_extractBatches.insert(id, batch);
+        }
+    }
+}
+
+void MainWindow::startNextInBatch(const std::shared_ptr<ExtractBatch> &batch)
+{
+    while (!batch->queue.isEmpty()) {
+        const quint64 id = startExtraction(batch->queue.takeFirst(), {}, QString(), false);
+        if (id != 0) {
+            batch->pending.insert(id);
+            m_extractBatches.insert(id, batch);
+            return;
+        }
+        ++batch->failed;
+    }
+}
+
+bool MainWindow::noteBatchExtraction(const ActionResult &result, QString &summary)
+{
+    const std::shared_ptr<ExtractBatch> batch = m_extractBatches.take(result.id);
+    if (!batch) {
+        return false;
+    }
+    m_extractHereIds.removeAll(result.id);   // el resumen de la tanda lo sustituye
+    batch->pending.remove(result.id);
+    const ops::Outcome &outcome = result.outcome;
+    const QString directory = QDir::cleanPath(result.directory);
+    for (const QString &path : outcome.resultPaths) {
+        if (parentPathOf(path) == directory) {
+            batch->createdNames[directory].append(path.mid(path.lastIndexOf(QLatin1Char('/')) + 1));
+        }
+    }
+    batch->created += int(outcome.resultPaths.size());
+    batch->skipped += int(outcome.skipped.size());
+    if (outcome.cancelled) {
+        ++batch->cancelled;
+    } else if (!outcome.errors.isEmpty()) {
+        ++batch->failed;
+    } else {
+        ++batch->done;
+    }
+    startNextInBatch(batch);
+    if (!batch->pending.isEmpty()) {
+        // Faltan otros: solo se dice algo ahora si este falló.
+        return outcome.errors.isEmpty();
+    }
+
+    // Era el último: queda seleccionado todo lo nuevo de la tanda.
+    for (auto it = batch->createdNames.cbegin(); it != batch->createdNames.cend(); ++it) {
+        for (BrowserPane *pane : allPanes()) {
+            if (pane->currentPath() == it.key()) {
+                pane->selectWhenAvailable(it.value(), false);
+            }
+        }
+    }
+    if (batch->here) {
+        summary = tr("Se extrajeron %n comprimido(s) en su misma carpeta", nullptr, batch->done)
+            + tr(": %n elemento(s) nuevo(s).", nullptr, batch->created);
+        if (batch->skipped > 0) {
+            summary += tr(" %n elemento(s) no se extrajeron porque ya existían en la carpeta (no se sobrescribe "
+                          "nada) o no se podían extraer; detalle en el registro.",
+                          nullptr, batch->skipped);
+        }
+    } else {
+        summary = tr("Se extrajeron %n comprimido(s), cada uno en su propia carpeta.", nullptr, batch->done);
+        if (batch->skipped > 0) {
+            summary += tr(" %n elemento(s) omitido(s) por seguridad o porque no se podían extraer (detalle en el "
+                          "registro).",
+                          nullptr, batch->skipped);
+        }
+    }
+    if (batch->failed > 0) {
+        summary += tr(" %n no se pudo(pudieron) extraer.", nullptr, batch->failed);
+    }
+    if (batch->cancelled > 0) {
+        summary += tr(" %n cancelado(s).", nullptr, batch->cancelled);
+    }
+    if (outcome.errors.isEmpty()) {
+        report(summary, false);
+        return true;
+    }
+    return false;   // el error de este se informa con el resumen delante
+}
+
+quint64 MainWindow::startExtraction(const QString &archivePath, const QStringList &innerPaths,
+                                    const QString &innerFolder, bool intoNewFolder, QSet<QString> *reserved)
+{
+    if (!m_actions->isAvailable()) {
+        return 0;
     }
     // La carpeta nueva se llama como el comprimido, sin su extensión
     // ("fotos.tar.gz" -> "fotos").
@@ -1146,12 +1289,19 @@ void MainWindow::extractArchive(const QString &archivePath, const QStringList &i
         stem = info.completeBaseName();
     }
     const QString folder = info.path();
-    const quint64 id = m_actions->extract(archivePath, innerPaths, innerFolder, folder,
-                                          intoNewFolder ? freeName(folder, stem, QString()) : QString());
+    QString newFolder;
+    if (intoNewFolder) {
+        newFolder = freeName(folder, stem, QString(), reserved ? *reserved : QSet<QString>());
+        if (reserved) {
+            reserved->insert(folder + QLatin1Char('/') + newFolder);
+        }
+    }
+    const quint64 id = m_actions->extract(archivePath, innerPaths, innerFolder, folder, newFolder);
     m_requestedCounts.insert(id, 1);
     if (!intoNewFolder) {
         m_extractHereIds.append(id);
     }
+    return id;
 }
 
 void MainWindow::compressSelection(BrowserPane *pane, archive::Format format)
@@ -1993,6 +2143,12 @@ void MainWindow::onActionFinished(const ActionResult &result)
         }
     }
 
+    // 2b. Una de varias extracciones a la vez: se informa al acabar la última.
+    QString batchSummary;
+    if (result.kind == ActionKind::Extract && noteBatchExtraction(result, batchSummary)) {
+        return;
+    }
+
     // 3. Contar qué pasó.
     const int failed = int(outcome.errors.size());
     QString message;
@@ -2106,6 +2262,9 @@ void MainWindow::onActionFinished(const ActionResult &result)
     }
     if (outcome.verified > 0) {
         message += tr(" %n comprobado(s) con su hash.", nullptr, outcome.verified);
+    }
+    if (!batchSummary.isEmpty()) {
+        message = batchSummary;
     }
 
     if (failed == 0) {

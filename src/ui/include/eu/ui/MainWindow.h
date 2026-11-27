@@ -16,6 +16,7 @@
 #include "eu/ui/Locations.h"
 
 #include <QHash>
+#include <QSet>
 #include <QMainWindow>
 #include <QTimer>
 
@@ -203,6 +204,11 @@ public:
     /// (sin sobrescribir lo que ya exista).
     void extractArchive(const QString &archivePath, const QStringList &innerPaths, const QString &innerFolder,
                         bool intoNewFolder = true);
+    /// Extrae varios comprimidos completos, cada uno junto a sí mismo: en una
+    /// carpeta nueva con su nombre, o en su misma carpeta (sin sobrescribir).
+    /// Cada uno es una tarea en Transferencias; al terminar todos se informa
+    /// una sola vez.
+    void extractArchives(const QStringList &archivePaths, bool intoNewFolders = true);
 
 public slots:
     // Acciones sobre la pestaña activa (las mismas del menú y los atajos).
@@ -309,6 +315,23 @@ private:
     QHash<quint64, ActionKind> m_runningKinds;
     QHash<quint64, int> m_requestedCounts;   ///< Cuántos elementos se pidieron en cada acción.
     QList<quint64> m_extractHereIds;          ///< Extracciones en la misma carpeta (sin carpeta nueva).
+    /// Varios comprimidos extraídos de una vez: se informa al terminar el último.
+    struct ExtractBatch
+    {
+        QSet<quint64> pending;                 ///< Tareas que faltan por terminar.
+        /// En la misma carpeta van de uno en uno, para que dos comprimidos con
+        /// nombres iguales dentro no se crucen: aquí esperan los siguientes.
+        QStringList queue;
+        int archives = 0;
+        int done = 0;                          ///< Terminados sin errores ni cancelación.
+        int failed = 0;
+        int cancelled = 0;
+        int created = 0;                       ///< Elementos nuevos (o carpetas nuevas).
+        int skipped = 0;
+        bool here = false;                     ///< En la misma carpeta, sin carpeta nueva.
+        QHash<QString, QStringList> createdNames;   ///< Carpeta -> nombres nuevos, para seleccionarlos.
+    };
+    QHash<quint64, std::shared_ptr<ExtractBatch>> m_extractBatches;
     quint64 m_renameAfterCreateId = 0;       ///< Acción "nuevo…" cuyo resultado se deja listo para nombrar.
 
     // Indicador de avance en la barra de estado.
@@ -392,7 +415,19 @@ private:
     /// Comprime lo seleccionado en la carpeta actual.
     void compressSelection(BrowserPane *pane, archive::Format format);
     /// Nombre libre en `folder` para `stem` + `extension` ("x", "x (2)"…).
-    static QString freeName(const QString &folder, const QString &stem, const QString &extension);
+    static QString freeName(const QString &folder, const QString &stem, const QString &extension,
+                            const QSet<QString> &taken = {});
+    /// Pone en marcha una extracción y devuelve su id (0 si no se pudo).
+    /// `reserved` guarda las carpetas nuevas ya elegidas en esta misma tanda,
+    /// que aún no existen en el disco.
+    quint64 startExtraction(const QString &archivePath, const QStringList &innerPaths, const QString &innerFolder,
+                            bool intoNewFolder, QSet<QString> *reserved = nullptr);
+    /// Si la extracción es de una tanda, la anota. Devuelve true si ya se
+    /// informó (o no hay que informar aún); en `summary` deja el resumen de la
+    /// tanda cuando terminó la última.
+    bool noteBatchExtraction(const ActionResult &result, QString &summary);
+    /// Pone en marcha el siguiente comprimido en espera de la tanda, si queda.
+    void startNextInBatch(const std::shared_ptr<ExtractBatch> &batch);
     bool m_splitterRestored = false;   ///< Había una disposición guardada de los paneles.
     bool m_firstShowDone = false;
     PreviewPanel *m_previewPanel = nullptr;

@@ -41,7 +41,7 @@ Lo mismo funciona en el **árbol** sobre la carpeta elegida en él (Ctrl+C, Ctrl
 
 Todo lo que cambia archivos queda en un **historial**: Ctrl+Z lo deshace aunque sea una operación de cientos de archivos, y si la aplicación se cierra a mitad de una copia, al volver a abrirla ofrece reanudarla. Las copias grandes se ven en **Transferencias** (Ctrl+J): pausar, cancelar, reintentar y, si se quiere, comprobar cada copia con SHA-256. Si al copiar ya existe algo con el mismo nombre, se pregunta qué hacer (reemplazar va a la papelera, mantener los dos, omitir si son idénticos…).
 
-El **menú contextual** (clic derecho en la lista) reúne lo anterior y además: abrir, extraer y comprimir (ZIP, 7z, TAR.GZ), etiquetas de color, Imprimir, Organizar esta carpeta, Buscar duplicados, Comparar y sincronizar, **Ordenar por** (nombre, tamaño, fecha o tipo, ascendente o descendente; también en el menú Ver) y la vista.
+El **menú contextual** (clic derecho en la lista) reúne lo anterior y además: abrir, extraer y comprimir (ZIP, 7z, TAR.GZ; con varios comprimidos seleccionados se extraen todos de una vez, en su misma carpeta o cada uno en una carpeta nueva), etiquetas de color, Imprimir, Organizar esta carpeta, Buscar duplicados, Comparar y sincronizar, **Ordenar por** (nombre, tamaño, fecha o tipo, ascendente o descendente; también en el menú Ver) y la vista.
 
 ## Buscar
 - **Filtro** (Ctrl+I): deja a la vista solo lo que cumple, a cada tecla, en la carpeta abierta.
