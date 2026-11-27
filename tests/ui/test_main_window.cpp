@@ -3032,6 +3032,72 @@ private slots:
         QCOMPARE(QFileInfo(zip).size(), before);
     }
 
+    void severalArchivesAreExtractedAtOnce()
+    {
+        if (!eu::archive::isAvailable()) {
+            QSKIP("Compilado sin libarchive.");
+        }
+        QTemporaryDir data;
+        QTemporaryDir directory;
+        const QString root = QDir::cleanPath(directory.path());
+        QVERIFY(QDir(root).mkpath(QStringLiteral("origen/álbum")));
+        writeFile(root + QStringLiteral("/origen/álbum/foto.txt"), 10);
+        writeFile(root + QStringLiteral("/origen/notas.txt"), 5);
+        QVERIFY(QDir(root).mkdir(QStringLiteral("lote")));
+        const QString lote = root + QStringLiteral("/lote");
+
+        MainWindow window(m_scheduler, openJournal(data));
+        const QStringList sources{root + QStringLiteral("/origen/álbum"), root + QStringLiteral("/origen/notas.txt")};
+        // Tres formatos, dos con el mismo nombre: "paquete.zip" y "paquete.7z".
+        const QStringList archives{lote + QStringLiteral("/paquete.zip"), lote + QStringLiteral("/paquete.7z"),
+                                   lote + QStringLiteral("/copia.tar.gz")};
+        window.fileActions()->compress(sources, archives.at(0), eu::archive::Format::Zip);
+        window.fileActions()->compress(sources, archives.at(1), eu::archive::Format::SevenZip);
+        window.fileActions()->compress(sources, archives.at(2), eu::archive::Format::TarGz);
+        QVERIFY(waitIdle(window));
+        for (const QString &archive : archives) {
+            QVERIFY2(QFileInfo(archive).isFile(), qPrintable(archive));
+        }
+
+        // Cada uno en su carpeta nueva: los del mismo nombre no se cruzan.
+        QSignalSpy reports(&window, &MainWindow::actionReported);
+        window.extractArchives(archives, true);
+        QVERIFY(waitIdle(window));
+        for (const QString &folder : {QStringLiteral("paquete"), QStringLiteral("paquete (2)"), QStringLiteral("copia")}) {
+            QVERIFY2(QFileInfo(lote + QLatin1Char('/') + folder + QStringLiteral("/álbum/foto.txt")).isFile(),
+                     qPrintable(folder));
+            QCOMPARE(QFileInfo(lote + QLatin1Char('/') + folder + QStringLiteral("/notas.txt")).size(), 5);
+        }
+        QTRY_COMPARE(reports.count(), 1);   // un solo aviso para los tres
+        QCOMPARE(reports.first().at(1).toBool(), false);
+        QVERIFY2(reports.first().at(0).toString().contains(QStringLiteral("3 comprimido(s)")),
+                 qPrintable(reports.first().at(0).toString()));
+
+        // Todos en la misma carpeta: lo del primero queda, lo repetido se
+        // omite y nada se sobrescribe.
+        const QString here = root + QStringLiteral("/aquí");
+        QVERIFY(QDir().mkdir(here));
+        QStringList copies;
+        for (const QString &archive : archives) {
+            copies.append(here + QLatin1Char('/') + QFileInfo(archive).fileName());
+            QVERIFY(QFile::copy(archive, copies.last()));
+        }
+        writeFile(here + QStringLiteral("/notas.txt"), 2);
+        reports.clear();
+        window.extractArchives(copies, false);
+        QTRY_COMPARE_WITH_TIMEOUT(reports.count(), 1, 20000);
+        QVERIFY(waitIdle(window));
+        QCOMPARE(reports.count(), 1);
+        QCOMPARE(QFileInfo(here + QStringLiteral("/notas.txt")).size(), 2);
+        QVERIFY(QFileInfo(here + QStringLiteral("/álbum/foto.txt")).isFile());
+        // Los tres comprimidos, notas.txt y álbum.
+        QCOMPARE(QDir(here).entryList(QDir::AllEntries | QDir::NoDotAndDotDot).size(), 5);
+        const QString message = reports.first().at(0).toString();
+        QVERIFY2(message.contains(QStringLiteral("3 comprimido(s)")), qPrintable(message));
+        QVERIFY2(message.contains(QStringLiteral("1 elemento(s) nuevo")), qPrintable(message));
+        QVERIFY2(message.contains(QStringLiteral("ya existían")), qPrintable(message));
+    }
+
     void searchCanBePausedAndStopped()
     {
         QTemporaryDir directory;
