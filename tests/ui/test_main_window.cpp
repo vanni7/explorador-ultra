@@ -3062,7 +3062,9 @@ private slots:
             QVERIFY(sidebar->isCustomFavorite(alfa));
             QVERIFY(!sidebar->positionOf(alfa).isNull());
             // Los de fábrica son favoritos, pero no se quitan.
-            const QString home = QDir::cleanPath(QDir::homePath());
+            // La misma ruta que usa el árbol (en macOS, con el modo de pruebas de
+            // QStandardPaths, no coincide con QDir::homePath()).
+            const QString home = QDir::cleanPath(QStandardPaths::writableLocation(QStandardPaths::HomeLocation));
             QVERIFY(sidebar->isFavorite(home));
             QVERIFY(!sidebar->isCustomFavorite(home));
             QVERIFY(!sidebar->removeFavorite(home));
