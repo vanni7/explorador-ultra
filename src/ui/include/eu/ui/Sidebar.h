@@ -9,6 +9,7 @@
 #include <QTimer>
 #include <QTreeView>
 
+class QMimeData;
 class QStandardItem;
 class QStandardItemModel;
 
@@ -30,8 +31,21 @@ public:
     /// Carpeta que se está viendo en la pestaña activa: un clic sobre su nodo
     /// ya no navega, solo despliega o recoge.
     void setCurrentPath(const QString &path) { m_currentPath = path; }
-    /// Añade un lugar a "Favoritos".
+    /// Añade un lugar a "Favoritos" solo durante esta sesión (no se guarda).
     void addPlace(const QString &name, const QString &path);
+    /// Agrega una carpeta a Favoritos y lo guarda en la configuración. false si
+    /// ya era un favorito o no es una carpeta.
+    bool addFavorite(const QString &path);
+    /// Quita un favorito agregado por el usuario. Los de fábrica no se quitan.
+    bool removeFavorite(const QString &path);
+    /// true si `path` ya está en Favoritos (de fábrica o agregado).
+    bool isFavorite(const QString &path) const;
+    /// true si `path` es un favorito agregado por el usuario (se puede quitar).
+    bool isCustomFavorite(const QString &path) const;
+    /// Los favoritos agregados por el usuario, en su orden.
+    QStringList customFavorites() const;
+    /// Clave de la configuración donde se guardan los favoritos agregados.
+    static QString favoritesSettingsKey();
     /// Vuelve a leer las subcarpetas de `path` donde ya se hayan leído (tras
     /// crear, mover o borrar carpetas), conservando lo desplegado. Si nunca
     /// se desplegó, solo se corrige si lleva flecha o no.
@@ -57,6 +71,8 @@ signals:
     void contextMenuRequested(const QString &path, const QPoint &globalPosition);
     /// Se soltaron archivos sobre una carpeta del árbol.
     void filesDropped(const QStringList &paths, const QString &destination, bool move);
+    /// Se agregó o se quitó un favorito.
+    void favoritesChanged();
 
 protected:
     void dragEnterEvent(QDragEnterEvent *event) override;
@@ -68,6 +84,18 @@ protected:
 
 private:
     void buildFavorites();
+    /// Lee de la configuración los favoritos agregados por el usuario.
+    void loadCustomFavorites();
+    void saveCustomFavorites() const;
+    QStandardItem *makeFavoriteItem(const QString &path);
+    /// Pone un favorito como disponible o no (su carpeta no existe: disco
+    /// desconectado, carpeta movida…). No se quita: vuelve al reconectar.
+    void setAvailable(QStandardItem *item, bool available);
+    /// Carpetas de lo arrastrado que se pueden agregar a Favoritos.
+    QStringList foldersToFavorite(const QMimeData *mime) const;
+    /// true si el punto está sobre el rótulo "Favoritos". Soltar ahí agrega
+    /// favoritos; soltar sobre un favorito copia o mueve dentro, como siempre.
+    bool isOverFavoritesLabel(const QPoint &position) const;
     void rebuildVolumes(const QList<fs::Volume> &volumes);
     QStandardItem *makeFolderItem(const QString &text, const QString &path, const QIcon &icon,
                                   bool mayHaveChildren = true);

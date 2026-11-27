@@ -1031,6 +1031,7 @@ void MainWindow::showContextMenu(BrowserPane *pane, const QPoint &globalPosition
             });
             tagMenu->addAction(m_tagsAction);
         }
+        addFavoriteActions(&menu, selected);
         menu.addSeparator();
         menu.addAction(m_cutAction);
         menu.addAction(m_copyAction);
@@ -1043,6 +1044,9 @@ void MainWindow::showContextMenu(BrowserPane *pane, const QPoint &globalPosition
         menu.addAction(m_newFolderAction);
         menu.addAction(m_newFileAction);
         menu.addSeparator();
+        if (pane->showsFolder()) {
+            addFavoriteActions(&menu, {pane->currentPath()}, true);
+        }
         menu.addAction(m_pasteAction);
         menu.addSeparator();
         menu.addAction(m_selectAllAction);
@@ -1706,11 +1710,48 @@ void MainWindow::createSidebarActions()
             [removeFromTree] { removeFromTree(true); });
 }
 
+void MainWindow::addFavoriteActions(QMenu *menu, const QStringList &paths, bool thisFolder)
+{
+    // Agregar: las carpetas de la lista que aún no son favoritas (las de
+    // dentro de un comprimido o de las búsquedas no son carpetas del disco).
+    QStringList folders;
+    for (const QString &path : paths) {
+        if (!isVirtualLocation(path) && !m_sidebar->isFavorite(path) && QFileInfo(path).isDir()) {
+            folders.append(path);
+        }
+    }
+    if (!folders.isEmpty()) {
+        QAction *add = menu->addAction(QIcon::fromTheme(QStringLiteral("starred")),
+                                       thisFolder ? tr("Agregar esta carpeta a Favoritos")
+                                       : folders.size() == 1 ? tr("Agregar a Favoritos")
+                                                             : tr("Agregar %n carpeta(s) a Favoritos", nullptr,
+                                                                  int(folders.size())));
+        connect(add, &QAction::triggered, this, [this, folders] {
+            for (const QString &folder : folders) {
+                m_sidebar->addFavorite(folder);
+            }
+            statusBar()->showMessage(tr("Agregado a Favoritos."), 4000);
+        });
+    }
+    // Quitar: solo con una carpeta que agregó el usuario (las de fábrica se quedan).
+    if (paths.size() == 1 && m_sidebar->isCustomFavorite(paths.first())) {
+        const QString path = paths.first();
+        QAction *remove = menu->addAction(QIcon::fromTheme(QStringLiteral("non-starred")),
+                                          thisFolder ? tr("Quitar esta carpeta de Favoritos")
+                                                     : tr("Quitar de Favoritos"));
+        connect(remove, &QAction::triggered, this, [this, path] {
+            m_sidebar->removeFavorite(path);
+            statusBar()->showMessage(tr("Quitado de Favoritos (la carpeta no se borra)."), 4000);
+        });
+    }
+}
+
 void MainWindow::showSidebarMenu(const QString &path, const QPoint &globalPosition)
 {
     QMenu menu(this);
     QAction *open = menu.addAction(m_openAction->icon(), tr("Abrir"));
     QAction *openInTab = menu.addAction(m_newTabAction->icon(), tr("Abrir en una pestaña nueva"));
+    addFavoriteActions(&menu, {path});
     menu.addSeparator();
     // No se reutiliza la acción "Pegar" del menú Edición: aquella pega en la
     // carpeta de la pestaña; esta, en la carpeta del árbol sobre la que se pulsó.
